@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: fleetmind
+      POSTGRES_PASSWORD: fleetmind
+      POSTGRES_DB: fleetmind
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fleetmind"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  orchestrator:
+    build: .
+    command: python -m fleetmind.bots.run orchestrator
+    env_file: .env
+    ports:
+      - "${ORCHESTRATOR_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend-bot:
+    build: .
+    command: python -m fleetmind.bots.run frontend-bot
+    env_file: .env
+    ports:
+      - "${FRONTEND_BOT_PORT:-3001}:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api-bot:
+    build: .
+    command: python -m fleetmind.bots.run api-bot
+    env_file: .env
+    ports:
+      - "${API_BOT_PORT:-3002}:3002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
