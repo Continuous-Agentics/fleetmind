@@ -1,23 +1,24 @@
-# ── One EC2 instance per OpenClaw agent ──────────────────────────────────────
+# ── One EC2 instance per client fleet ────────────────────────────────────────
 #
-# Design rationale:
-#   - Each agent is its own isolated EC2 instance (not a shared host)
-#   - EBS data volume at /dev/xvdf persists the OpenClaw workspace (memory,
-#     state, skills) across instance replacements and reboots
-#   - systemd manages the openclaw Docker container with Restart=always
-#   - Agents live in public subnets for Slack Socket Mode egress
-#   - SSM Session Manager enables shell access without SSH or bastion
+# All agents (orchestrator, pixel, forge) run as co-located systemd services
+# on a single instance. Each agent gets its own workspace subdirectory on the
+# shared EBS data volume.
+#
+# No Docker — OpenClaw runs directly as a Node.js process managed by systemd.
+# No custom AMI — user_data bootstraps the instance in ~2 minutes.
+#
+# Fault tolerance:
+#   - Process crash   → systemd Restart=always, back up in 10s
+#   - Instance reboot → EBS remounts via fstab, all services auto-start
+#   - Instance loss   → EBS volume survives (prevent_destroy), reattach to new instance
 
-resource "aws_instance" "agent" {
-  for_each = toset(var.agent_names)
-
+resource "aws_instance" "fleet" {
   ami                    = local.ami_id
   instance_type          = var.instance_type
   subnet_id              = aws_subnet.public[0].id
-  vpc_security_group_ids = [aws_security_group.agent.id]
-  iam_instance_profile   = aws_iam_instance_profile.agent.name
+  vpc_security_group_ids = [aws_security_group.fleet.id]
+  iam_instance_profile   = aws_iam_instance_profile.fleet.name
 
-  # Root volume — OS only
   root_block_device {
     volume_type           = "gp3"
     volume_size           = 20
@@ -25,46 +26,47 @@ resource "aws_instance" "agent" {
     encrypted             = true
   }
 
-  user_data = templatefile("${path.module}/user_data/agent.sh.tpl", {
-    agent_name     = each.key
-    agent_port     = lookup(var.agent_ports, each.key, 18789)
-    fleet_name     = var.fleet_name
-    openclaw_image = var.openclaw_image
-    aws_region     = var.aws_region
+  user_data = templatefile("${path.module}/user_data/bootstrap.sh.tpl", {
+    fleet_name       = var.fleet_name
+    agent_names      = var.agent_names
+    agent_ports      = var.agent_ports
+    openclaw_version = var.openclaw_version
+    node_version     = var.node_version
+    aws_region       = var.aws_region
   })
 
   user_data_replace_on_change = true
 
-  tags = { Name = "${var.fleet_name}-${each.key}" }
+  tags = { Name = "${var.fleet_name}-fleet" }
 
   lifecycle {
-    # Don't replace instance just because AMI changed — use launch template + ASG for rolling updates
     ignore_changes = [ami]
   }
 }
 
-# ── EBS workspace volumes (one per agent) ─────────────────────────────────────
-resource "aws_ebs_volume" "workspace" {
-  for_each = toset(var.agent_names)
+# ── Shared EBS workspace volume ───────────────────────────────────────────────
+# One volume, subdirectories per agent:
+#   /opt/openclaw/workspace/orchestrator/
+#   /opt/openclaw/workspace/pixel/
+#   /opt/openclaw/workspace/forge/
 
-  availability_zone = aws_instance.agent[each.key].availability_zone
+resource "aws_ebs_volume" "workspace" {
+  availability_zone = aws_instance.fleet.availability_zone
   size              = var.workspace_volume_size_gb
   type              = "gp3"
   encrypted         = true
 
-  tags = { Name = "${var.fleet_name}-${each.key}-workspace" }
+  tags = { Name = "${var.fleet_name}-workspace" }
 
   lifecycle {
-    # NEVER delete the workspace volume — it holds the agent's memory
+    # Never destroy — this volume holds all agent memory and state
     prevent_destroy = true
   }
 }
 
 resource "aws_volume_attachment" "workspace" {
-  for_each = toset(var.agent_names)
-
   device_name  = "/dev/xvdf"
-  volume_id    = aws_ebs_volume.workspace[each.key].id
-  instance_id  = aws_instance.agent[each.key].id
+  volume_id    = aws_ebs_volume.workspace.id
+  instance_id  = aws_instance.fleet.id
   force_detach = false
 }

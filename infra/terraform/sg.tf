@@ -1,10 +1,10 @@
-# ── Agent security group ──────────────────────────────────────────────────────
-resource "aws_security_group" "agent" {
-  name        = "${var.fleet_name}-agent"
-  description = "OpenClaw agent instances"
+# ── Fleet instance security group ─────────────────────────────────────────────
+resource "aws_security_group" "fleet" {
+  name        = "${var.fleet_name}-fleet"
+  description = "FleetMind agent instance"
   vpc_id      = aws_vpc.main.id
 
-  # OpenClaw ports — one per agent (18789-18791 by default)
+  # OpenClaw ports — one per agent
   dynamic "ingress" {
     for_each = var.agent_ports
     content {
@@ -12,11 +12,11 @@ resource "aws_security_group" "agent" {
       from_port   = ingress.value
       to_port     = ingress.value
       protocol    = "tcp"
-      cidr_blocks = ["0.0.0.0/0"] # Slack Socket Mode needs outbound only; restrict if using internal routing
+      cidr_blocks = ["0.0.0.0/0"]
     }
   }
 
-  # Optional SSH — default empty (use SSM instead)
+  # Optional SSH (use SSM instead — this is off by default)
   dynamic "ingress" {
     for_each = length(var.allowed_ssh_cidrs) > 0 ? [1] : []
     content {
@@ -36,21 +36,21 @@ resource "aws_security_group" "agent" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = { Name = "${var.fleet_name}-agent-sg" }
+  tags = { Name = "${var.fleet_name}-fleet-sg" }
 }
 
 # ── RDS security group ────────────────────────────────────────────────────────
 resource "aws_security_group" "rds" {
   name        = "${var.fleet_name}-rds"
-  description = "RDS Postgres — accessible from agents only"
+  description = "RDS Postgres — fleet instance access only"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description     = "Postgres from agents"
+    description     = "Postgres from fleet instance"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
-    security_groups = [aws_security_group.agent.id]
+    security_groups = [aws_security_group.fleet.id]
   }
 
   egress {

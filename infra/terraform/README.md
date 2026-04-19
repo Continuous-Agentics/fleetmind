@@ -1,163 +1,148 @@
 # FleetMind — Terraform Infrastructure
 
-EC2-per-agent infrastructure for long-lived OpenClaw agents.
+One EC2 instance per client fleet. All agents run as co-located systemd services directly on the instance — no Docker, no custom AMI.
 
 ## Architecture
 
 ```
-                        ┌──────────────────────────────────────────┐
-                        │                  AWS VPC                 │
-                        │                                          │
-                        │  Public Subnets                          │
-                        │  ┌─────────────┐  ┌────────────────┐    │
-                        │  │ EC2: Cond.  │  │  EC2: Pixel    │    │
-                        │  │ OpenClaw    │  │  OpenClaw      │    │
-  Slack Socket Mode ────┼─▶│ :18789      │  │  :18790        │    │
-                        │  │ [EBS vol]   │  │  [EBS vol]     │    │
-                        │  └─────────────┘  └────────────────┘    │
-                        │  ┌─────────────┐                        │
-                        │  │ EC2: Forge  │                        │
-                        │  │ OpenClaw    │                        │
-                        │  │ :18791      │                        │
-                        │  │ [EBS vol]   │                        │
-                        │  └─────────────┘                        │
-                        │                                          │
-                        │  Private Subnets                         │
-                        │  ┌──────────────────────┐               │
-                        │  │  RDS Postgres 16      │               │
-                        │  │  (ContextStore / hive)│               │
-                        │  └──────────────────────┘               │
-                        └──────────────────────────────────────────┘
+Client Fleet (single EC2 t3.medium)
+│
+├── systemd: openclaw-orchestrator   → port 18789
+├── systemd: openclaw-pixel          → port 18790
+└── systemd: openclaw-forge          → port 18791
+│
+├── /opt/openclaw/workspace/
+│   ├── orchestrator/    ← EBS-backed agent memory + state
+│   ├── pixel/
+│   └── forge/
+│
+└── → RDS Postgres (private subnet, shared ContextStore)
 ```
 
-### Why EC2, not Fargate?
+## Design decisions
 
-OpenClaw agents are *stateful*. Each agent has:
-- A persistent workspace (`/workspace`) with memory files, skill state, session history
-- Long-running processes that shouldn't be interrupted mid-task
+*Why not Docker?*
+OpenClaw is a long-lived Node.js daemon, not a containerized microservice. Running it directly with systemd is simpler, easier to debug (`journalctl -u openclaw-orchestrator`), and eliminates a layer of indirection. Upgrades are `npm install -g openclaw@x.y.z` + `systemctl restart`.
 
-Fargate containers are ephemeral. While EFS mounts can bridge that gap, they add latency and complexity. EC2 + EBS gives us:
+*Why not one EC2 per agent?*
+Three OpenClaw agents are well within the resource envelope of a `t3.medium`. Co-locating them on one instance keeps the fleet billing simple (one instance = one client) and is easy to split apart later if resource contention warrants it.
 
-| Property | EC2 + EBS | Fargate + EFS |
-|---|---|---|
-| Workspace persistence | ✅ Native | ⚠️ Needs EFS mount |
-| Fault tolerance | ✅ systemd Restart=always | ✅ ECS service restarts |
-| Instance replacement | ✅ EBS reattaches | ✅ New task mounts EFS |
-| SSH/shell access | ✅ SSM Session Manager | ⚠️ ECS Exec (more setup) |
-| Cost (3 agents) | ~$30-60/mo (t3.small) | ~$50-90/mo |
-| Operational simplicity | ✅ Docker + systemd | ⚠️ ECS task defs, service config |
+*Why not a custom AMI?*
+AMI baking (Packer pipelines, versioning, refresh cadence) is overhead that isn't justified when bootstrap takes ~2 minutes via user_data. If boot time ever becomes a concern at scale, AMI baking is an easy addition.
 
-**Bottom line:** systemd's `Restart=always` + EBS persistence gives you the fault tolerance you need with far less moving parts.
-
-### Fault tolerance model
-
-Each agent runs as a systemd service:
-- Container crash → systemd restarts it within 10s
-- Instance reboot → EBS remounts, service starts automatically
-- Instance termination → EBS volume survives (`prevent_destroy = true`), reattach to new instance
-
-For higher availability, the next step would be an ASG (min=1, max=1) per agent that automatically replaces a failed instance and reattaches its EBS volume.
-
----
+*Fault tolerance*
+- Process crash → systemd `Restart=always`, back in 10 seconds
+- Instance reboot → EBS remounts via fstab, all services auto-start
+- Instance loss → EBS volume has `prevent_destroy = true`, reattach to replacement
 
 ## Prerequisites
 
-- AWS CLI configured (`aws configure` or IAM role)
+- AWS CLI configured with appropriate permissions (EC2, RDS, VPC, IAM, Secrets Manager)
 - Terraform >= 1.5
-- Appropriate AWS permissions (EC2, RDS, VPC, IAM, Secrets Manager)
 
 ## Quick Start
 
 ```bash
 cd infra/terraform
 
-# 1. Initialize
+# Initialize
 terraform init
 
-# 2. Preview
+# Preview (use your client/fleet name)
 terraform plan -var="fleet_name=acme-devteam"
 
-# 3. Apply (takes ~10-15 min for RDS)
+# Apply (~10-15 min, most of it waiting for RDS)
 terraform apply -var="fleet_name=acme-devteam"
 ```
 
-> **Remote state:** Before using with a team, uncomment the `backend "s3"` block in `main.tf` and create the S3 bucket + DynamoDB table first.
+> **Team state:** Before sharing with the team, uncomment the `backend "s3"` block in `main.tf` and create the S3 bucket + DynamoDB table first.
 
 ## Populate Secrets After Apply
 
-After `terraform apply`, fill in real values:
+After apply, fill in real values (placeholder secrets are created automatically):
 
 ```bash
 # Anthropic API key (shared by all agents)
 aws secretsmanager put-secret-value \
-  --secret-id fleetmind/shared/anthropic \
+  --secret-id acme-devteam/shared/anthropic \
   --secret-string '{"ANTHROPIC_API_KEY":"sk-ant-...","DATABASE_URL":"postgresql://..."}'
 
 # Per-agent Slack tokens
-aws secretsmanager put-secret-value \
-  --secret-id fleetmind/agents/orchestrator/slack \
-  --secret-string '{
-    "SLACK_BOT_TOKEN":"xoxb-...",
-    "SLACK_SIGNING_SECRET":"...",
-    "SLACK_APP_TOKEN":"xapp-..."
-  }'
+for AGENT in orchestrator pixel forge; do
+  aws secretsmanager put-secret-value \
+    --secret-id "acme-devteam/agents/$AGENT/slack" \
+    --secret-string '{
+      "SLACK_BOT_TOKEN":"xoxb-...",
+      "SLACK_SIGNING_SECRET":"...",
+      "SLACK_APP_TOKEN":"xapp-..."
+    }'
+done
 
-aws secretsmanager put-secret-value \
-  --secret-id fleetmind/agents/pixel/slack \
-  --secret-string '{"SLACK_BOT_TOKEN":"xoxb-...","SLACK_SIGNING_SECRET":"...","SLACK_APP_TOKEN":"xapp-..."}'
-
-aws secretsmanager put-secret-value \
-  --secret-id fleetmind/agents/forge/slack \
-  --secret-string '{"SLACK_BOT_TOKEN":"xoxb-...","SLACK_SIGNING_SECRET":"...","SLACK_APP_TOKEN":"xapp-..."}'
-
-# Restart agents to pick up new secrets
+# Restart all agents to pick up secrets
+INSTANCE_ID=$(terraform output -raw instance_id)
 aws ssm send-command \
+  --instance-ids "$INSTANCE_ID" \
   --document-name "AWS-RunShellScript" \
-  --targets '[{"Key":"tag:Project","Values":["fleetmind"]}]' \
-  --parameters '{"commands":["systemctl restart openclaw-agent"]}'
+  --parameters 'commands=["systemctl restart openclaw-orchestrator openclaw-pixel openclaw-forge"]'
 ```
 
-## Connect to an Agent (No SSH Required)
+## Connect to the Instance (No SSH Required)
 
 ```bash
-# Get the connect command from outputs
-terraform output ssm_connect_commands
+# Get the connect command
+terraform output ssm_connect
 
-# Example:
-aws ssm start-session --target i-0abc123def456 --region us-east-1
+# Example output:
+# aws ssm start-session --target i-0abc123 --region us-east-1
 
-# Once connected, check agent status:
-systemctl status openclaw-agent
-journalctl -u openclaw-agent -f
-docker logs openclaw-orchestrator
+# Once connected:
+systemctl status openclaw-orchestrator
+journalctl -u openclaw-pixel -f
 ```
 
-## Adding a New Bot
+## Upgrading OpenClaw
+
+```bash
+INSTANCE_ID=$(terraform output -raw instance_id)
+
+aws ssm send-command \
+  --instance-ids "$INSTANCE_ID" \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=[
+    "source /opt/nvm/nvm.sh",
+    "npm install -g openclaw@latest",
+    "systemctl restart openclaw-orchestrator openclaw-pixel openclaw-forge"
+  ]'
+```
+
+Or pin a version by setting `openclaw_version = "1.2.3"` in your tfvars and re-applying.
+
+## Adding a New Agent
 
 1. Add to `fleet.yaml` (new bot entry)
-2. Add to `variables.tf` `agent_names` default and `agent_ports` map
-3. Create Slack app and note tokens
-4. `terraform apply` — creates new EC2 + EBS + Secrets Manager entry
-5. Populate the new agent's Slack secret
+2. Add name to `agent_names` and port to `agent_ports` in `terraform.tfvars`
+3. `terraform apply` — updates user_data, creates new Secrets Manager entry
+4. Populate the new agent's Slack secret
+5. On the instance: `systemctl start openclaw-<newagent>`
 
-## Variables Reference
+## Variables
 
 | Variable | Default | Description |
 |---|---|---|
 | `fleet_name` | `fleetmind` | Namespace for all AWS resources |
 | `aws_region` | `us-east-1` | Deployment region |
-| `instance_type` | `t3.small` | EC2 size per agent |
+| `instance_type` | `t3.medium` | EC2 size (handles 3 agents comfortably) |
 | `agent_names` | `[orchestrator, pixel, forge]` | Agents to provision |
-| `workspace_volume_size_gb` | `20` | EBS size per agent (GB) |
-| `rds_multi_az` | `false` | Enable RDS Multi-AZ (for prod) |
-| `allowed_ssh_cidrs` | `[]` | SSH CIDRs (empty = SSM only) |
+| `openclaw_version` | `latest` | npm package version |
+| `workspace_volume_size_gb` | `40` | Shared EBS size (GB) |
+| `rds_multi_az` | `false` | Enable for production |
+| `allowed_ssh_cidrs` | `[]` | SSH access (empty = SSM only) |
 
-## Open Questions / Next Steps
+## Next Steps
 
-- [ ] **ASG per agent** — auto-replace failed instances and reattach EBS
-- [ ] **VPN/Tailscale** — avoid exposing OpenClaw ports publicly; route Slack through private network
-- [ ] **Multi-AZ RDS** — flip `rds_multi_az = true` for production
-- [ ] **AMI pinning** — pin to a specific AL2023 AMI version for reproducibility
-- [ ] **CI deploy pipeline** — GitHub Actions workflow for `terraform plan` on PR, `terraform apply` on merge
-- [ ] **CloudWatch alarms** — alert on agent process down, RDS CPU, disk usage
-- [ ] **Multi-client** — one Terraform workspace per client fleet; use Terraform workspaces or separate state files
+- [ ] ASG (min=1) per fleet for automatic instance replacement + EBS reattach
+- [ ] VPN/Tailscale to keep OpenClaw ports off the public internet
+- [ ] `rds_multi_az = true` for production deployments
+- [ ] GitHub Actions: `terraform plan` on PR, `terraform apply` on merge
+- [ ] CloudWatch alarms: agent process health, RDS metrics, disk usage
+- [ ] Terraform workspaces for multi-client state isolation

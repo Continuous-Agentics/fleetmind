@@ -1,5 +1,5 @@
 variable "fleet_name" {
-  description = "Name of the FleetMind fleet. Used to namespace all AWS resources."
+  description = "Name of the FleetMind fleet. Used to namespace all AWS resources and workspace paths."
   type        = string
   default     = "fleetmind"
 }
@@ -11,13 +11,13 @@ variable "aws_region" {
 }
 
 variable "instance_type" {
-  description = "EC2 instance type for each agent. t3.small is a good starting point."
+  description = "EC2 instance type. t3.medium comfortably runs 3 OpenClaw agents. Scale up if adding more."
   type        = string
-  default     = "t3.small"
+  default     = "t3.medium"
 }
 
 variable "agent_names" {
-  description = "List of agent names. Each gets its own EC2 instance and EBS volume."
+  description = "List of agent names. Each gets its own systemd service and workspace subdirectory."
   type        = list(string)
   default     = ["orchestrator", "pixel", "forge"]
 }
@@ -33,9 +33,21 @@ variable "agent_ports" {
 }
 
 variable "workspace_volume_size_gb" {
-  description = "Size in GB of the EBS data volume for each agent's workspace (memory, state)."
+  description = "Size in GB of the EBS data volume shared by all agents (workspace, memory, state)."
   type        = number
-  default     = 20
+  default     = 40
+}
+
+variable "openclaw_version" {
+  description = "OpenClaw npm package version to install. Use 'latest' or pin to a specific version."
+  type        = string
+  default     = "latest"
+}
+
+variable "node_version" {
+  description = "Node.js major version to install via nvm."
+  type        = string
+  default     = "22"
 }
 
 variable "rds_instance_class" {
@@ -57,19 +69,13 @@ variable "rds_allocated_storage" {
 }
 
 variable "allowed_ssh_cidrs" {
-  description = "CIDRs allowed to SSH to agent instances. Default empty — use SSM instead."
+  description = "CIDRs allowed to SSH to the fleet instance. Default empty — use SSM Session Manager instead."
   type        = list(string)
   default     = []
 }
 
-variable "openclaw_image" {
-  description = "Docker image to run for each OpenClaw agent."
-  type        = string
-  default     = "openclaw/openclaw:latest"
-}
-
 variable "ami_id" {
-  description = "AMI ID to use for agent instances. Defaults to latest Amazon Linux 2023 (fetched via data source if left empty)."
+  description = "AMI ID override. Defaults to latest Amazon Linux 2023 if left empty."
   type        = string
   default     = ""
 }

@@ -1,11 +1,11 @@
-# ── Instance role ─────────────────────────────────────────────────────────────
-# Grants agents:
-#   - SSM Session Manager access (no SSH bastion needed)
-#   - Secrets Manager read (fetch Slack tokens + ANTHROPIC_KEY at runtime)
-#   - CloudWatch Logs write (container logs)
+# ── Fleet instance IAM role ───────────────────────────────────────────────────
+# Grants the fleet EC2 instance:
+#   - SSM Session Manager (shell access without SSH)
+#   - Secrets Manager read (scoped to this fleet's secrets)
+#   - CloudWatch Logs write
 
-resource "aws_iam_role" "agent" {
-  name = "${var.fleet_name}-agent-role"
+resource "aws_iam_role" "fleet" {
+  name = "${var.fleet_name}-fleet-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -17,22 +17,19 @@ resource "aws_iam_role" "agent" {
   })
 }
 
-# SSM Session Manager — connect without SSH or bastion
 resource "aws_iam_role_policy_attachment" "ssm" {
-  role       = aws_iam_role.agent.name
+  role       = aws_iam_role.fleet.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# CloudWatch agent
 resource "aws_iam_role_policy_attachment" "cloudwatch" {
-  role       = aws_iam_role.agent.name
+  role       = aws_iam_role.fleet.name
   policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
 }
 
-# Secrets Manager — read only, scoped to this fleet's secrets
 resource "aws_iam_role_policy" "secrets" {
   name = "${var.fleet_name}-secrets-read"
-  role = aws_iam_role.agent.id
+  role = aws_iam_role.fleet.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -47,7 +44,7 @@ resource "aws_iam_role_policy" "secrets" {
   })
 }
 
-resource "aws_iam_instance_profile" "agent" {
-  name = "${var.fleet_name}-agent-profile"
-  role = aws_iam_role.agent.name
+resource "aws_iam_instance_profile" "fleet" {
+  name = "${var.fleet_name}-fleet-profile"
+  role = aws_iam_role.fleet.name
 }
