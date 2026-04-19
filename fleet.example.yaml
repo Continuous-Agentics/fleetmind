@@ -1,0 +1,85 @@
+# fleet.example.yaml — FleetMind fleet definition
+#
+# This single file defines your entire agent fleet.
+# Run: fleetmind deploy fleet.yaml
+#
+# Copy this to fleet.yaml and fill in your values.
+# fleet.yaml should be in .gitignore (contains secrets).
+
+fleet:
+  name: acme-devteam          # Unique name for this fleet
+  description: "Dev team agent fleet for Acme Corp"
+
+# ── Shared context store ──────────────────────────────────────────────────────
+# All bots read/write here — this is the hive mind
+context:
+  backend: postgres           # postgres | redis | sqlite
+  url: ${DATABASE_URL}        # reads from environment
+
+# ── Slack workspace ───────────────────────────────────────────────────────────
+slack:
+  workspace: acme             # for labeling/logging only
+
+# ── Bots ──────────────────────────────────────────────────────────────────────
+bots:
+  - name: conductor
+    role: orchestrator        # orchestrator | specialist
+    display_name: "Conductor"
+    emoji: "🎼"
+    soul: |
+      You are the orchestrator of a multi-agent fleet.
+      Route frontend questions to @pixel, backend questions to @forge.
+      Handle general questions directly. Always be clear about handoffs.
+    slack:
+      bot_token: ${CONDUCTOR_SLACK_TOKEN}
+      signing_secret: ${CONDUCTOR_SLACK_SIGNING_SECRET}
+      app_token: ${CONDUCTOR_SLACK_APP_TOKEN}   # for Socket Mode
+    openclaw:
+      port: 18789
+      model: anthropic/claude-sonnet-4-6
+
+  - name: pixel
+    role: specialist
+    display_name: "Pixel"
+    emoji: "🎨"
+    soul: |
+      You are the frontend specialist. React, CSS, UX, browser APIs.
+      Go deep on frontend questions. Flag backend questions to @forge.
+    skills:
+      - github
+      - weather
+    slack:
+      bot_token: ${PIXEL_SLACK_TOKEN}
+      signing_secret: ${PIXEL_SLACK_SIGNING_SECRET}
+      app_token: ${PIXEL_SLACK_APP_TOKEN}
+    openclaw:
+      port: 18790
+      model: anthropic/claude-sonnet-4-6
+
+  - name: forge
+    role: specialist
+    display_name: "Forge"
+    emoji: "⚙️"
+    soul: |
+      You are the backend and API specialist. REST, GraphQL, databases,
+      auth, infrastructure. Be precise. Always surface security implications.
+    skills:
+      - github
+      - taskflow
+    slack:
+      bot_token: ${FORGE_SLACK_TOKEN}
+      signing_secret: ${FORGE_SLACK_SIGNING_SECRET}
+      app_token: ${FORGE_SLACK_APP_TOKEN}
+    openclaw:
+      port: 18791
+      model: anthropic/claude-sonnet-4-6
+
+# ── Routing rules ─────────────────────────────────────────────────────────────
+# Orchestrator uses these to route messages to specialists.
+# Keywords are matched against the incoming message (case-insensitive).
+routing:
+  - keywords: [react, css, frontend, ui, ux, design, component, hook, browser, vite, nextjs]
+    to: pixel
+  - keywords: [api, rest, graphql, database, postgres, sql, auth, backend, endpoint, docker, deploy]
+    to: forge
+  # Default: orchestrator handles directly (no match needed)

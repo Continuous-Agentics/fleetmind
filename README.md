@@ -1,66 +1,137 @@
 # FleetMind
 
-**Multi-agent Slack fleets backed by LangGraph.** Named, persistent, specialized bots with a shared hive mind.
+**Multi-agent coordination platform powered by OpenClaw.**
+
+Deploy a fleet of named, persistent, specialized AI agents in Slack — each with their own identity, memory, and skills — coordinated by a shared hive mind.
 
 ## What it is
 
-FleetMind is an opinionated framework for deploying a *fleet* of named Slack bots that:
+FleetMind is the coordination layer that sits on top of OpenClaw. OpenClaw handles LLM execution, memory, and Slack connectivity for each agent. FleetMind handles:
 
-- Each have their own Slack identity and can be addressed directly
-- Share a common LangGraph state (Postgres-backed) — a genuine hive mind
-- Route intelligently: an orchestrator handles most traffic, specialists handle deep dives
-- Persist conversation context across sessions, across bots
+- **Fleet definition** — one `fleet.yaml` defines your entire agent fleet
+- **Routing** — the orchestrator routes messages to the right specialist
+- **Shared context** — all agents read/write a common context store (the hive mind)
+- **Provisioning** — `fleetmind deploy` generates all OpenClaw workspaces + Docker config
 
 ## Architecture
 
 ```
-Slack Channel
-├── @orchestrator   ← main entry point, routes intent
-├── @frontend-bot   ← specialist: UI/UX layer
-└── @api-bot        ← specialist: backend APIs
-
-         Shared LangGraph State (Postgres)
-         ┌─────────────────────────────────┐
-         │  messages: [...]                │
-         │  active_agent: "orchestrator"   │
-         │  context: { decisions, tasks }  │
-         └─────────────────────────────────┘
-              ↑ all bots read/write via thread_id
+Human in Slack
+      │
+      ▼
+┌─────────────────────┐
+│  @conductor         │  OpenClaw gateway
+│  (orchestrator)     │  Has its own memory, skills, soul
+└──────────┬──────────┘
+           │ routes via FleetRouter
+    ┌──────┴───────┐
+    ▼              ▼
+┌────────┐    ┌────────┐
+│ @pixel │    │ @forge │   Each is a full OpenClaw agent
+│frontend│    │  api   │   with its own Slack token,
+│  bot   │    │  bot   │   memory, and skills
+└────────┘    └────────┘
+    │              │
+    └──────┬───────┘
+           ▼
+  ┌─────────────────┐
+  │  Context Store  │   Shared Postgres/SQLite
+  │  (hive mind)    │   All bots read/write here
+  └─────────────────┘
 ```
 
-Every bot shares the same Postgres checkpointer keyed by `channel+thread_id`. When the API bot runs, it reads everything the orchestrator already wrote. That's the hive mind.
-
-## Structure
-
-```
-fleetmind/
-├── core/           # SharedState schema, graph wiring, checkpointer
-├── bots/           # SlackBot base class, token management, mention routing
-├── agents/         # Agent base class — extend with your tools + system prompt
-├── deploy/         # Docker Compose, env templates
-└── examples/       # Two-bot quickstart
-```
+OpenClaw is the LLM runtime — like Postgres is the data runtime. Your clients don't see it; they see the fleet.
 
 ## Quickstart
 
 ```bash
-cp .env.example .env
-# Fill in your Slack tokens, OpenAI key, and Postgres URL
+# Install
+pip install fleetmind
 
-docker compose up -d postgres
-uv run python examples/two_bot_demo.py
+# Create your fleet definition
+cp fleet.example.yaml fleet.yaml
+# Edit fleet.yaml with your bot names, souls, and Slack tokens
+
+# Validate
+fleetmind validate fleet.yaml
+
+# Test routing
+fleetmind route "How do I fix this React hook?" --config fleet.yaml
+
+# Deploy (generates OpenClaw workspaces + docker-compose)
+fleetmind deploy fleet.yaml --output ./my-fleet
+
+# Run
+cd my-fleet
+cp .env.example .env  # fill in your tokens
+docker compose up
 ```
 
-## Requirements
+## fleet.yaml
 
-- Python 3.11+
-- PostgreSQL (for persistent shared state)
-- One Slack app token per bot
-- OpenAI API key (or swap in any LangChain-compatible LLM)
+One file defines your whole fleet:
 
-## Consulting use
+```yaml
+fleet:
+  name: acme-devteam
 
-FleetMind is designed as a consulting accelerator. The `core/` and `bots/` layers rarely change. Each client engagement lives in `agents/` — define tools, system prompts, and routing logic for their specific domain.
+context:
+  backend: postgres
+  url: ${DATABASE_URL}
+
+bots:
+  - name: conductor
+    role: orchestrator
+    display_name: "Conductor"
+    emoji: "🎼"
+    soul: "You route frontend questions to @pixel, backend to @forge."
+    slack:
+      bot_token: ${CONDUCTOR_SLACK_TOKEN}
+      ...
+
+  - name: pixel
+    role: specialist
+    display_name: "Pixel"
+    emoji: "🎨"
+    soul: "You are the frontend specialist. React, CSS, UX."
+    skills: [github, weather]
+    slack:
+      bot_token: ${PIXEL_SLACK_TOKEN}
+      ...
+
+routing:
+  - keywords: [react, css, frontend, ui]
+    to: pixel
+  - keywords: [api, database, backend]
+    to: forge
+```
+
+## CLI
+
+```
+fleetmind deploy    Provision OpenClaw workspaces from fleet.yaml
+fleetmind validate  Validate fleet.yaml without deploying
+fleetmind route     Test routing rules (dry run, no API calls)
+fleetmind status    Show fleet configuration summary
+```
+
+## Adding a specialist
+
+1. Add a bot entry to `fleet.yaml`
+2. Add routing keywords
+3. Run `fleetmind deploy` — new workspace generated automatically
+4. Create a Slack app, add token to `.env`
+5. `docker compose up`
+
+## How OpenClaw fits in
+
+Each bot in the fleet is a full OpenClaw agent:
+- Its own Slack token and presence
+- Its own `SOUL.md` (personality + expertise)
+- Its own memory (`MEMORY.md`, daily notes)
+- Its own skills (install via clawhub)
+
+FleetMind generates and manages these OpenClaw workspaces from `fleet.yaml`. You define the fleet; FleetMind wires the OpenClaw plumbing.
 
 ## License
 
