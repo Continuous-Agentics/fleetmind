@@ -5,10 +5,27 @@
 
 import { z } from "zod";
 
+/** Where a skill comes from:
+ *  - clawhub: public skill published on ClaWHub (e.g. by continuous-agentics)
+ *  - private: Continuous Agentics proprietary skill library (requires CA_REGISTRY_TOKEN)
+ *  - client:  skill in the client's own skills_repo (default)
+ */
+export const SkillSourceSchema = z.enum(["clawhub", "private", "client"]).default("client");
+
 export const SkillRefSchema = z.union([
-  z.string().transform((s) => ({ name: s, version: undefined })),
+  // shorthand string → defaults to client source
+  z.string().transform((s) => ({
+    name: s,
+    source: "client" as const,
+    author: undefined,
+    version: undefined,
+  })),
   z.object({
     name: z.string(),
+    /** Skill source tier. Defaults to "client". */
+    source: SkillSourceSchema,
+    /** ClaWHub author handle — required when source is "clawhub". */
+    author: z.string().optional(),
     version: z.string().optional(),
   }),
 ]);
@@ -58,6 +75,16 @@ export const SkillsRepoSchema = z.object({
   tag: z.string().optional(),
   poll_interval: z.string().default("60s"),
   local: z.string().optional(),
+});
+
+/** Private CA registry config — used for source: private skills */
+export const PrivateRegistrySchema = z.object({
+  /** npm registry URL, e.g. https://npm.pkg.github.com */
+  url: z.string().default("https://npm.pkg.github.com"),
+  /** Env var name holding the registry auth token. Defaults to CA_REGISTRY_TOKEN */
+  token_env: z.string().default("CA_REGISTRY_TOKEN"),
+  /** npm scope for CA private packages, e.g. @continuous-agentics */
+  scope: z.string().default("@continuous-agentics"),
 });
 
 export const SecretsSchema = z.object({
@@ -113,17 +140,21 @@ export const FleetSchema = z.object({
   fleet: FleetMetaSchema,
   agents: AgentsConfigSchema,
   skills_repo: SkillsRepoSchema.default({}),
+  /** Optional: config for Continuous Agentics private skill registry */
+  private_registry: PrivateRegistrySchema.default({}),
   secrets: SecretsSchema.default({}),
   outputs: OutputsSchema.default({}),
   openclaw: OpenClawConfigSchema.default({}),
 });
 
 // Inferred types
-export type SkillRef = { name: string; version?: string };
+export type SkillSource = z.infer<typeof SkillSourceSchema>;
+export type SkillRef = { name: string; source: SkillSource; author?: string; version?: string };
 export type SlackAccount = z.infer<typeof SlackAccountSchema>;
 export type AgentConfig = z.infer<typeof AgentSchema>;
 export type AgentDefaults = z.infer<typeof AgentDefaultsSchema>;
 export type SkillsRepo = z.infer<typeof SkillsRepoSchema>;
+export type PrivateRegistry = z.infer<typeof PrivateRegistrySchema>;
 export type FleetFile = z.infer<typeof FleetSchema>;
 
 /** Resolved fleet with helper accessors */
