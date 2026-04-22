@@ -1,7 +1,7 @@
 /**
  * FleetMind skill resolver — three-tier skill source resolution.
  *
- * Tier 1: clawhub  — public skills on ClaWHub (fetched from GitHub public repos)
+ * Tier 1: clawhub  — public skills on ClaWHub, installed via the `clawhub` CLI
  * Tier 2: private  — Continuous Agentics proprietary library (GitHub Packages / npm private)
  * Tier 3: client   — skills in the client's own skills_repo (default)
  */
@@ -12,112 +12,98 @@ import { execSync } from "node:child_process";
 import type { Fleet, SkillRef, PrivateRegistry } from "../config/schema.js";
 import { log } from "../utils/log.js";
 
-const CACHE_BASE = path.join(process.env.HOME ?? "/tmp", ".fleetmind", "skill-cache");
+const CLIENT_CACHE = path.join(process.env.HOME ?? "/tmp", ".fleetmind", "skills-cache");
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function cacheDir(tier: string, name: string): string {
-  return path.join(CACHE_BASE, tier, name);
-}
-
-function ensureCache(): void {
-  fs.mkdirSync(CACHE_BASE, { recursive: true });
-}
-
-// ---------------------------------------------------------------------------
-// Tier 1: ClaWHub (public GitHub repos)
+// Tier 1: ClaWHub — via the `clawhub` CLI
 // ---------------------------------------------------------------------------
 
 /**
- * ClaWHub skills are published as public GitHub repos under a known author.
- * Convention: github.com/<author>/<name> or github.com/<author>/skills (monorepo).
+ * ClaWHub skills are installed using the official `clawhub` CLI.
+ * `clawhub install <slug> --workdir <dest-parent> --dir skills [--version x]`
+ * installs into <dest-parent>/skills/<slug>/
  *
- * Resolution order:
- *   1. github.com/<author>/<name>  (dedicated skill repo)
- *   2. github.com/<author>/skills/<name>  (monorepo subdirectory)
+ * The `author` field is ignored for resolution (ClaWHub slugs are globally unique)
+ * but can be used for display/documentation purposes.
  */
-async function resolveClawHub(skill: SkillRef): Promise<string | undefined> {
-  const author = skill.author;
-  if (!author) {
-    log.error(`  Skill ${skill.name}: source=clawhub requires an "author" field`);
-    return undefined;
-  }
-
-  ensureCache();
-  const dest = cacheDir("clawhub", `${author}__${skill.name}`);
-  const ref = skill.version ? `--branch ${skill.version}` : "";
-
-  // Try dedicated repo first
-  const repoUrl = `https://github.com/${author}/${skill.name}.git`;
+async function resolveClawHub(skill: SkillRef, destDir: string, dryRun: boolean): Promise<boolean> {
+  // Check clawhub CLI is available
   try {
-    if (fs.existsSync(dest)) {
-      log.dim(`  [clawhub] Updating ${skill.name} from ${repoUrl}`);
-      execSync(`git -C ${dest} pull --quiet`, { stdio: "pipe" });
-    } else {
-      log.dim(`  [clawhub] Cloning ${skill.name} from ${repoUrl}`);
-      execSync(`git clone --quiet --depth 1 ${ref} ${repoUrl} ${dest}`, { stdio: "pipe" });
-    }
-    return dest;
+    execSync("clawhub --version", { stdio: "pipe" });
   } catch {
-    // fall through to monorepo attempt
+    log.error(`  [clawhub] 'clawhub' CLI not found. Install with: npm i -g clawhub`);
+    return false;
   }
 
-  // Try monorepo: github.com/<author>/skills/<name>
-  const monoCache = cacheDir("clawhub", `${author}__skills-mono`);
-  const monoUrl = `https://github.com/${author}/skills.git`;
+  const slug = skill.name;
+  const versionFlag = skill.version ? `--version ${skill.version}` : "";
+  // clawhub installs into <workdir>/skills/<slug>
+  // We want it directly in destDir/<slug>, so workdir = parent of destDir
+  const workdir = path.dirname(destDir);
+
+  if (dryRun) {
+    log.dim(`  (dry-run) Would run: clawhub install ${slug} ${versionFlag} --workdir ${workdir} --force`);
+    return true;
+  }
+
   try {
-    if (fs.existsSync(monoCache)) {
-      log.dim(`  [clawhub] Updating skills monorepo for ${author}`);
-      execSync(`git -C ${monoCache} pull --quiet`, { stdio: "pipe" });
-    } else {
-      log.dim(`  [clawhub] Cloning skills monorepo for ${author}`);
-      execSync(`git clone --quiet --depth 1 ${monoUrl} ${monoCache}`, { stdio: "pipe" });
-    }
-    const skillPath = path.join(monoCache, skill.name);
-    if (fs.existsSync(skillPath)) return skillPath;
-    log.warn(`  [clawhub] Skill ${skill.name} not found in ${author}/skills monorepo`);
-  } catch {
-    log.warn(`  [clawhub] Could not fetch ${skill.name} from ${author} — skipping`);
+    log.dim(`  [clawhub] Installing ${slug}${skill.version ? `@${skill.version}` : ""}`);
+    execSync(
+      `clawhub install ${slug} ${versionFlag} --workdir ${workdir} --no-input --force`,
+      { stdio: "pipe" }
+    );
+    log.ok(`  [clawhub] ${slug} installed`);
+    return true;
+  } catch (err) {
+    log.error(`  [clawhub] Failed to install ${slug}: ${String(err)}`);
+    return false;
   }
-
-  return undefined;
 }
 
 // ---------------------------------------------------------------------------
-// Tier 2: Continuous Agentics private registry
+// Tier 2: Continuous Agentics private registry (GitHub Packages)
 // ---------------------------------------------------------------------------
 
 /**
  * Private CA skills are npm packages published to GitHub Packages (or Verdaccio).
- * They are installed into a temp dir and the skill directory is extracted.
+ * They are installed into a staging dir, skill dir is extracted, then moved to destDir.
  *
  * Requires: CA_REGISTRY_TOKEN (or custom token_env) in environment.
  * Package name convention: @continuous-agentics/<skill-name>
  */
-async function resolvePrivate(skill: SkillRef, registry: PrivateRegistry): Promise<string | undefined> {
+async function resolvePrivate(
+  skill: SkillRef,
+  destDir: string,
+  registry: PrivateRegistry,
+  dryRun: boolean
+): Promise<boolean> {
   const token = process.env[registry.token_env];
   if (!token) {
-    log.error(`  Skill ${skill.name}: source=private requires env var ${registry.token_env}`);
-    return undefined;
+    log.error(`  [private] Skill ${skill.name}: requires env var ${registry.token_env}`);
+    return false;
   }
 
-  ensureCache();
   const pkgName = `${registry.scope}/${skill.name}`;
   const version = skill.version ?? "latest";
-  const dest = cacheDir("private", `${skill.name}@${version}`);
 
-  if (fs.existsSync(dest)) {
-    log.dim(`  [private] Using cached ${pkgName}@${version}`);
-    return dest;
+  if (dryRun) {
+    log.dim(`  (dry-run) Would install ${pkgName}@${version} from ${registry.url}`);
+    return true;
   }
 
-  const tmpDir = path.join(CACHE_BASE, "private", `.tmp-${skill.name}`);
+  const tmpDir = path.join(
+    process.env.HOME ?? "/tmp",
+    ".fleetmind",
+    "private-staging",
+    skill.name
+  );
   fs.mkdirSync(tmpDir, { recursive: true });
 
-  // Write a scoped .npmrc so npm knows where to authenticate
-  const npmrc = `${registry.scope}:registry=${registry.url}\n//npm.pkg.github.com/:_authToken=${token}\n`;
+  // Scoped .npmrc for auth
+  const npmrc = [
+    `${registry.scope}:registry=${registry.url}`,
+    `//npm.pkg.github.com/:_authToken=${token}`,
+  ].join("\n") + "\n";
   const npmrcPath = path.join(tmpDir, ".npmrc");
   fs.writeFileSync(npmrcPath, npmrc, { mode: 0o600 });
 
@@ -128,23 +114,24 @@ async function resolvePrivate(skill: SkillRef, registry: PrivateRegistry): Promi
       { stdio: "pipe" }
     );
 
-    // npm installs to node_modules/<scope>/<name>
     const installed = path.join(tmpDir, "node_modules", registry.scope, skill.name);
     if (!fs.existsSync(installed)) {
-      log.error(`  [private] ${pkgName} installed but skill directory not found at ${installed}`);
-      return undefined;
+      log.error(`  [private] ${pkgName} installed but skill dir not found at ${installed}`);
+      fs.rmSync(tmpDir, { recursive: true });
+      return false;
     }
 
-    // Move to cache
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    const dest = path.join(destDir, skill.name);
+    if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true });
     fs.cpSync(installed, dest, { recursive: true });
     fs.rmSync(tmpDir, { recursive: true });
 
-    return dest;
+    log.ok(`  [private] ${pkgName}@${version} installed`);
+    return true;
   } catch (err) {
     log.error(`  [private] Failed to install ${pkgName}: ${String(err)}`);
     fs.rmSync(tmpDir, { recursive: true, force: true });
-    return undefined;
+    return false;
   }
 }
 
@@ -153,53 +140,52 @@ async function resolvePrivate(skill: SkillRef, registry: PrivateRegistry): Promi
 // ---------------------------------------------------------------------------
 
 /**
- * Client skills come from the client's own skills_repo (local path or git remote).
- * This is the existing behavior — skills live in <skills_repo.local>/<name>
- * or in the cloned cache of skills_repo.url.
+ * Client skills come from the client's own skills_repo (local path or cloned remote).
+ * Resolution order: skills_repo.local → ./skills → cloned remote cache
  */
-function resolveClient(skill: SkillRef, fleet: Fleet, cloneCache: string): string | undefined {
+async function resolveClient(
+  skill: SkillRef,
+  destDir: string,
+  fleet: Fleet,
+  dryRun: boolean
+): Promise<boolean> {
   const candidates: string[] = [];
 
   if (fleet.skills_repo.local) {
     candidates.push(path.resolve(fleet.skills_repo.local, skill.name));
   }
   candidates.push(path.resolve("./skills", skill.name));
-  if (fs.existsSync(cloneCache)) {
-    candidates.push(path.join(cloneCache, skill.name));
+  if (fs.existsSync(CLIENT_CACHE)) {
+    candidates.push(path.join(CLIENT_CACHE, skill.name));
   }
 
-  const found = candidates.find((c) => fs.existsSync(c));
-  if (!found) {
+  const src = candidates.find((c) => fs.existsSync(c));
+  if (!src) {
     if (fleet.skills_repo.url) {
-      log.warn(`  [client] Skill ${skill.name} not found locally — remote install from ${fleet.skills_repo.url} (clone first with fleetmind watch)`);
+      log.warn(
+        `  [client] Skill ${skill.name} not found locally — remote: ${fleet.skills_repo.url} (run 'fleetmind watch' to sync)`
+      );
     } else {
       log.warn(`  [client] Skill ${skill.name} not found — skipping`);
     }
+    return false;
   }
-  return found;
+
+  if (dryRun) {
+    log.dim(`  (dry-run) Would copy ${skill.name} from ${src}`);
+    return true;
+  }
+
+  const dest = path.join(destDir, skill.name);
+  if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true });
+  fs.cpSync(src, dest, { recursive: true });
+  log.ok(`  [client] ${skill.name} installed from ${src}`);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
-// Public resolver
+// Public entry point
 // ---------------------------------------------------------------------------
-
-const CLIENT_CACHE = path.join(process.env.HOME ?? "/tmp", ".fleetmind", "skills-cache");
-
-export async function resolveSkill(skill: SkillRef, fleet: Fleet): Promise<string | undefined> {
-  const source = skill.source ?? "client";
-
-  switch (source) {
-    case "clawhub":
-      return resolveClawHub(skill);
-
-    case "private":
-      return resolvePrivate(skill, fleet.private_registry);
-
-    case "client":
-    default:
-      return resolveClient(skill, fleet, CLIENT_CACHE);
-  }
-}
 
 export async function installSkill(
   skill: SkillRef,
@@ -207,18 +193,20 @@ export async function installSkill(
   fleet: Fleet,
   dryRun: boolean
 ): Promise<void> {
-  const label = `[${skill.source ?? "client"}] ${skill.name}${skill.version ? `@${skill.version}` : ""}`;
+  const source = skill.source ?? "client";
+  const label = `${skill.name}${skill.version ? `@${skill.version}` : ""} (${source}${skill.author ? `/${skill.author}` : ""})`;
+  log.dim(`  → ${label}`);
 
-  if (dryRun) {
-    log.dim(`  (dry-run) Would install ${label}`);
-    return;
+  switch (source) {
+    case "clawhub":
+      await resolveClawHub(skill, destDir, dryRun);
+      break;
+    case "private":
+      await resolvePrivate(skill, destDir, fleet.private_registry, dryRun);
+      break;
+    case "client":
+    default:
+      await resolveClient(skill, destDir, fleet, dryRun);
+      break;
   }
-
-  const src = await resolveSkill(skill, fleet);
-  if (!src) return;
-
-  const dest = path.join(destDir, skill.name);
-  if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true });
-  fs.cpSync(src, dest, { recursive: true });
-  log.ok(`  Installed ${label}`);
 }
