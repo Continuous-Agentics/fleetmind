@@ -13,14 +13,24 @@ fleet:
   client: Acme Corp
   description: "Engineering and support bots for Acme Corp"
 
-# ── Skills Repo (GitOps source) ───────────────────────────────────────────────
-# FleetMind watches this repo for skill updates and auto-pushes to agents.
+# ── Skills Repo (client GitOps source) ────────────────────────────────────────
+# The client's own skills repo — contains company-specific skill customizations
+# seeded from Continuous Agentics base skills during onboarding.
+# FleetMind watches this repo and auto-pushes updates to agent workspaces.
 skills_repo:
-  url: https://github.com/Continuous-Agentics/fleetmind-skills
+  url: https://github.com/acme-corp/acme-skills   # client's private repo
   branch: main
   poll_interval: 60s        # How often `fleetmind watch` polls for changes
   # tag: v1.2.0             # Pin entire fleet to a tag (overrides branch)
   # local: ./skills         # Use local skills dir instead (dev mode)
+
+# ── Private Registry (Continuous Agentics proprietary skills) ─────────────────
+# Required only if any agent uses source: private skills.
+# Set CA_REGISTRY_TOKEN via: fleetmind secrets set CA_REGISTRY_TOKEN <token>
+private_registry:
+  url: https://npm.pkg.github.com     # GitHub Packages (or your Verdaccio URL)
+  token_env: CA_REGISTRY_TOKEN        # Env var holding the auth token
+  scope: "@continuous-agentics"       # npm scope for CA private packages
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 # Secrets are never stored here. Use ${ENV_VAR} references.
@@ -54,7 +64,14 @@ agents:
         bot_token: ${CONDUCTOR_BOT_TOKEN}
         app_token: ${CONDUCTOR_APP_TOKEN}
       skills:
+        # Tier 1: ClaWHub public skill
         - name: taskflow
+          source: clawhub
+          author: continuous-agentics
+        # Tier 2: Continuous Agentics proprietary skill (requires CA_REGISTRY_TOKEN)
+        - name: ca-fleet-ops
+          source: private
+          version: "1.0.0"
       plugins:
         - anthropic
         - brave
@@ -77,10 +94,16 @@ agents:
         bot_token: ${PIXEL_BOT_TOKEN}
         app_token: ${PIXEL_APP_TOKEN}
       skills:
-        - name: coding
-        - name: browser
+        # Tier 1: ClaWHub public skills
         - name: github
-          version: "2.1.0"   # Pin to specific version; omit for latest
+          source: clawhub
+          author: steipete
+          version: "1.0.0"           # Pinned; omit for latest
+        # Tier 3: Client's own skill (from skills_repo — default source)
+        - name: acme-frontend-standards
+          source: client
+        - name: acme-design-tokens
+          source: client
       plugins:
         - anthropic
       agent_to_agent:
@@ -101,10 +124,16 @@ agents:
         bot_token: ${FORGE_BOT_TOKEN}
         app_token: ${FORGE_APP_TOKEN}
       skills:
-        - name: coding
+        # Tier 1: ClaWHub public skills
         - name: github
-        - name: gh-issues
-          version: "2.1.0"
+          source: clawhub
+          author: steipete
+        # Tier 2: Continuous Agentics proprietary skill
+        - name: ca-incident-triage
+          source: private
+        # Tier 3: Client's own runbook layer (extends ca-incident-triage)
+        - name: acme-incident-runbook
+          source: client
       plugins:
         - anthropic
         - brave
