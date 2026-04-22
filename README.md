@@ -145,4 +145,9 @@ FleetMind solves the terraform repo's TODO: *"Template it out so we can have x n
 
 ## License
 
-MIT
+Copyright (c) 2026 Continuous Agentics. All rights reserved.
+
+This software is proprietary and confidential. Unauthorized copying, distribution, modification, or use of this software, in whole or in part, is strictly prohibited without prior written permission from Continuous Agentics.
+
+For licensing inquiries, contact: gracegettert@gmail.com
+
