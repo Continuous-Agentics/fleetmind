@@ -1,10 +1,16 @@
 /**
  * FleetMind provisioner — creates agent workspaces and installs skills.
+ *
+ * Skills are resolved via the three-tier resolver:
+ *   clawhub → public ClaWHub/GitHub skill
+ *   private → Continuous Agentics private registry (GitHub Packages)
+ *   client  → client's own skills_repo (default)
  */
 
 import fs from "node:fs";
 import path from "node:path";
-import type { Fleet, AgentConfig, SkillRef } from "../config/schema.js";
+import type { Fleet, AgentConfig } from "../config/schema.js";
+import { installSkill } from "./resolver.js";
 import { log } from "../utils/log.js";
 
 function soulMd(agent: AgentConfig): string {
@@ -31,42 +37,11 @@ function writeFile(filePath: string, content: string, dryRun: boolean): void {
   fs.writeFileSync(filePath, content, "utf-8");
 }
 
-function installSkill(
-  fleet: Fleet,
-  skill: SkillRef,
-  skillsDir: string,
-  dryRun: boolean
-): void {
-  const candidates: string[] = [];
-
-  if (fleet.skills_repo.local) {
-    candidates.push(path.resolve(fleet.skills_repo.local, skill.name));
-  }
-  candidates.push(path.resolve("./skills", skill.name));
-
-  for (const src of candidates) {
-    if (fs.existsSync(src)) {
-      if (!dryRun) {
-        const dest = path.join(skillsDir, skill.name);
-        if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true });
-        fs.cpSync(src, dest, { recursive: true });
-      }
-      return;
-    }
-  }
-
-  if (fleet.skills_repo.url) {
-    log.warn(`  Skill ${skill.name}: remote install from ${fleet.skills_repo.url} (coming soon)`);
-  } else {
-    log.warn(`  Skill ${skill.name} not found locally — skipping`);
-  }
-}
-
-export function provisionAgent(
+export async function provisionAgent(
   fleet: Fleet,
   agent: AgentConfig,
   dryRun: boolean
-): void {
+): Promise<void> {
   const workspace = path.join(fleet.agents.defaults.workspace_base, `workspace-${agent.id}`);
 
   if (!dryRun) fs.mkdirSync(workspace, { recursive: true });
@@ -81,17 +56,18 @@ export function provisionAgent(
     writeFile(userMdPath, USER_MD, dryRun);
   }
 
-  // Install skills
+  // Install skills via three-tier resolver
   if (agent.skills.length > 0) {
     const skillsDir = path.join(workspace, "skills");
     if (!dryRun) fs.mkdirSync(skillsDir, { recursive: true });
+
     for (const skill of agent.skills) {
-      installSkill(fleet, skill, skillsDir, dryRun);
+      await installSkill(skill, skillsDir, fleet, dryRun);
     }
   }
 }
 
-export function provisionFleet(fleet: Fleet, dryRun = false): void {
+export async function provisionFleet(fleet: Fleet, dryRun = false): Promise<void> {
   log.info(`\nFleetMind — provisioning fleet ${fleet.fleet.name}`);
   if (fleet.fleet.client) log.info(`  Client: ${fleet.fleet.client}`);
   log.info(`  Agents: ${fleet.agents.list.length}`);
@@ -99,7 +75,7 @@ export function provisionFleet(fleet: Fleet, dryRun = false): void {
 
   for (const agent of fleet.agents.list) {
     log.step(`${agent.emoji} ${agent.name}...`);
-    provisionAgent(fleet, agent, dryRun);
+    await provisionAgent(fleet, agent, dryRun);
     log.ok(`${agent.emoji} ${agent.name}`);
   }
 
@@ -134,8 +110,9 @@ export function diffFleet(fleet: Fleet): string[] {
     for (const skill of agent.skills) {
       const skillPath = path.join(skillsDir, skill.name);
       if (!fs.existsSync(skillPath)) {
+        const source = skill.source ?? "client";
         const ver = skill.version ? `@${skill.version}` : "@latest";
-        changes.push(`[+] ${agent.name}: install skill ${skill.name}${ver}`);
+        changes.push(`[+] ${agent.name}: install skill ${skill.name}${ver} (${source})`);
       }
     }
   }
