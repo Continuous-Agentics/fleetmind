@@ -1,137 +1,147 @@
 # FleetMind
 
-**Multi-agent coordination platform powered by OpenClaw.**
-
-Deploy a fleet of named, persistent, specialized AI agents in Slack — each with their own identity, memory, and skills — coordinated by a shared hive mind.
-
-## What it is
-
-FleetMind is the coordination layer that sits on top of OpenClaw. OpenClaw handles LLM execution, memory, and Slack connectivity for each agent. FleetMind handles:
-
-- **Fleet definition** — one `fleet.yaml` defines your entire agent fleet
-- **Routing** — the orchestrator routes messages to the right specialist
-- **Shared context** — all agents read/write a common context store (the hive mind)
-- **Provisioning** — `fleetmind deploy` generates all OpenClaw workspaces + Docker config
+Deploy and manage OpenClaw multi-agent fleets. One config file, multiple AI bots, each with its own Slack identity, persona, and skills — coordinating natively in threads.
 
 ## Architecture
 
 ```
-Human in Slack
-      │
-      ▼
-┌─────────────────────┐
-│  @conductor         │  OpenClaw gateway
-│  (orchestrator)     │  Has its own memory, skills, soul
-└──────────┬──────────┘
-           │ routes via FleetRouter
-    ┌──────┴───────┐
-    ▼              ▼
-┌────────┐    ┌────────┐
-│ @pixel │    │ @forge │   Each is a full OpenClaw agent
-│frontend│    │  api   │   with its own Slack token,
-│  bot   │    │  bot   │   memory, and skills
-└────────┘    └────────┘
-    │              │
-    └──────┬───────┘
-           ▼
-  ┌─────────────────┐
-  │  Context Store  │   Shared Postgres/SQLite
-  │  (hive mind)    │   All bots read/write here
-  └─────────────────┘
+┌──────────────────────────────────────────┐
+│  FleetMind                               │
+│  fleet.yaml → openclaw.json              │
+│  workspace provisioning, skill lifecycle │
+└────────────────────┬─────────────────────┘
+                     │ generates config + workspaces
+┌────────────────────▼─────────────────────┐
+│  OpenClaw Gateway                        │
+│  multi-agent runtime                     │
+│  Conductor 🎼  Pixel 🎨  Forge ⚙️        │
+│  (each a separate agent + Slack app)     │
+└────────────────────┬─────────────────────┘
+                     │ runs on infra from
+┌────────────────────▼─────────────────────┐
+│  openclaw-terraform                      │
+│  EC2, IAM, networking                    │
+│  consumes rendered/fleet.auto.tfvars     │
+└──────────────────────────────────────────┘
 ```
 
-OpenClaw is the LLM runtime — like Postgres is the data runtime. Your clients don't see it; they see the fleet.
+Each agent is a fully isolated OpenClaw agent with its own workspace, Slack app, session memory, and skills. Agents communicate via OpenClaw's native `agentToAgent` messaging — Conductor delegates to Pixel or Forge, who reply directly in the Slack thread under their own bot identity.
 
-## Quickstart
+## Quick Start
 
 ```bash
-# Install
 pip install fleetmind
 
-# Create your fleet definition
-cp fleet.example.yaml fleet.yaml
-# Edit fleet.yaml with your bot names, souls, and Slack tokens
+# 1. Scaffold a new fleet
+fleetmind init --name acme-fleet --client "Acme Corp"
 
-# Validate
-fleetmind validate fleet.yaml
+# 2. Edit fleet.yaml — add agents, Slack tokens, skills
+# 3. Store secrets
+fleetmind secrets set CONDUCTOR_BOT_TOKEN xoxb-...
+fleetmind secrets set CONDUCTOR_APP_TOKEN xapp-...
+fleetmind secrets set PIXEL_BOT_TOKEN xoxb-...
+fleetmind secrets set PIXEL_APP_TOKEN xapp-...
 
-# Test routing
-fleetmind route "How do I fix this React hook?" --config fleet.yaml
+# 4. Preview changes
+fleetmind diff
 
-# Deploy (generates OpenClaw workspaces + docker-compose)
-fleetmind deploy fleet.yaml --output ./my-fleet
+# 5. Deploy
+fleetmind deploy
 
-# Run
-cd my-fleet
-cp .env.example .env  # fill in your tokens
-docker compose up
+# 6. Restart OpenClaw gateway
+openclaw gateway restart
 ```
 
-## fleet.yaml
-
-One file defines your whole fleet:
+## fleet.yaml Overview
 
 ```yaml
 fleet:
-  name: acme-devteam
+  name: acme-fleet
+  client: Acme Corp
 
-context:
-  backend: postgres
-  url: ${DATABASE_URL}
+skills_repo:
+  url: https://github.com/your-org/skills-repo
+  poll_interval: 60s
 
-bots:
-  - name: conductor
-    role: orchestrator
-    display_name: "Conductor"
-    emoji: "🎼"
-    soul: "You route frontend questions to @pixel, backend to @forge."
-    slack:
-      bot_token: ${CONDUCTOR_SLACK_TOKEN}
-      ...
+agents:
+  defaults:
+    model: anthropic/claude-sonnet-4-6
 
-  - name: pixel
-    role: specialist
-    display_name: "Pixel"
-    emoji: "🎨"
-    soul: "You are the frontend specialist. React, CSS, UX."
-    skills: [github, weather]
-    slack:
-      bot_token: ${PIXEL_SLACK_TOKEN}
-      ...
+  list:
+    - id: conductor
+      name: Conductor
+      emoji: 🎼
+      orchestrator: true
+      slack:
+        bot_token: ${CONDUCTOR_BOT_TOKEN}
+        app_token: ${CONDUCTOR_APP_TOKEN}
+      agent_to_agent:
+        can_send_to: [pixel, forge]
 
-routing:
-  - keywords: [react, css, frontend, ui]
-    to: pixel
-  - keywords: [api, database, backend]
-    to: forge
+    - id: pixel
+      name: Pixel
+      emoji: 🎨
+      skills:
+        - name: coding
+        - name: github
+          version: "2.1.0"   # pinned
+      slack:
+        bot_token: ${PIXEL_BOT_TOKEN}
+        app_token: ${PIXEL_APP_TOKEN}
 ```
 
-## CLI
+See `fleet.example.yaml` for the full annotated schema.
+
+## CLI Reference
+
+| Command | Description |
+|---|---|
+| `fleetmind init` | Scaffold a new fleet.yaml |
+| `fleetmind deploy` | Provision workspaces + render openclaw.json |
+| `fleetmind diff` | Show what deploy would change |
+| `fleetmind render` | Emit openclaw.json + tfvars without deploying |
+| `fleetmind watch` | GitOps: auto-push skill updates from skills repo |
+| `fleetmind status` | Show fleet + workspace status |
+| `fleetmind push skill <name> --agent <id>` | Push a skill to an agent |
+| `fleetmind push skill <name> --all` | Push a skill to all agents |
+| `fleetmind push plugin <name> --all` | Push a plugin fleet-wide |
+| `fleetmind agent list` | List all agents |
+| `fleetmind agent info <id>` | Show agent details |
+| `fleetmind secrets set KEY value` | Store a secret |
+| `fleetmind secrets list` | List stored secret keys |
+| `fleetmind secrets export` | Export secrets as shell exports |
+
+## Skills Repo (GitOps)
+
+FleetMind watches a versioned skills repo and automatically pushes updates:
 
 ```
-fleetmind deploy    Provision OpenClaw workspaces from fleet.yaml
-fleetmind validate  Validate fleet.yaml without deploying
-fleetmind route     Test routing rules (dry run, no API calls)
-fleetmind status    Show fleet configuration summary
+your-skills-repo/
+  versions.json          ← {"coding": "1.2.0", "github": "2.1.0"}
+  coding/
+    SKILL.md
+    package.json         ← {"name": "coding", "version": "1.2.0"}
+  github/
+    SKILL.md
+    package.json
 ```
 
-## Adding a specialist
+```bash
+# Start the watcher (runs until Ctrl+C)
+fleetmind watch
 
-1. Add a bot entry to `fleet.yaml`
-2. Add routing keywords
-3. Run `fleetmind deploy` — new workspace generated automatically
-4. Create a Slack app, add token to `.env`
-5. `docker compose up`
+# Or push a specific skill manually
+fleetmind push skill coding --agent forge
+fleetmind push skill github --all --version 2.1.0
+```
 
-## How OpenClaw fits in
+Unpinned skills (`- name: coding`) auto-update. Pinned skills (`version: "2.1.0"`) are skipped unless `--force`.
 
-Each bot in the fleet is a full OpenClaw agent:
-- Its own Slack token and presence
-- Its own `SOUL.md` (personality + expertise)
-- Its own memory (`MEMORY.md`, daily notes)
-- Its own skills (install via clawhub)
+## Terraform Integration
 
-FleetMind generates and manages these OpenClaw workspaces from `fleet.yaml`. You define the fleet; FleetMind wires the OpenClaw plumbing.
+FleetMind generates `rendered/fleet.auto.tfvars` for the [openclaw-terraform](https://github.com/Continuous-Agentics/openclaw-terraform) repo. Terraform picks this up automatically (`.auto.tfvars` files are loaded by default).
+
+FleetMind solves the terraform repo's TODO: *"Template it out so we can have x number of slack bots."* — define agents in `fleet.yaml`, FleetMind generates the config.
 
 ## License
 
