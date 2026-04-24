@@ -13,6 +13,7 @@ import { registerStatus } from "./commands/status.js";
 import { registerPush } from "./commands/push.js";
 import { registerAgent } from "./commands/agent.js";
 import { registerSecrets } from "./commands/secrets.js";
+import { registerContext } from "./commands/context.js";
 
 // Inject stored secrets into env before any command runs
 injectSecrets();
@@ -33,5 +34,6 @@ registerStatus(program);
 registerPush(program);
 registerAgent(program);
 registerSecrets(program);
+registerContext(program);
 
 program.parse();

@@ -44,6 +44,26 @@ resource "aws_iam_role_policy" "secrets" {
   })
 }
 
+resource "aws_iam_role_policy" "dynamodb" {
+  name = "${var.fleet_name}-dynamodb"
+  role = aws_iam_role.fleet.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Scan",
+        "dynamodb:Query",
+      ]
+      Resource = aws_dynamodb_table.context_store.arn
+    }]
+  })
+}
+
 resource "aws_iam_instance_profile" "fleet" {
   name = "${var.fleet_name}-fleet-profile"
   role = aws_iam_role.fleet.name

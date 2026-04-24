@@ -129,6 +129,13 @@ export const OpenClawConfigSchema = z.object({
   }).default({}),
 });
 
+export const ContextSchema = z.object({
+  provider: z.enum(["dynamodb", "local"]).default("local"),
+  table: z.string().optional(),
+  region: z.string().optional(),
+  ttl_days: z.number().optional(),
+});
+
 export const FleetMetaSchema = z.object({
   name: z.string(),
   version: z.string().default("1.0.0"),
@@ -145,6 +152,7 @@ export const FleetSchema = z.object({
   secrets: SecretsSchema.default({}),
   outputs: OutputsSchema.default({}),
   openclaw: OpenClawConfigSchema.default({}),
+  context: ContextSchema.default({}),
 });
 
 // Inferred types
