@@ -2,6 +2,8 @@
 
 Deploy and manage OpenClaw multi-agent fleets. One config file, multiple AI bots, each with its own Slack identity, persona, and skills — coordinating natively in threads.
 
+Built with TypeScript. Requires Node.js 20+.
+
 ## Architecture
 
 ```
@@ -9,6 +11,7 @@ Deploy and manage OpenClaw multi-agent fleets. One config file, multiple AI bots
 │  FleetMind                               │
 │  fleet.yaml → openclaw.json              │
 │  workspace provisioning, skill lifecycle │
+│  shared ContextStore (DynamoDB)          │
 └────────────────────┬─────────────────────┘
                      │ generates config + workspaces
 ┌────────────────────▼─────────────────────┐
@@ -20,17 +23,19 @@ Deploy and manage OpenClaw multi-agent fleets. One config file, multiple AI bots
                      │ runs on infra from
 ┌────────────────────▼─────────────────────┐
 │  openclaw-terraform                      │
-│  EC2, IAM, networking                    │
+│  EC2, IAM, networking, DynamoDB          │
 │  consumes rendered/fleet.auto.tfvars     │
 └──────────────────────────────────────────┘
 ```
 
 Each agent is a fully isolated OpenClaw agent with its own workspace, Slack app, session memory, and skills. Agents communicate via OpenClaw's native `agentToAgent` messaging — Conductor delegates to Pixel or Forge, who reply directly in the Slack thread under their own bot identity.
 
+Agents share state through the **ContextStore** — a DynamoDB-backed hive mind. Any service with IAM access to the table can read or write fleet context without routing through an agent.
+
 ## Quick Start
 
 ```bash
-pip install fleetmind
+npm install -g fleetmind
 
 # 1. Scaffold a new fleet
 fleetmind init --name acme-fleet --client "Acme Corp"
@@ -62,6 +67,11 @@ fleet:
 skills_repo:
   url: https://github.com/your-org/skills-repo
   poll_interval: 60s
+
+context:
+  provider: dynamodb        # dynamodb | local (in-memory dev fallback)
+  region: us-east-1         # defaults to AWS_REGION env var
+  ttl_days: 30              # optional default TTL for context entries
 
 agents:
   defaults:
@@ -110,6 +120,29 @@ See `fleet.example.yaml` for the full annotated schema.
 | `fleetmind secrets set KEY value` | Store a secret |
 | `fleetmind secrets list` | List stored secret keys |
 | `fleetmind secrets export` | Export secrets as shell exports |
+| `fleetmind context get <key>` | Read a value from the shared ContextStore |
+| `fleetmind context set <key> <value>` | Write a value to the ContextStore |
+| `fleetmind context delete <key>` | Delete a key |
+| `fleetmind context list [prefix]` | List keys, optionally filtered by prefix |
+
+## Shared ContextStore (Hive Mind)
+
+All agents in a fleet share a DynamoDB-backed ContextStore. Keys are namespaced as `{fleetName}/{scope}/{key}`:
+
+```bash
+# Write shared context (any agent or external service can read this)
+fleetmind context set acme-fleet/shared/last-deploy "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# Read it back
+fleetmind context get acme-fleet/shared/last-deploy
+
+# List everything under a prefix
+fleetmind context list acme-fleet/conductor/
+```
+
+In local/dev mode (`provider: local`), the store is in-memory only — data won't survive restarts. A warning is printed so you know you're not hitting real DynamoDB.
+
+The DynamoDB table ARN is exported as a Terraform output (`context_store_table_arn`) so external services can be granted IAM access without hardcoding table names.
 
 ## Skills Repo (GitOps)
 
@@ -141,7 +174,13 @@ Unpinned skills (`- name: coding`) auto-update. Pinned skills (`version: "2.1.0"
 
 FleetMind generates `rendered/fleet.auto.tfvars` for the [openclaw-terraform](https://github.com/Continuous-Agentics/openclaw-terraform) repo. Terraform picks this up automatically (`.auto.tfvars` files are loaded by default).
 
-FleetMind solves the terraform repo's TODO: *"Template it out so we can have x number of slack bots."* — define agents in `fleet.yaml`, FleetMind generates the config.
+`fleetmind deploy` also provisions the DynamoDB ContextStore table via the included Terraform module in `infra/terraform/`.
+
+## Requirements
+
+- Node.js 20+
+- AWS credentials (for DynamoDB ContextStore in production)
+- OpenClaw installed on the target host
 
 ## License
 
@@ -150,4 +189,3 @@ Copyright (c) 2026 Continuous Agentics. All rights reserved.
 This software is proprietary and confidential. Unauthorized copying, distribution, modification, or use of this software, in whole or in part, is strictly prohibited without prior written permission from Continuous Agentics.
 
 For licensing inquiries, contact: gracegettert@gmail.com
-
