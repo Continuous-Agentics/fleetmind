@@ -22,12 +22,8 @@ resource "aws_secretsmanager_secret" "agent_slack" {
 resource "aws_secretsmanager_secret_version" "agent_slack_placeholder" {
   for_each = toset(var.agent_names)
 
-  secret_id = aws_secretsmanager_secret.agent_slack[each.key].id
-  secret_string = jsonencode({
-    SLACK_BOT_TOKEN       = "REPLACE_ME_xoxb-..."
-    SLACK_SIGNING_SECRET  = "REPLACE_ME"
-    SLACK_APP_TOKEN       = "REPLACE_ME_xapp-..."
-  })
+  secret_id     = aws_secretsmanager_secret.agent_slack[each.key].id
+  secret_string = local.slack_placeholder
 
   # Don't overwrite if someone has already populated the secret
   lifecycle {
@@ -43,13 +39,28 @@ resource "aws_secretsmanager_secret" "anthropic" {
 }
 
 resource "aws_secretsmanager_secret_version" "anthropic_placeholder" {
-  secret_id = aws_secretsmanager_secret.anthropic.id
-  secret_string = jsonencode({
-    ANTHROPIC_API_KEY = "REPLACE_ME_sk-ant-..."
-    DATABASE_URL      = "POPULATED_AFTER_RDS_APPLY"
-  })
+  secret_id     = aws_secretsmanager_secret.anthropic.id
+  secret_string = local.anthropic_placeholder
 
   lifecycle {
     ignore_changes = [secret_string]
   }
+}
+
+# ── Placeholder values (plain locals — no encoding functions) ─────────────────
+locals {
+  slack_placeholder = <<-JSON
+    {
+      "SLACK_BOT_TOKEN": "REPLACE_ME_xoxb-...",
+      "SLACK_SIGNING_SECRET": "REPLACE_ME",
+      "SLACK_APP_TOKEN": "REPLACE_ME_xapp-..."
+    }
+  JSON
+
+  anthropic_placeholder = <<-JSON
+    {
+      "ANTHROPIC_API_KEY": "REPLACE_ME_sk-ant-...",
+      "DATABASE_URL": "POPULATED_AFTER_RDS_APPLY"
+    }
+  JSON
 }

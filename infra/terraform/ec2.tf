@@ -15,7 +15,7 @@
 resource "aws_instance" "fleet" {
   ami                    = local.ami_id
   instance_type          = var.instance_type
-  subnet_id              = aws_subnet.public[0].id
+  subnet_id              = local.public_subnets[0]
   vpc_security_group_ids = [aws_security_group.fleet.id]
   iam_instance_profile   = aws_iam_instance_profile.fleet.name
 
