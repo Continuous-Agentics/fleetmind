@@ -68,10 +68,10 @@ and blast-radius properties.
 ## Workspace layout
 
 `fleet.yaml` defines agents; `fleetmind deploy` materialises one workspace
-directory per agent and pushes it to that agent's EC2 host. On the host
-the workspace lives under `OPENCLAW_STATE_DIR/workspace/` (each gateway
-hosts exactly one agent, so there's no per-agent subdirectory). Each
-contains:
+directory per agent and pushes it to that agent's EC2 host. The workspace
+lives at `<workspace_base>/workspace-<agent_id>/` — e.g. with the default
+`workspace_base: /home/ec2-user/.openclaw`, conductor's workspace is
+`/home/ec2-user/.openclaw/workspace-conductor/`. Each contains:
 
 ```
 workspace/
@@ -110,7 +110,7 @@ feeds via the rendered `fleet.auto.tfvars`.
      agent_to_agent:
        can_send_to: [conductor]
      delegation:                # optional; remove if delegation isn't enabled
-       role: worker
+       specialty: <label>       # for workers; PMs use `worker_bots: [<id>, ...]` instead
    ```
 2. Create the matching Slack app (use the manifest output from
    `fleetmind render` if available) and store the tokens via
@@ -129,10 +129,12 @@ See [`docs/integration/delegation.md`](../docs/integration/delegation.md). Short
 version:
 
 1. Apply the `infra/terraform/modules/task-ledger/` Terraform module
-2. Add a `delegation:` block to `fleet.yaml`, plus `delegation.role` on
-   each agent that participates
+2. Add a fleet-level `delegation:` block to `fleet.yaml`. PM-vs-worker
+   is inferred from each agent's existing `orchestrator: true` flag.
+   Add a per-agent `delegation:` block too: `worker_bots: [...]` for
+   PMs, `specialty: <label>` for workers
 3. Attach the matching IAM ledger policy to each agent's EC2 instance
-   role (PM policy for `role: pm`, worker policy for `role: worker`)
+   role (PM policy for orchestrator agents, worker policy for the rest)
 4. `fleetmind deploy` to push updated workspaces, then restart each
    agent's gateway on its EC2
 
@@ -141,9 +143,9 @@ version:
 For local testing of a single agent without provisioning EC2, set
 `context.provider: local` in `fleet.yaml`. The ContextStore will run
 in-memory (data won't survive gateway restarts; a warning is printed at
-startup). Delegation requires real DynamoDB — there's no in-memory mode
-for the task ledger; in dev you can point `delegation.ddb_endpoint` at
-DynamoDB Local.
+startup). Delegation requires real DynamoDB — there's no in-memory mode for the
+task ledger. For local development against DynamoDB Local, set
+`AWS_ENDPOINT_URL_DYNAMODB` in the environment (the AWS SDK picks it up).
 
 To run a single agent's gateway locally:
 

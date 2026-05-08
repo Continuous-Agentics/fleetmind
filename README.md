@@ -168,10 +168,14 @@ The wake pipeline is what makes per-EC2 isolation practical: when the worker on 
 delegation:
   enabled: true
   aws_region: us-west-2
-  ddb_table: acme-fleet-tasks
+  table_name: acme-fleet-tasks
   s3_bucket: acme-fleet-ledger
-  wake_session_key: agent:main:slack:channel:C0123456789
 ```
+
+Per-agent: PM bots already use `orchestrator: true`; add `delegation.worker_bots: [...]`
+to list the worker IDs they can delegate to. Worker agents add
+`delegation.specialty: <label>` for routing. Wake-pipeline targeting (SSM
+session key, EC2 tag) is configured at the Terraform layer.
 
 Provision the substrate via the [`infra/terraform/modules/task-ledger/`](infra/terraform/modules/task-ledger) Terraform module. Add the `bot-delegation` skill to the PM bot and the `bot-reception` skill to each worker (both ship in `openclaw/skills/`). Full walkthrough: [`docs/integration/delegation.md`](docs/integration/delegation.md). Protocol details: [`docs/protocol.md`](docs/protocol.md).
 

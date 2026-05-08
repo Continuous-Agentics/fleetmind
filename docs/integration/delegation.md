@@ -109,8 +109,7 @@ agents:
     - id: pm-bot
       name: Conductor
       emoji: 🎼
-      orchestrator: true
-      role: project-manager
+      orchestrator: true                                # PM ⇒ orchestrator: true
       delegation:
         worker_bots: [worker-frontend, worker-backend]  # agent IDs from this list
       skills:
@@ -123,7 +122,6 @@ agents:
     - id: worker-frontend
       name: Pixel
       emoji: 🎨
-      role: worker
       delegation:
         specialty: frontend     # used by the PM bot for routing decisions
       skills:
@@ -136,7 +134,6 @@ agents:
     - id: worker-backend
       name: Forge
       emoji: ⚙️
-      role: worker
       delegation:
         specialty: backend
       skills:
