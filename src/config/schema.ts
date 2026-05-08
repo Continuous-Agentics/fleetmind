@@ -44,6 +44,41 @@ export const PersonaSchema = z.object({
   soul: z.string().default("You are a helpful assistant."),
 });
 
+// ── Delegation config ────────────────────────────────────────────────────────
+
+/** Per-fleet delegation settings. Optional — fleets without delegation work normally. */
+export const DelegationFleetSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** DynamoDB table name for task state. Required when enabled. */
+  table_name: z.string().optional(),
+  /** S3 bucket name for narrative content. Required when enabled. */
+  s3_bucket: z.string().optional(),
+  /**
+   * S3 key template for task narratives.
+   * Tokens: {project}, {date}, {task_id}
+   * Default: "v0/projects/{project}/tasks/{date}-{task_id}.md"
+   */
+  s3_key_template: z.string().default("v0/projects/{project}/tasks/{date}-{task_id}.md"),
+  aws_region: z.string().optional(),
+}).superRefine((val, ctx) => {
+  if (val.enabled) {
+    if (!val.table_name) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "delegation.table_name is required when delegation.enabled = true" });
+    }
+    if (!val.s3_bucket) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "delegation.s3_bucket is required when delegation.enabled = true" });
+    }
+  }
+});
+
+/** Per-agent delegation settings. */
+export const DelegationAgentSchema = z.object({
+  /** Agent IDs this agent can delegate to (PM bots). */
+  worker_bots: z.array(z.string()).optional(),
+  /** Specialty label used by PM bots for routing decisions (worker bots). */
+  specialty: z.string().optional(),
+});
+
 export const AgentSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -56,6 +91,8 @@ export const AgentSchema = z.object({
   skills: z.array(SkillRefSchema).default([]),
   plugins: z.array(z.string()).optional(),
   agent_to_agent: AgentToAgentSchema.default({}),
+  /** Optional per-agent delegation config. */
+  delegation: DelegationAgentSchema.optional(),
 });
 
 export const AgentDefaultsSchema = z.object({
@@ -145,6 +182,7 @@ export const FleetMetaSchema = z.object({
 
 export const FleetSchema = z.object({
   fleet: FleetMetaSchema,
+  delegation: DelegationFleetSchema.optional(),
   agents: AgentsConfigSchema,
   skills_repo: SkillsRepoSchema.default({}),
   /** Optional: config for Continuous Agentics private skill registry */
@@ -156,6 +194,8 @@ export const FleetSchema = z.object({
 });
 
 // Inferred types
+export type DelegationFleetConfig = z.infer<typeof DelegationFleetSchema>;
+export type DelegationAgentConfig = z.infer<typeof DelegationAgentSchema>;
 export type SkillSource = z.infer<typeof SkillSourceSchema>;
 export type SkillRef = { name: string; source: SkillSource; author?: string; version?: string };
 export type SlackAccount = z.infer<typeof SlackAccountSchema>;

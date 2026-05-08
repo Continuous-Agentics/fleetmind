@@ -14,6 +14,9 @@ import { registerPush } from "./commands/push.js";
 import { registerAgent } from "./commands/agent.js";
 import { registerSecrets } from "./commands/secrets.js";
 import { registerContext } from "./commands/context.js";
+import { registerTask } from "./commands/task.js";
+import { registerNarrative } from "./commands/narrative.js";
+import { registerQuery } from "./commands/query.js";
 
 // Inject stored secrets into env before any command runs
 injectSecrets();
@@ -35,5 +38,8 @@ registerPush(program);
 registerAgent(program);
 registerSecrets(program);
 registerContext(program);
+registerTask(program);
+registerNarrative(program);
+registerQuery(program);
 
 program.parse();
