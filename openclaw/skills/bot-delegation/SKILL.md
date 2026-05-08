@@ -168,7 +168,9 @@ log for a task, retry `fleetmind task create` on this heartbeat.
 
 On terminal status (shipped or blocked):
 
-1. Read the DDB record: `fleetmind task get --task-id "${TASK_ID}" --json`
+1. Read the DDB record: `fleetmind task get --task-id "${TASK_ID}" --json`.
+   Capture `${PROJECT}` from the response — you'll thread it into the
+   subsequent transitions to skip the GetItem round-trip on each.
 2. Read the narrative from S3 (for the closeout summary context):
    ```bash
    fleetmind narrative get --task-id "${TASK_ID}"
@@ -180,9 +182,9 @@ On terminal status (shipped or blocked):
    - Reference to the S3 narrative key (humans can read it via `fleetmind narrative get`)
 4. If lifecycle = `requires-human-signoff` and status = `shipped`: transition to
    `in-review` in the audit log. Wait for human signoff before closing.
-5. On human signoff: `fleetmind task signoff --task-id "${TASK_ID}"`
+5. On human signoff: `fleetmind task signoff --task-id "${TASK_ID}" --project "${PROJECT}"`
    Then update audit log to done.
-6. On PR merge: `fleetmind task merge --task-id "${TASK_ID}"`
+6. On PR merge: `fleetmind task merge --task-id "${TASK_ID}" --project "${PROJECT}"`
 7. Move delegation block from `## Active` to `## Closed` in audit log.
 
 ### Lifecycle: worker-shipped ≠ milestone-done
@@ -192,10 +194,10 @@ When `lifecycle = requires-human-signoff` (default), the worker's ✅ reply is
 
 1. Worker ships → DDB at `shipped` → audit log `in-review` → post artifact in
    planning thread for human review.
-2. Human approves → `fleetmind task signoff` → DDB at `signed_off` → audit log
-   `done` → run step 7.
+2. Human approves → `fleetmind task signoff --task-id ... --project ...` → DDB at
+   `signed_off` → audit log `done` → run step 7.
 
-If/when the PR merges: `fleetmind task merge`.
+If/when the PR merges: `fleetmind task merge --task-id ... --project ...`.
 
 ## Planning Queries (before drafting a new envelope)
 
@@ -218,11 +220,12 @@ specifics in the new delegation envelope when they bear on the work.
 ## Abandoning a task (PM bot only)
 
 ```bash
-fleetmind task abandon --task-id "${TASK_ID}"
+fleetmind task abandon --task-id "${TASK_ID}" --project "${PROJECT}"
 ```
 
 Worker bots cannot abandon tasks — they ping the PM bot and the PM bot calls
-`fleetmind task abandon`.
+`fleetmind task abandon`. Pass `--project` from the prior `task get` to avoid
+an extra GetItem round-trip.
 
 ## Hard limits
 

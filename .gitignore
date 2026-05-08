@@ -10,3 +10,10 @@ dist/
 *.db
 node_modules/
 dist/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfplan

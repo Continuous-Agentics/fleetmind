@@ -48,9 +48,15 @@ export interface DelegationDDBConfig {
 }
 
 function makeDocClient(region?: string): DynamoDBDocumentClient {
-  const client = new DynamoDBClient({
-    region: region ?? process.env["AWS_REGION"] ?? "us-east-1",
-  });
+  const resolved =
+    region ?? process.env["AWS_REGION"] ?? process.env["AWS_DEFAULT_REGION"];
+  if (!resolved) {
+    throw new Error(
+      "DynamoDB region not configured. Set delegation.aws_region in fleet.yaml, " +
+        "or export AWS_REGION / AWS_DEFAULT_REGION before invoking the CLI.",
+    );
+  }
+  const client = new DynamoDBClient({ region: resolved });
   return DynamoDBDocumentClient.from(client, {
     marshallOptions: { removeUndefinedValues: true },
   });
@@ -162,10 +168,13 @@ export class TaskLedger {
   /**
    * Worker acknowledges a delegation.
    * Condition: status = delegated AND worker = :worker
+   *
+   * `project` is required for GSI key updates. Pass it from a prior GetItem
+   * (the skill always reads the task at receive time) to avoid a round-trip.
    */
-  async ackTask(taskId: string, worker: string): Promise<void> {
+  async ackTask(taskId: string, worker: string, project?: string): Promise<void> {
     const now = nowISO();
-    const project = await this._getProject(taskId);
+    const proj = project ?? (await this._getProject(taskId));
     await this._updateStatus(taskId, {
       updateExpression:
         "SET #st = :accepted, accepted_at = :now, GSI1PK = :gsi1pk, GSI2PK = :gsi2pk",
@@ -176,7 +185,7 @@ export class TaskLedger {
         ":delegated": "delegated",
         ":worker": worker,
         ":now": now,
-        ":gsi1pk": gsi1pk(project, "accepted"),
+        ":gsi1pk": gsi1pk(proj, "accepted"),
         ":gsi2pk": gsi2pk("accepted"),
       },
       errorContext: "ack (delegated→accepted)",
@@ -186,10 +195,12 @@ export class TaskLedger {
   /**
    * Worker ships a task.
    * Condition: status = accepted AND worker = :worker
+   *
+   * `project` is optional — if omitted, fetched via GetItem first.
    */
-  async shipTask(taskId: string, worker: string): Promise<void> {
+  async shipTask(taskId: string, worker: string, project?: string): Promise<void> {
     const now = nowISO();
-    const project = await this._getProject(taskId);
+    const proj = project ?? (await this._getProject(taskId));
     await this._updateStatus(taskId, {
       updateExpression:
         "SET #st = :shipped, shipped_at = :now, GSI1PK = :gsi1pk, GSI2PK = :gsi2pk",
@@ -200,7 +211,7 @@ export class TaskLedger {
         ":accepted": "accepted",
         ":worker": worker,
         ":now": now,
-        ":gsi1pk": gsi1pk(project, "shipped"),
+        ":gsi1pk": gsi1pk(proj, "shipped"),
         ":gsi2pk": gsi2pk("shipped"),
       },
       errorContext: "ship (accepted→shipped)",
@@ -210,10 +221,12 @@ export class TaskLedger {
   /**
    * Block a task.
    * Condition: status IN (delegated, accepted) AND worker = :worker
+   *
+   * `project` is optional — if omitted, fetched via GetItem first.
    */
-  async blockTask(taskId: string, worker: string): Promise<void> {
+  async blockTask(taskId: string, worker: string, project?: string): Promise<void> {
     const now = nowISO();
-    const project = await this._getProject(taskId);
+    const proj = project ?? (await this._getProject(taskId));
     await this._updateStatus(taskId, {
       updateExpression:
         "SET #st = :blocked, blocked_at = :now, GSI1PK = :gsi1pk, GSI2PK = :gsi2pk",
@@ -227,7 +240,7 @@ export class TaskLedger {
         ":accepted": "accepted",
         ":worker": worker,
         ":now": now,
-        ":gsi1pk": gsi1pk(project, "blocked"),
+        ":gsi1pk": gsi1pk(proj, "blocked"),
         ":gsi2pk": gsi2pk("blocked"),
       },
       errorContext: "block (delegated|accepted→blocked)",
@@ -237,10 +250,12 @@ export class TaskLedger {
   /**
    * Human (or sign-off skill) signs off on a shipped task.
    * Condition: status = shipped AND lifecycle = requires-human-signoff
+   *
+   * `project` is optional — if omitted, fetched via GetItem first.
    */
-  async signoffTask(taskId: string): Promise<void> {
+  async signoffTask(taskId: string, project?: string): Promise<void> {
     const now = nowISO();
-    const project = await this._getProject(taskId);
+    const proj = project ?? (await this._getProject(taskId));
     await this._updateStatus(taskId, {
       updateExpression:
         "SET #st = :signed_off, signed_off_at = :now, GSI1PK = :gsi1pk, GSI2PK = :gsi2pk",
@@ -252,7 +267,7 @@ export class TaskLedger {
         ":shipped": "shipped",
         ":requires_signoff": "requires-human-signoff",
         ":now": now,
-        ":gsi1pk": gsi1pk(project, "signed_off"),
+        ":gsi1pk": gsi1pk(proj, "signed_off"),
         ":gsi2pk": gsi2pk("signed_off"),
       },
       errorContext: "signoff (shipped→signed_off)",
@@ -262,10 +277,12 @@ export class TaskLedger {
   /**
    * Mark a task merged.
    * Condition: status IN (shipped, signed_off)
+   *
+   * `project` is optional — if omitted, fetched via GetItem first.
    */
-  async mergeTask(taskId: string): Promise<void> {
+  async mergeTask(taskId: string, project?: string): Promise<void> {
     const now = nowISO();
-    const project = await this._getProject(taskId);
+    const proj = project ?? (await this._getProject(taskId));
     await this._updateStatus(taskId, {
       updateExpression:
         "SET #st = :merged, merged_at = :now, GSI1PK = :gsi1pk, GSI2PK = :gsi2pk",
@@ -276,7 +293,7 @@ export class TaskLedger {
         ":shipped": "shipped",
         ":signed_off": "signed_off",
         ":now": now,
-        ":gsi1pk": gsi1pk(project, "merged"),
+        ":gsi1pk": gsi1pk(proj, "merged"),
         ":gsi2pk": gsi2pk("merged"),
       },
       errorContext: "merge (shipped|signed_off→merged)",
@@ -287,10 +304,12 @@ export class TaskLedger {
    * Abandon a task (PM bot only).
    * Condition: status NOT IN (merged, abandoned)
    * Implemented as: status <> merged AND status <> abandoned
+   *
+   * `project` is optional — if omitted, fetched via GetItem first.
    */
-  async abandonTask(taskId: string): Promise<void> {
+  async abandonTask(taskId: string, project?: string): Promise<void> {
     const now = nowISO();
-    const project = await this._getProject(taskId);
+    const proj = project ?? (await this._getProject(taskId));
     await this._updateStatus(taskId, {
       updateExpression:
         "SET #st = :abandoned, abandoned_at = :now, GSI1PK = :gsi1pk, GSI2PK = :gsi2pk",
@@ -300,7 +319,7 @@ export class TaskLedger {
         ":abandoned": "abandoned",
         ":merged": "merged",
         ":now": now,
-        ":gsi1pk": gsi1pk(project, "abandoned"),
+        ":gsi1pk": gsi1pk(proj, "abandoned"),
         ":gsi2pk": gsi2pk("abandoned"),
       },
       errorContext: "abandon (*→abandoned)",
