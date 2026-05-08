@@ -1,0 +1,87 @@
+{
+  "name": "fleetmind",
+  "version": "0.3.0",
+  "description": "Deploy and manage OpenClaw multi-agent fleets",
+  "cli": {
+    "binary": "fleetmind",
+    "subcommands": [
+      {
+        "name": "init",
+        "description": "Scaffold a new fleet.yaml"
+      },
+      {
+        "name": "deploy",
+        "description": "Provision workspaces + render openclaw.json"
+      },
+      {
+        "name": "diff",
+        "description": "Show what deploy would change"
+      },
+      {
+        "name": "render",
+        "description": "Emit openclaw.json + tfvars without deploying"
+      },
+      {
+        "name": "watch",
+        "description": "GitOps: auto-push skill updates from skills repo"
+      },
+      {
+        "name": "status",
+        "description": "Show fleet + workspace status"
+      },
+      {
+        "name": "push",
+        "description": "Push skills or plugins to agents"
+      },
+      {
+        "name": "agent",
+        "description": "Inspect and manage individual agents"
+      },
+      {
+        "name": "secrets",
+        "description": "Manage fleet secrets"
+      },
+      {
+        "name": "context",
+        "description": "Read and write shared fleet context (hive mind)"
+      },
+      {
+        "name": "task",
+        "description": "Manage task ledger lifecycle (create, ack, ship, block, signoff, abandon, merge, get)",
+        "subcommands": ["create", "ack", "ship", "block", "signoff", "abandon", "merge", "get"]
+      },
+      {
+        "name": "narrative",
+        "description": "Read or write task narrative content (S3)",
+        "subcommands": ["get", "put"]
+      },
+      {
+        "name": "query",
+        "description": "Query the task ledger (pending, merged, stale)",
+        "subcommands": ["pending", "merged", "stale"]
+      }
+    ]
+  },
+  "skills": [
+    {
+      "name": "bot-delegation",
+      "path": "openclaw/skills/bot-delegation/SKILL.md",
+      "roles": ["project-manager"]
+    },
+    {
+      "name": "bot-reception",
+      "path": "openclaw/skills/bot-reception/SKILL.md",
+      "roles": ["worker"]
+    }
+  ],
+  "workspaceTemplates": [
+    {
+      "role": "project-manager",
+      "path": "openclaw/pm-bot/workspace"
+    },
+    {
+      "role": "worker",
+      "path": "openclaw/worker-bot/workspace"
+    }
+  ]
+}
