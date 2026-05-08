@@ -1,85 +1,172 @@
 # fleet.example.yaml — FleetMind fleet definition
 #
-# This single file defines your entire agent fleet.
-# Run: fleetmind deploy fleet.yaml
-#
 # Copy this to fleet.yaml and fill in your values.
-# fleet.yaml should be in .gitignore (contains secrets).
+# Add fleet.yaml to .gitignore — it contains secret references.
+# Commit fleet.example.yaml instead.
+#
+# Deploy with: fleetmind deploy fleet.yaml
 
+# ── Metadata ──────────────────────────────────────────────────────────────────
 fleet:
-  name: acme-devteam          # Unique name for this fleet
-  description: "Dev team agent fleet for Acme Corp"
+  name: acme-fleet
+  version: "1.0.0"
+  client: Acme Corp
+  description: "Engineering and support bots for Acme Corp"
 
-# ── Shared context store ──────────────────────────────────────────────────────
-# All bots read/write here — this is the hive mind
-context:
-  backend: postgres           # postgres | redis | sqlite
-  url: ${DATABASE_URL}        # reads from environment
+# ── Skills Repo (client GitOps source) ────────────────────────────────────────
+# The client's own skills repo — contains company-specific skill customizations
+# seeded from Continuous Agentics base skills during onboarding.
+# FleetMind watches this repo and auto-pushes updates to agent workspaces.
+skills_repo:
+  url: https://github.com/acme-corp/acme-skills   # client's private repo
+  branch: main
+  poll_interval: 60s        # How often `fleetmind watch` polls for changes
+  # tag: v1.2.0             # Pin entire fleet to a tag (overrides branch)
+  # local: ./skills         # Use local skills dir instead (dev mode)
 
-# ── Slack workspace ───────────────────────────────────────────────────────────
-slack:
-  workspace: acme             # for labeling/logging only
+# ── Private Registry (Continuous Agentics proprietary skills) ─────────────────
+# Required only if any agent uses source: private skills.
+# Set CA_REGISTRY_TOKEN via: fleetmind secrets set CA_REGISTRY_TOKEN <token>
+private_registry:
+  url: https://npm.pkg.github.com     # GitHub Packages (or your Verdaccio URL)
+  token_env: CA_REGISTRY_TOKEN        # Env var holding the auth token
+  scope: "@continuous-agentics"       # npm scope for CA private packages
 
-# ── Bots ──────────────────────────────────────────────────────────────────────
-bots:
-  - name: conductor
-    role: orchestrator        # orchestrator | specialist
-    display_name: "Conductor"
-    emoji: "🎼"
-    soul: |
-      You are the orchestrator of a multi-agent fleet.
-      Route frontend questions to @pixel, backend questions to @forge.
-      Handle general questions directly. Always be clear about handoffs.
-    slack:
-      bot_token: ${CONDUCTOR_SLACK_TOKEN}
-      signing_secret: ${CONDUCTOR_SLACK_SIGNING_SECRET}
-      app_token: ${CONDUCTOR_SLACK_APP_TOKEN}   # for Socket Mode
-    openclaw:
-      port: 18789
-      model: anthropic/claude-sonnet-4-6
+# ── Secrets ───────────────────────────────────────────────────────────────────
+# Secrets are never stored here. Use ${ENV_VAR} references.
+# Run: fleetmind secrets set KEY value  (stores in local encrypted store)
+# Or:  export KEY=value before deploying
+secrets:
+  provider: env             # env | aws-ssm | vault
 
-  - name: pixel
-    role: specialist
-    display_name: "Pixel"
-    emoji: "🎨"
-    soul: |
-      You are the frontend specialist. React, CSS, UX, browser APIs.
-      Go deep on frontend questions. Flag backend questions to @forge.
-    skills:
-      - github
-      - weather
-    slack:
-      bot_token: ${PIXEL_SLACK_TOKEN}
-      signing_secret: ${PIXEL_SLACK_SIGNING_SECRET}
-      app_token: ${PIXEL_SLACK_APP_TOKEN}
-    openclaw:
-      port: 18790
-      model: anthropic/claude-sonnet-4-6
+# ── Agents ────────────────────────────────────────────────────────────────────
+agents:
+  defaults:
+    model: anthropic/claude-sonnet-4-6
+    workspace_base: /home/ec2-user/.openclaw
+    plugins:
+      - anthropic
 
-  - name: forge
-    role: specialist
-    display_name: "Forge"
-    emoji: "⚙️"
-    soul: |
-      You are the backend and API specialist. REST, GraphQL, databases,
-      auth, infrastructure. Be precise. Always surface security implications.
-    skills:
-      - github
-      - taskflow
-    slack:
-      bot_token: ${FORGE_SLACK_TOKEN}
-      signing_secret: ${FORGE_SLACK_SIGNING_SECRET}
-      app_token: ${FORGE_SLACK_APP_TOKEN}
-    openclaw:
-      port: 18791
-      model: anthropic/claude-sonnet-4-6
+  list:
+    - id: conductor
+      name: Conductor
+      emoji: 🎼
+      description: "Orchestrator. Routes requests to specialist agents."
+      orchestrator: true
+      persona:
+        soul: |
+          You are Conductor, an orchestrating AI that coordinates a fleet of specialists.
+          When a request comes in, figure out which specialist(s) should handle it,
+          delegate via sessions_send, and synthesize the result for the user.
+          Be decisive. Be brief. Let your specialists do the deep work.
+      slack:
+        account_id: conductor
+        bot_token: ${CONDUCTOR_BOT_TOKEN}
+        app_token: ${CONDUCTOR_APP_TOKEN}
+      skills:
+        # Tier 1: ClaWHub public skill
+        - name: taskflow
+          source: clawhub
+          author: continuous-agentics
+        # Tier 2: Continuous Agentics proprietary skill (requires CA_REGISTRY_TOKEN)
+        - name: ca-fleet-ops
+          source: private
+          version: "1.0.0"
+      plugins:
+        - anthropic
+        - brave
+      agent_to_agent:
+        can_send_to: [pixel, forge]
 
-# ── Routing rules ─────────────────────────────────────────────────────────────
-# Orchestrator uses these to route messages to specialists.
-# Keywords are matched against the incoming message (case-insensitive).
-routing:
-  - keywords: [react, css, frontend, ui, ux, design, component, hook, browser, vite, nextjs]
-    to: pixel
-  - keywords: [api, rest, graphql, database, postgres, sql, auth, backend, endpoint, docker, deploy]
-    to: forge
-  # Default: orchestrator handles directly (no match needed)
+    - id: pixel
+      name: Pixel
+      emoji: 🎨
+      description: "Frontend specialist. React, design systems, UX, browser."
+      orchestrator: false
+      persona:
+        soul: |
+          You are Pixel, a frontend engineering specialist.
+          You handle React, CSS, design systems, and UX questions.
+          When Conductor delegates to you, reply directly in the Slack thread
+          using your own identity. Be precise and show your work.
+      slack:
+        account_id: pixel
+        bot_token: ${PIXEL_BOT_TOKEN}
+        app_token: ${PIXEL_APP_TOKEN}
+      skills:
+        # Tier 1: ClaWHub public skills
+        - name: github
+          source: clawhub
+          author: steipete
+          version: "1.0.0"           # Pinned; omit for latest
+        # Tier 3: Client's own skill (from skills_repo — default source)
+        - name: acme-frontend-standards
+          source: client
+        - name: acme-design-tokens
+          source: client
+      plugins:
+        - anthropic
+      agent_to_agent:
+        can_send_to: [conductor]
+
+    - id: forge
+      name: Forge
+      emoji: ⚙️
+      description: "Backend specialist. APIs, databases, infrastructure."
+      orchestrator: false
+      persona:
+        soul: |
+          You are Forge, a backend engineering specialist.
+          You handle APIs, databases, cloud infra, and system design.
+          Be direct and technical. Show commands and configs when relevant.
+      slack:
+        account_id: forge
+        bot_token: ${FORGE_BOT_TOKEN}
+        app_token: ${FORGE_APP_TOKEN}
+      skills:
+        # Tier 1: ClaWHub public skills
+        - name: github
+          source: clawhub
+          author: steipete
+        # Tier 2: Continuous Agentics proprietary skill
+        - name: ca-incident-triage
+          source: private
+        # Tier 3: Client's own runbook layer (extends ca-incident-triage)
+        - name: acme-incident-runbook
+          source: client
+      plugins:
+        - anthropic
+        - brave
+      agent_to_agent:
+        can_send_to: [conductor]
+
+# ── Outputs ───────────────────────────────────────────────────────────────────
+outputs:
+  openclaw_json: ./rendered/openclaw.json       # Generated OpenClaw config
+  terraform_vars: ./rendered/fleet.auto.tfvars  # Consumed by openclaw-terraform
+  workspace_manifests: ./rendered/workspaces/   # Per-agent workspace files
+
+# ── Fleet-wide OpenClaw settings ──────────────────────────────────────────────
+openclaw:
+  gateway:
+    port: 18789
+    mode: local
+    bind: loopback
+  session:
+    dm_scope: per-channel-peer
+  tools:
+    profile: coding
+    web_search:
+      enabled: true
+      provider: brave
+  slack:
+    mode: socket
+    typing_reaction: thinking_face
+    ack_reaction: eyes
+    allow_bots: true
+    history_limit: 111
+    streaming:
+      mode: partial
+      native_transport: true
+    reply_to_mode_by_chat_type:
+      channel: all

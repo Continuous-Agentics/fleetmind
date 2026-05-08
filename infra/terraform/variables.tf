@@ -79,3 +79,27 @@ variable "ami_id" {
   type        = string
   default     = ""
 }
+
+variable "vpc_id" {
+  description = "ID of an existing VPC to deploy into. Leave empty to create a new VPC."
+  type        = string
+  default     = ""
+}
+
+variable "existing_public_subnet_ids" {
+  description = "IDs of existing public subnets (2 required) when deploying into an existing VPC."
+  type        = list(string)
+  default     = []
+}
+
+variable "existing_private_subnet_ids" {
+  description = "IDs of existing private subnets (2 required) when deploying into an existing VPC."
+  type        = list(string)
+  default     = []
+}
+
+variable "enable_rds" {
+  description = "Deploy RDS Postgres. Set false to use DynamoDB ContextStore only (simpler, lower cost)."
+  type        = bool
+  default     = false
+}
