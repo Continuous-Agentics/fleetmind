@@ -1,148 +1,104 @@
-# FleetMind — Terraform Infrastructure
+# fleetmind — Terraform Infrastructure
 
-One EC2 instance per client fleet. All agents run as co-located systemd services directly on the instance — no Docker, no custom AMI.
+Terraform modules and example roots for fleetmind-managed fleets. Two
+substrates live here:
 
-## Architecture
+- **ContextStore** — single DynamoDB table, fleet-wide hive mind. Provisioned
+  by `fleetmind deploy` (rendering happens automatically). Source under
+  `modules/context-store/`.
+- **Task ledger (delegation)** — DynamoDB tasks table + S3 narrative bucket +
+  EventBridge wake pipeline + IAM policies. Optional, enabled per fleet.
+  Source under `modules/task-ledger/`. See
+  [`docs/integration/delegation.md`](../../docs/integration/delegation.md)
+  for the consumer guide.
+
+Bot EC2 hosts and networking are not provisioned by fleetmind — those live in
+the [`openclaw-terraform`](https://github.com/Continuous-Agentics/openclaw-terraform)
+repo, which fleetmind feeds via the rendered `fleet.auto.tfvars`. That repo
+brings up *one EC2 instance per agent in the fleet* (each running its own
+OpenClaw gateway), plus the IAM roles fleetmind's modules attach policies
+to.
+
+## Layout
 
 ```
-Client Fleet (single EC2 t3.medium)
-│
-├── systemd: openclaw-orchestrator   → port 18789
-├── systemd: openclaw-pixel          → port 18790
-└── systemd: openclaw-forge          → port 18791
-│
-├── /opt/openclaw/workspace/
-│   ├── orchestrator/    ← EBS-backed agent memory + state
-│   ├── pixel/
-│   └── forge/
-│
-└── → RDS Postgres (private subnet, shared ContextStore)
+infra/terraform/
+├── modules/
+│   ├── context-store/    # single DDB table; fleet-wide shared state
+│   └── task-ledger/      # DDB tasks + S3 narratives + wake pipeline + IAM
+└── README.md
 ```
 
-## Design decisions
+## When to use which module
 
-*Why not Docker?*
-OpenClaw is a long-lived Node.js daemon, not a containerized microservice. Running it directly with systemd is simpler, easier to debug (`journalctl -u openclaw-orchestrator`), and eliminates a layer of indirection. Upgrades are `npm install -g openclaw@x.y.z` + `systemctl restart`.
+| Need | Module |
+|---|---|
+| Fleet-wide shared key/value state any agent or service can read/write | `context-store` |
+| Durable PM-bot-to-worker-bot delegation tracking | `task-ledger` |
+| Both | Apply both — they're independent |
 
-*Why not one EC2 per agent?*
-Three OpenClaw agents are well within the resource envelope of a `t3.medium`. Co-locating them on one instance keeps the fleet billing simple (one instance = one client) and is easy to split apart later if resource contention warrants it.
+## `modules/task-ledger/`
 
-*Why not a custom AMI?*
-AMI baking (Packer pipelines, versioning, refresh cadence) is overhead that isn't justified when bootstrap takes ~2 minutes via user_data. If boot time ever becomes a concern at scale, AMI baking is an easy addition.
+Provisions the substrate documented in [`docs/protocol.md`](../../docs/protocol.md):
 
-*Fault tolerance*
-- Process crash → systemd `Restart=always`, back in 10 seconds
-- Instance reboot → EBS remounts via fstab, all services auto-start
-- Instance loss → EBS volume has `prevent_destroy = true`, reattach to replacement
+- DynamoDB table (`{name_prefix}tasks`): pay-per-request, Streams enabled
+  (`NEW_AND_OLD_IMAGES`), TTL on `expires_at`, deletion protection on (both
+  DDB-native and Terraform `prevent_destroy`)
+- Two GSIs: `ProjectStatusIndex` (project-scoped pending) and `StatusIndex`
+  (cross-project status filter)
+- S3 bucket (`{name_prefix}ledger`): narrative storage; versioning enabled,
+  default encryption on, public access blocked
+- EventBridge Pipe filtering on terminal status MODIFY records → custom event
+  bus → SSM Run Command target on the PM bot's EC2 instance
+- DLQ + CloudWatch alarms on Pipe failures (optional `alert_email` for SNS
+  subscription)
+- Three IAM policies (`{prefix}bot-ledger-pm`, `{prefix}bot-ledger-worker`,
+  `{prefix}bot-ledger-reader`) attached to the role names you pass in
 
-## Prerequisites
+### Inputs (key variables)
 
-- AWS CLI configured with appropriate permissions (EC2, RDS, VPC, IAM, Secrets Manager)
-- Terraform >= 1.5
-
-## Quick Start
-
-```bash
-cd infra/terraform
-
-# Initialize
-terraform init
-
-# Preview (use your client/fleet name)
-terraform plan -var="fleet_name=acme-devteam"
-
-# Apply (~10-15 min, most of it waiting for RDS)
-terraform apply -var="fleet_name=acme-devteam"
-```
-
-> **Team state:** Before sharing with the team, uncomment the `backend "s3"` block in `main.tf` and create the S3 bucket + DynamoDB table first.
-
-## Populate Secrets After Apply
-
-After apply, fill in real values (placeholder secrets are created automatically):
-
-```bash
-# Anthropic API key (shared by all agents)
-aws secretsmanager put-secret-value \
-  --secret-id acme-devteam/shared/anthropic \
-  --secret-string '{"ANTHROPIC_API_KEY":"sk-ant-...","DATABASE_URL":"postgresql://..."}'
-
-# Per-agent Slack tokens
-for AGENT in orchestrator pixel forge; do
-  aws secretsmanager put-secret-value \
-    --secret-id "acme-devteam/agents/$AGENT/slack" \
-    --secret-string '{
-      "SLACK_BOT_TOKEN":"xoxb-...",
-      "SLACK_SIGNING_SECRET":"...",
-      "SLACK_APP_TOKEN":"xapp-..."
-    }'
-done
-
-# Restart all agents to pick up secrets
-INSTANCE_ID=$(terraform output -raw instance_id)
-aws ssm send-command \
-  --instance-ids "$INSTANCE_ID" \
-  --document-name "AWS-RunShellScript" \
-  --parameters 'commands=["systemctl restart openclaw-orchestrator openclaw-pixel openclaw-forge"]'
-```
-
-## Connect to the Instance (No SSH Required)
-
-```bash
-# Get the connect command
-terraform output ssm_connect
-
-# Example output:
-# aws ssm start-session --target i-0abc123 --region us-east-1
-
-# Once connected:
-systemctl status openclaw-orchestrator
-journalctl -u openclaw-pixel -f
-```
-
-## Upgrading OpenClaw
-
-```bash
-INSTANCE_ID=$(terraform output -raw instance_id)
-
-aws ssm send-command \
-  --instance-ids "$INSTANCE_ID" \
-  --document-name "AWS-RunShellScript" \
-  --parameters 'commands=[
-    "source /opt/nvm/nvm.sh",
-    "npm install -g openclaw@latest",
-    "systemctl restart openclaw-orchestrator openclaw-pixel openclaw-forge"
-  ]'
-```
-
-Or pin a version by setting `openclaw_version = "1.2.3"` in your tfvars and re-applying.
-
-## Adding a New Agent
-
-1. Add to `fleet.yaml` (new bot entry)
-2. Add name to `agent_names` and port to `agent_ports` in `terraform.tfvars`
-3. `terraform apply` — updates user_data, creates new Secrets Manager entry
-4. Populate the new agent's Slack secret
-5. On the instance: `systemctl start openclaw-<newagent>`
-
-## Variables
-
-| Variable | Default | Description |
+| Variable | Required | Description |
 |---|---|---|
-| `fleet_name` | `fleetmind` | Namespace for all AWS resources |
-| `aws_region` | `us-east-1` | Deployment region |
-| `instance_type` | `t3.medium` | EC2 size (handles 3 agents comfortably) |
-| `agent_names` | `[orchestrator, pixel, forge]` | Agents to provision |
-| `openclaw_version` | `latest` | npm package version |
-| `workspace_volume_size_gb` | `40` | Shared EBS size (GB) |
-| `rds_multi_az` | `false` | Enable for production |
-| `allowed_ssh_cidrs` | `[]` | SSH access (empty = SSM only) |
+| `name_prefix` | yes | Resource name prefix (e.g. `acme-fleet-`). Trailing `-` recommended. |
+| `aws_region` | yes | Region for all resources |
+| `pm_role_names` | yes | List of IAM role names that should get the PM policy |
+| `worker_role_names` | yes | List of IAM role names that should get the worker policy |
+| `wake_target_instance_tag_key` | yes | EC2 tag key the SSM Run Command targets |
+| `wake_target_instance_tag_value` | yes | EC2 tag value matching the PM bot host |
+| `wake_target_session_key` | yes | OpenClaw session key for the wake handler |
+| `alert_email` | no | Email for DLQ SNS subscription |
+| `tags` | no | Tags applied to all resources |
 
-## Next Steps
+### Outputs
 
-- [ ] ASG (min=1) per fleet for automatic instance replacement + EBS reattach
-- [ ] VPN/Tailscale to keep OpenClaw ports off the public internet
-- [ ] `rds_multi_az = true` for production deployments
-- [ ] GitHub Actions: `terraform plan` on PR, `terraform apply` on merge
-- [ ] CloudWatch alarms: agent process health, RDS metrics, disk usage
-- [ ] Terraform workspaces for multi-client state isolation
+`table_name`, `s3_bucket_name`, `pm_policy_arn`, `worker_policy_arn`,
+`reader_policy_arn`, `event_bus_arn`, `pipe_arn`.
+
+## `modules/context-store/`
+
+Provisions the single DynamoDB table fleetmind uses for the cross-agent
+hive mind. Generally you won't apply this directly — `fleetmind deploy`
+handles rendering and apply. Module source is here for review and for
+non-fleetmind consumers that want IAM access to the table.
+
+## Example consuming root
+
+See [`docs/integration/delegation.md`](../../docs/integration/delegation.md)
+for a complete worked example of a Terraform root that consumes
+`modules/task-ledger/`. The same pattern applies for `modules/context-store/`
+when you need to wire it manually.
+
+## Region note
+
+After fleetmind 0.3.0 the CLI throws if no AWS region is configured (no more
+silent `us-east-1` default). Set `delegation.aws_region` and
+`context.region` in `fleet.yaml`, or export `AWS_REGION` /
+`AWS_DEFAULT_REGION` when running CLI commands.
+
+## State management
+
+Use S3 + DynamoDB locking for shared state (`backend "s3"`). `task-ledger`
+state is critical — losing it means losing the connection between Terraform
+and the resources holding live delegation history. Treat the state bucket
+the same as you would any production state bucket: versioning on, MFA
+delete recommended, restrictive bucket policy.

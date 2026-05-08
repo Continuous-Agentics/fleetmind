@@ -39,6 +39,21 @@ private_registry:
 secrets:
   provider: env             # env | aws-ssm | vault
 
+# ── Delegation (optional) ───────────────────────────────────────────────────────────────────────
+# Enables the PM-bot → worker-bot task ledger. When enabled, agents marked
+# with `delegation.role: pm` use the bot-delegation skill, and `role: worker`
+# agents use bot-reception. See docs/protocol.md and docs/integration/delegation.md.
+#
+# Substrate provisioned by infra/terraform/modules/task-ledger/.
+# Omit this block (or set enabled: false) for fleets without delegation.
+delegation:
+  enabled: true
+  aws_region: us-west-2                       # required when enabled (no silent default)
+  ddb_table: acme-fleet-tasks                 # name_prefix + 'tasks' from the TF module
+  s3_bucket: acme-fleet-ledger                # name_prefix + 'ledger' from the TF module
+  wake_session_key: agent:main:slack:channel:C0123456789
+  # ddb_endpoint: http://localhost:8000       # for DynamoDB Local in dev
+
 # ── Agents ────────────────────────────────────────────────────────────────────
 agents:
   defaults:
@@ -77,6 +92,10 @@ agents:
         - brave
       agent_to_agent:
         can_send_to: [pixel, forge]
+      # When delegation is enabled, mark this agent's role.
+      # `pm` = orchestrator (bot-delegation skill); `worker` = specialist (bot-reception).
+      delegation:
+        role: pm
 
     - id: pixel
       name: Pixel
@@ -108,6 +127,8 @@ agents:
         - anthropic
       agent_to_agent:
         can_send_to: [conductor]
+      delegation:
+        role: worker
 
     - id: forge
       name: Forge
@@ -139,6 +160,8 @@ agents:
         - brave
       agent_to_agent:
         can_send_to: [conductor]
+      delegation:
+        role: worker
 
 # ── Outputs ───────────────────────────────────────────────────────────────────
 outputs:
