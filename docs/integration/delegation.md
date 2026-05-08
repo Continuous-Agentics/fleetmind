@@ -109,8 +109,7 @@ agents:
     - id: pm-bot
       name: Conductor
       emoji: 🎼
-      orchestrator: true
-      role: project-manager
+      orchestrator: true                                # PM ⇒ orchestrator: true
       delegation:
         worker_bots: [worker-frontend, worker-backend]  # agent IDs from this list
       skills:
@@ -123,7 +122,6 @@ agents:
     - id: worker-frontend
       name: Pixel
       emoji: 🎨
-      role: worker
       delegation:
         specialty: frontend     # used by the PM bot for routing decisions
       skills:
@@ -136,7 +134,6 @@ agents:
     - id: worker-backend
       name: Forge
       emoji: ⚙️
-      role: worker
       delegation:
         specialty: backend
       skills:
@@ -194,15 +191,42 @@ fleetmind task create \
   --lifecycle shipped-is-done \
   --json
 
-# Check it was created
-fleetmind task get --task-id <task_id_from_above> --json
+# Check it was created (default output is human-readable; pass --json for raw)
+fleetmind task get --task-id <task_id_from_above>
 
 # Query pending
 fleetmind query pending --project test-project --json
 
-# Clean up (abandon the test task)
-fleetmind task abandon --task-id <task_id>
+# Clean up (abandon the test task) — pass --project to skip the GetItem round-trip
+fleetmind task abandon --task-id <task_id> --project test-project
 ```
+
+### CLI conventions for transitions
+
+Lifecycle-transition subcommands (`ack`, `ship`, `block`, `signoff`, `abandon`,
+`merge`) accept an optional `--project <slug>` flag. When the caller already
+knows the project (e.g. from a prior `task get`), passing it skips the
+`GetItem` lookup the CLI would otherwise need to update GSI keys. The flag
+is backward-compatible: omit it and the CLI fetches the project itself.
+
+```bash
+# Without --project (one extra GetItem)
+fleetmind task ship --task-id a1b2c3d4 --worker worker-frontend
+
+# With --project (single PutItem; preferred when you already know it)
+fleetmind task ship --task-id a1b2c3d4 --worker worker-frontend --project website-rewrite
+```
+
+PM-bot and worker-bot skills (`bot-delegation`, `bot-reception`) already
+thread `--project` through where it's known.
+
+### Region requirement
+
+fleetmind 0.3.0 fails loud when no AWS region is configured. Set
+`delegation.aws_region` in `fleet.yaml`, or export `AWS_REGION` /
+`AWS_DEFAULT_REGION` before running CLI commands. Previously the CLI
+silently defaulted to `us-east-1`, which produced confusing
+`ResourceNotFoundException`s when fleets lived in other regions.
 
 ## Agent workflow overview
 

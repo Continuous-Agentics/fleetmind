@@ -1,42 +1,70 @@
-# openclaw/ — Fleet Agent Configs
+# `openclaw/` — workspace contributions and skills
 
-Each subdirectory is a complete OpenClaw agent workspace for one bot in the fleet.
-They share state via the Postgres LangGraph checkpointer but have distinct identities,
-memories, and skills.
+This directory holds source material that fleetmind composes into per-agent
+workspaces at deploy time. None of these files are *the* deployed workspace —
+they're the building blocks. fleetmind renders one workspace per agent and
+pushes each to its respective EC2 host (each agent runs in its own gateway
+on its own EC2 — see [INTEGRATION.md](INTEGRATION.md)). On the host the
+workspace lives at `OPENCLAW_STATE_DIR/workspace/`.
 
-## Structure
+## Layout
 
 ```
 openclaw/
-├── orchestrator/      ← main entry point, routes intent, talks to humans
-│   └── workspace/
-│       ├── SOUL.md
-│       ├── IDENTITY.md
-│       └── AGENTS.md
-├── frontend-bot/      ← UI/UX/React/CSS specialist (Pixel)
-│   └── workspace/
-└── api-bot/           ← backend/API/database specialist (Forge)
-    └── workspace/
+├── INTEGRATION.md           # how fleetmind composes the gateway from fleet.yaml
+│
+├── pm-bot/                  # PM-bot role template (delegation-enabled)
+│   └── workspace/           # SOUL/AGENTS snippets composed into orchestrator agents
+│
+├── worker-bot/              # worker-bot role template
+│   └── workspace/           # SOUL/AGENTS snippets composed into specialist agents
+│
+├── skills/                  # role-aware skills shipped with fleetmind
+│   ├── bot-delegation/      # PM-bot skill: emit envelope, create task, narrative,
+│   │                        # query, transition lifecycle
+│   └── bot-reception/       # worker-bot skill: parse envelope, ack/ship/block,
+│                            # write narratives
+│
+├── orchestrator/            # legacy single-bot agent template (pre-PR #2)
+├── frontend-bot/            # legacy single-bot agent template (pre-PR #2)
+└── api-bot/                 # legacy single-bot agent template (pre-PR #2)
 ```
 
-## How agents share state
+> The `orchestrator/`, `frontend-bot/`, and `api-bot/` directories predate
+> the PR #2 architectural rewrite. They remain as reference material for
+> single-bot setups and may be cleaned up in a future release once nothing
+> internal references them.
 
-All three bots point at the same Postgres instance (via `DATABASE_URL`) and use the same
-LangGraph thread IDs (keyed by Slack channel + thread timestamp). This is the hive mind:
-any bot reading the shared state sees everything the others have written.
+## How composition works
 
-## Deploying a new specialist
+`fleetmind deploy` reads `fleet.yaml` and, for each agent:
 
-1. Copy one of the agent directories as a template
-2. Edit `workspace/SOUL.md` and `workspace/IDENTITY.md` for the new specialist
-3. Install relevant skills into `workspace/skills/`
-4. Add a new entry in `../deploy/docker-compose.yml`
-5. Create a new Slack app and add its tokens to `.env`
+1. Picks the role template (`pm-bot` if `orchestrator: true`, otherwise
+   `worker-bot`)
+2. Reads the role's `workspace/` snippets (SOUL.md / AGENTS.md fragments)
+3. Layers the agent's `persona.soul` block from `fleet.yaml` on top
+4. Resolves the agent's skill catalog from three sources, in priority order:
+   - `client` — `skills_repo` (the fleet operator's own skills repo)
+   - `private` — Continuous Agentics private registry (requires
+     `CA_REGISTRY_TOKEN`)
+   - `clawhub` — public ClawHub skills
+5. Writes the composed workspace to disk and emits the corresponding
+   OpenClaw account configuration into `rendered/openclaw.json`
 
-## Running locally (no Docker)
+Skills shipped under `openclaw/skills/` (such as `bot-delegation` and
+`bot-reception`) are first-party fleetmind skills and are picked up
+automatically when the relevant role and `delegation.enabled` are set.
 
-```bash
-OPENCLAW_STATE_DIR=./openclaw/orchestrator openclaw gateway --port 18789
-OPENCLAW_STATE_DIR=./openclaw/frontend-bot openclaw gateway --port 18790
-OPENCLAW_STATE_DIR=./openclaw/api-bot openclaw gateway --port 18791
-```
+## Adding to a role template
+
+If you want to change behaviour for *all* PM bots in *all* fleets, edit
+`pm-bot/workspace/`. If you want to change *one* fleet's PM bot, override
+in that fleet's `fleet.yaml` (`persona.soul`, custom skills, etc.) — don't
+fork the role template per fleet.
+
+## Adding a new first-party skill
+
+1. Create `openclaw/skills/<skill-name>/` with a `SKILL.md`
+2. Update [`docs/integration/delegation.md`](../docs/integration/delegation.md)
+   (or the relevant integration doc) so consumers know the skill exists
+3. Add a CHANGELOG entry under `### Added`
