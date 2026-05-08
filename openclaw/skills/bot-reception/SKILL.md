@@ -50,7 +50,8 @@ envelope. If it is not YOUR bot — exit silently. No reaction, no reply, no
    ```bash
    fleetmind task ack \
      --task-id <task_id> \
-     --worker <your-agent-id-or-slack-user-id>
+     --worker <your-agent-id-or-slack-user-id> \
+     --project <project-slug>     # from step 3; saves a GetItem round-trip
    ```
    If this fails with a condition error: the task may already be accepted (rare).
    Log and proceed; do not retry indefinitely.
@@ -113,7 +114,8 @@ follow-up, and do NOT proceed to DDB update yet.
 ```bash
 fleetmind task ship \
   --task-id <task_id> \
-  --worker <your-agent-id-or-slack-user-id>
+  --worker <your-agent-id-or-slack-user-id> \
+  --project <project-slug>     # from the initial 'task get'; saves a GetItem round-trip
 ```
 
 ### Block (same ordering)
@@ -146,7 +148,8 @@ NARRATIVE
 ```bash
 fleetmind task block \
   --task-id <task_id> \
-  --worker <your-agent-id-or-slack-user-id>
+  --worker <your-agent-id-or-slack-user-id> \
+  --project <project-slug>     # from the initial 'task get'; saves a GetItem round-trip
 ```
 
 ---

@@ -15,7 +15,7 @@
  * Output: human-friendly text by default; --json for JSON.
  */
 
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { randomBytes } from "crypto";
 import { loadFleet } from "../../config/loader.js";
 import { TaskLedger, TaskConditionError } from "../../runtime/delegation/ddb.js";
@@ -78,7 +78,11 @@ export function registerTask(program: Command): void {
     .requiredOption("--thread <url>", "Delegation thread URL / Slack permalink")
     .requiredOption("--envelope-ts <ts>", "Envelope message timestamp / ID")
     .option("--tracker <url>", "External tracker link (Linear, Jira, etc.)")
-    .option("--lifecycle <mode>", "requires-human-signoff | shipped-is-done", "requires-human-signoff")
+    .addOption(
+      new Option("--lifecycle <mode>", "Lifecycle policy")
+        .choices(["requires-human-signoff", "shipped-is-done"])
+        .default("requires-human-signoff"),
+    )
     .option("--task-id <hex>", "Override generated task ID (8-char hex)")
     .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
     .option("--json", "Output JSON")
@@ -109,7 +113,8 @@ export function registerTask(program: Command): void {
           delegation_thread: opts.thread,
           delegation_envelope_ts: opts.envelopeTs,
           tracker_link: opts.tracker,
-          lifecycle: (opts.lifecycle as "requires-human-signoff" | "shipped-is-done") ?? "requires-human-signoff",
+          // Validated by Commander's .choices(); cast is safe here.
+          lifecycle: opts.lifecycle as "requires-human-signoff" | "shipped-is-done",
           s3_key_template: fleet.delegation?.s3_key_template,
         });
         output(opts.json ? record : `Created task ${record.task_id} for project ${record.project} (status: delegated)`, opts.json ?? false);
@@ -129,12 +134,13 @@ export function registerTask(program: Command): void {
     .description("Acknowledge a delegation (worker: delegated→accepted)")
     .requiredOption("--task-id <hex>", "Task ID (8-char hex)")
     .requiredOption("--worker <id>", "Worker bot identifier")
+    .option("--project <slug>", "Project slug (avoids a GetItem round-trip; skill knows from prior 'task get')")
     .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
     .option("--json", "Output JSON")
-    .action(async (opts: { taskId: string; worker: string; fleet: string; json?: boolean }) => {
+    .action(async (opts: { taskId: string; worker: string; project?: string; fleet: string; json?: boolean }) => {
       const ledger = makeLedger(loadFleet(opts.fleet));
       try {
-        await ledger.ackTask(opts.taskId, opts.worker);
+        await ledger.ackTask(opts.taskId, opts.worker, opts.project);
         output(opts.json ? { task_id: opts.taskId, status: "accepted" } : `Task ${opts.taskId} acknowledged (status: accepted)`, opts.json ?? false);
       } catch (err) { handleError(err); }
     });
@@ -146,12 +152,13 @@ export function registerTask(program: Command): void {
     .description("Mark a task shipped (worker: accepted→shipped)")
     .requiredOption("--task-id <hex>", "Task ID")
     .requiredOption("--worker <id>", "Worker bot identifier")
+    .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
     .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
     .option("--json", "Output JSON")
-    .action(async (opts: { taskId: string; worker: string; fleet: string; json?: boolean }) => {
+    .action(async (opts: { taskId: string; worker: string; project?: string; fleet: string; json?: boolean }) => {
       const ledger = makeLedger(loadFleet(opts.fleet));
       try {
-        await ledger.shipTask(opts.taskId, opts.worker);
+        await ledger.shipTask(opts.taskId, opts.worker, opts.project);
         output(opts.json ? { task_id: opts.taskId, status: "shipped" } : `Task ${opts.taskId} shipped (status: shipped)`, opts.json ?? false);
       } catch (err) { handleError(err); }
     });
@@ -163,12 +170,13 @@ export function registerTask(program: Command): void {
     .description("Mark a task blocked (worker: delegated|accepted→blocked)")
     .requiredOption("--task-id <hex>", "Task ID")
     .requiredOption("--worker <id>", "Worker bot identifier")
+    .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
     .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
     .option("--json", "Output JSON")
-    .action(async (opts: { taskId: string; worker: string; fleet: string; json?: boolean }) => {
+    .action(async (opts: { taskId: string; worker: string; project?: string; fleet: string; json?: boolean }) => {
       const ledger = makeLedger(loadFleet(opts.fleet));
       try {
-        await ledger.blockTask(opts.taskId, opts.worker);
+        await ledger.blockTask(opts.taskId, opts.worker, opts.project);
         output(opts.json ? { task_id: opts.taskId, status: "blocked" } : `Task ${opts.taskId} blocked (status: blocked)`, opts.json ?? false);
       } catch (err) { handleError(err); }
     });
@@ -179,12 +187,13 @@ export function registerTask(program: Command): void {
     .command("signoff")
     .description("Sign off on a shipped task (shipped→signed_off, requires lifecycle=requires-human-signoff)")
     .requiredOption("--task-id <hex>", "Task ID")
+    .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
     .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
     .option("--json", "Output JSON")
-    .action(async (opts: { taskId: string; fleet: string; json?: boolean }) => {
+    .action(async (opts: { taskId: string; project?: string; fleet: string; json?: boolean }) => {
       const ledger = makeLedger(loadFleet(opts.fleet));
       try {
-        await ledger.signoffTask(opts.taskId);
+        await ledger.signoffTask(opts.taskId, opts.project);
         output(opts.json ? { task_id: opts.taskId, status: "signed_off" } : `Task ${opts.taskId} signed off (status: signed_off)`, opts.json ?? false);
       } catch (err) { handleError(err); }
     });
@@ -195,12 +204,13 @@ export function registerTask(program: Command): void {
     .command("abandon")
     .description("Abandon a task (PM bot only: any status→abandoned, except merged/abandoned)")
     .requiredOption("--task-id <hex>", "Task ID")
+    .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
     .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
     .option("--json", "Output JSON")
-    .action(async (opts: { taskId: string; fleet: string; json?: boolean }) => {
+    .action(async (opts: { taskId: string; project?: string; fleet: string; json?: boolean }) => {
       const ledger = makeLedger(loadFleet(opts.fleet));
       try {
-        await ledger.abandonTask(opts.taskId);
+        await ledger.abandonTask(opts.taskId, opts.project);
         output(opts.json ? { task_id: opts.taskId, status: "abandoned" } : `Task ${opts.taskId} abandoned (status: abandoned)`, opts.json ?? false);
       } catch (err) { handleError(err); }
     });
@@ -211,12 +221,13 @@ export function registerTask(program: Command): void {
     .command("merge")
     .description("Mark a task merged (shipped|signed_off→merged)")
     .requiredOption("--task-id <hex>", "Task ID")
+    .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
     .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
     .option("--json", "Output JSON")
-    .action(async (opts: { taskId: string; fleet: string; json?: boolean }) => {
+    .action(async (opts: { taskId: string; project?: string; fleet: string; json?: boolean }) => {
       const ledger = makeLedger(loadFleet(opts.fleet));
       try {
-        await ledger.mergeTask(opts.taskId);
+        await ledger.mergeTask(opts.taskId, opts.project);
         output(opts.json ? { task_id: opts.taskId, status: "merged" } : `Task ${opts.taskId} merged (status: merged)`, opts.json ?? false);
       } catch (err) { handleError(err); }
     });
@@ -228,7 +239,7 @@ export function registerTask(program: Command): void {
     .description("Get a task record by task ID")
     .requiredOption("--task-id <hex>", "Task ID")
     .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
-    .option("--json", "Output JSON (default when task found)")
+    .option("--json", "Output JSON (default: human-readable)")
     .action(async (opts: { taskId: string; fleet: string; json?: boolean }) => {
       const ledger = makeLedger(loadFleet(opts.fleet));
       const record = await ledger.getTask(opts.taskId);
@@ -236,6 +247,28 @@ export function registerTask(program: Command): void {
         log.warn(`Task not found: ${opts.taskId}`);
         process.exit(1);
       }
-      console.log(JSON.stringify(record, null, 2));
+      if (opts.json) {
+        console.log(JSON.stringify(record, null, 2));
+      } else {
+        // Compact human-readable summary; full JSON via --json.
+        console.log(
+          `Task ${record.task_id} [${record.status}]\n` +
+            `  project:        ${record.project}\n` +
+            `  worker:         ${record.worker}\n` +
+            `  delegated_by:   ${record.delegated_by}\n` +
+            `  delegated_at:   ${record.delegated_at}\n` +
+            (record.accepted_at ? `  accepted_at:    ${record.accepted_at}\n` : "") +
+            (record.shipped_at ? `  shipped_at:     ${record.shipped_at}\n` : "") +
+            (record.signed_off_at ? `  signed_off_at:  ${record.signed_off_at}\n` : "") +
+            (record.merged_at ? `  merged_at:      ${record.merged_at}\n` : "") +
+            (record.blocked_at ? `  blocked_at:     ${record.blocked_at}\n` : "") +
+            (record.abandoned_at ? `  abandoned_at:   ${record.abandoned_at}\n` : "") +
+            `  lifecycle:      ${record.lifecycle}\n` +
+            `  s3_key:         ${record.task_s3_key}\n` +
+            `  thread:         ${record.delegation_thread}\n` +
+            (record.tracker_link ? `  tracker:        ${record.tracker_link}\n` : "") +
+            `\n(use --json for full record)`,
+        );
+      }
     });
 }
