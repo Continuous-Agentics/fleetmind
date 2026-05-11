@@ -216,17 +216,12 @@ resource "aws_s3_bucket_policy" "ledger" {
 # IAM policies
 # =============================================================================
 
-# ── Lookup provided roles ─────────────────────────────────────────────────────
-
-data "aws_iam_role" "pm" {
-  for_each = toset(var.pm_role_names)
-  name     = each.value
-}
-
-data "aws_iam_role" "worker" {
-  for_each = toset(var.worker_role_names)
-  name     = each.value
-}
+# ── Iterate provided role names directly ──────────────────────────────────────
+# We avoid `data "aws_iam_role"` lookups because the roles are typically created
+# in the same Terraform apply as this module (root module → agent IAM roles →
+# task-ledger module). Data sources resolve at plan time, before the agent
+# roles exist, which would cause a chicken-and-egg failure. The role NAMES are
+# all we need for `aws_iam_role_policy_attachment.role`.
 
 # ── bot-ledger-pm ─────────────────────────────────────────────────────────────
 # PM bots: create tasks (PutItem), manage lifecycle (UpdateItem), query DDB,
@@ -288,8 +283,8 @@ resource "aws_iam_policy" "pm" {
 }
 
 resource "aws_iam_role_policy_attachment" "pm" {
-  for_each   = data.aws_iam_role.pm
-  role       = each.value.name
+  for_each   = toset(var.pm_role_names)
+  role       = each.value
   policy_arn = aws_iam_policy.pm.arn
 }
 
@@ -345,8 +340,8 @@ resource "aws_iam_policy" "worker" {
 }
 
 resource "aws_iam_role_policy_attachment" "worker" {
-  for_each   = data.aws_iam_role.worker
-  role       = each.value.name
+  for_each   = toset(var.worker_role_names)
+  role       = each.value
   policy_arn = aws_iam_policy.worker.arn
 }
 
