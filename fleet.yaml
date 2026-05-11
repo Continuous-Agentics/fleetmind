@@ -1,0 +1,106 @@
+# fleet.yaml — minimal viable test fleet for gg-sandbox (251714435910)
+# 1 PM (Conductor) + 1 worker (Forge, backend specialty)
+
+fleet:
+  name: gg-sandbox
+  version: "1.0.0"
+  client: ""
+  description: "Test fleet on gg-sandbox — validate fleetmind end-to-end"
+
+skills_repo:
+  local: ./openclaw            # use bundled fleetmind role templates + skills
+
+secrets:
+  provider: env
+
+delegation:
+  enabled: true
+  aws_region: us-west-2
+  table_name: gg-sandbox-tasks
+  s3_bucket: gg-sandbox-narratives-251714435910   # MUST be globally unique; add 6-char suffix
+
+agents:
+  defaults:
+    model: anthropic/claude-haiku-4
+    workspace_base: /opt/openclaw/workspace
+    plugins:
+      - anthropic
+
+  list:
+    - id: conductor
+      name: Conductor
+      emoji: 🎼
+      description: "PM bot — gg-sandbox test fleet"
+      orchestrator: true
+      model: anthropic/claude-sonnet-4-6   # PM gets a bit more horsepower
+      persona:
+        soul: |
+          You are Conductor, the project-manager bot for the gg-sandbox test fleet.
+          You delegate tasks to worker bots via the bot-delegation skill and close
+          the loop on every assignment.
+      slack:
+        account_id: conductor
+        bot_token: "${CONDUCTOR_BOT_TOKEN}"
+        app_token: "${CONDUCTOR_APP_TOKEN}"
+        signing_secret: "${CONDUCTOR_SIGNING_SECRET}"
+      skills:
+        - name: bot-delegation
+          source: client
+      agent_to_agent:
+        can_send_to: [forge]
+      delegation:
+        worker_bots: [forge]
+        sweeps:
+          - name: conductor-sweep-forge
+            worker_id: forge
+            every: 5m
+            model: anthropic/claude-haiku-4
+
+    - id: forge
+      name: Forge
+      emoji: ⚙️
+      description: "Backend worker — gg-sandbox test fleet"
+      orchestrator: false
+      persona:
+        soul: |
+          You are Forge, a backend worker bot. You accept delegated tasks
+          from Conductor (the PM bot) and ship them.
+      slack:
+        account_id: forge
+        bot_token: "${FORGE_BOT_TOKEN}"
+        app_token: "${FORGE_APP_TOKEN}"
+        signing_secret: "${FORGE_SIGNING_SECRET}"
+      skills:
+        - name: bot-reception
+          source: client
+      agent_to_agent:
+        can_send_to: [conductor]
+      delegation:
+        specialty: backend
+
+outputs:
+  openclaw_json: ./rendered/openclaw.json
+  terraform_vars: ./rendered/fleet.auto.tfvars
+
+openclaw:
+  gateway:
+    port: 18789
+    mode: local
+    bind: loopback
+  session:
+    dm_scope: per-channel-peer
+  tools:
+    profile: coding
+    web_search:
+      enabled: false
+  slack:
+    mode: socket
+    typing_reaction: thinking_face
+    ack_reaction: eyes
+    allow_bots: true
+    history_limit: 50
+    streaming:
+      mode: partial
+      native_transport: true
+    reply_to_mode_by_chat_type:
+      channel: all

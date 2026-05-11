@@ -1,0 +1,65 @@
+# gg-sandbox test fleet
+
+First real test of fleetmind end-to-end, deployed in the Carpe `gg-sandbox` AWS
+account (`251714435910`).
+
+## Fleet shape
+
+| Agent | Role | Specialty | Model |
+|---|---|---|---|
+| Conductor | PM (orchestrator) | — | claude-sonnet-4-6 |
+| Forge | Worker | backend | claude-haiku-4 |
+
+Both run in the same Slack channel (set in `terraform-extras.tfvars`).
+
+## Files in this branch
+
+- `fleet.yaml` (root) — declarative fleet definition
+- `infra/terraform/terraform-extras.tfvars` — infra-only vars (region, ports,
+  delegation, wake-target session key). Append to `rendered/fleet.auto.tfvars`
+  after running `npx fleetmind render`.
+- `docs/test/gg-sandbox/slack-manifests/{conductor,forge}.yaml` — paste these
+  at <https://api.slack.com/apps/manifest> to create the two Slack apps.
+
+## Open placeholders
+
+1. `terraform-extras.tfvars` line ~22 — `wake_target_session_key` needs the
+   real Slack channel ID where Conductor + Forge live (format:
+   `agent:main:slack:channel:C0XXXXX`).
+
+## Deploy steps
+
+```bash
+# Set AWS profile for gg-sandbox
+export AWS_PROFILE=gg-sandbox
+
+# Install fleetmind deps
+npm install
+
+# Render workspace + tfvars from fleet.yaml
+npx fleetmind render
+
+# Merge the infra-only extras with the rendered tfvars
+cat infra/terraform/terraform-extras.tfvars >> rendered/fleet.auto.tfvars
+cp rendered/fleet.auto.tfvars infra/terraform/terraform.tfvars
+
+# Provision infra
+cd infra/terraform
+terraform init
+terraform plan
+terraform apply
+
+# Populate per-agent secrets (Slack + Anthropic)
+# (commands inserted here after `terraform apply` outputs the secret ARNs)
+```
+
+## Post-apply manual step (deploy-transport gap, issue #7)
+
+`fleetmind deploy` is currently filesystem-only. Workaround:
+1. `fleetmind deploy` locally renders each agent's workspace to
+   `workspace-<agent_id>/`
+2. SCP each workspace to its EC2 (target: `/opt/openclaw/workspace/<agent_id>/`)
+3. `systemctl restart openclaw-gateway` via SSM
+
+Once the deploy transport (issue #7-#15) lands, this collapses to a single
+`fleetmind deploy` call.
