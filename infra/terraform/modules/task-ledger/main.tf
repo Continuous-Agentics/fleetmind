@@ -508,7 +508,7 @@ resource "aws_sqs_queue" "pipe_dlq" {
 
 resource "aws_cloudwatch_metric_alarm" "pipe_dlq_not_empty" {
   alarm_name        = "${local.prefix}ledger-pipe-dlq-not-empty"
-  alarm_description = "Fires when the EventBridge Pipe DLQ has messages — indicates Pipe-level wake failures (stream errors, throttles, permission drift)."
+  alarm_description = "Fires when the EventBridge Pipe DLQ has messages - indicates Pipe-level wake failures (stream errors, throttles, permission drift)."
 
   metric_name        = "ApproximateNumberOfMessagesVisible"
   namespace          = "AWS/SQS"
