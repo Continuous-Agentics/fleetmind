@@ -162,7 +162,87 @@ fleetmind push skill bot-delegation --all
 fleetmind push skill bot-reception --all
 ```
 
-## Step 4: Apply workspace snippets
+## Step 4: Configure WORKER_SWEEP cron jobs
+
+The PM bot needs recurring sweep jobs to poll each worker's in-flight tasks
+and close the loop on terminal updates. These are seeded directly into the PM
+bot's OpenClaw cron scheduler — **no additional AWS infrastructure is required**.
+
+Add a `sweeps` block to the PM bot's `delegation` config in `fleet.yaml`:
+
+```yaml
+agents:
+  list:
+    - id: pm-bot
+      orchestrator: true
+      delegation:
+        worker_bots: [worker-frontend, worker-backend]
+        sweeps:
+          - name: pm-sweep-worker-frontend
+            worker_id: worker-frontend
+            every: 5m
+            model: haiku      # cost-optimised; same tier as heartbeat jobs
+            description: "Poll Pixel's in-flight tasks for terminal status updates"
+          - name: pm-sweep-worker-backend
+            worker_id: worker-backend
+            every: 5m
+            model: haiku
+            description: "Poll Forge's in-flight tasks for terminal status updates"
+```
+
+`fleetmind deploy` reads the `sweeps` block and idempotently seeds each job
+into `~/.openclaw/cron/jobs.json` on the PM instance. The gateway hot-reloads
+the file — no restart required.
+
+**Schedule options:**
+
+| Field | Example | When to use |
+|---|---|---|
+| `every` | `"5m"` | Simple fixed interval |
+| `cron_expr` + `tz` | `"*/5 9-17 * * 1-5"` + `"America/Los_Angeles"` | Business-hours-only sweeps |
+
+**Idempotency:** Re-running `fleetmind deploy` skips jobs whose `name` is
+already registered in `jobs.json`. This means manual edits made via
+`openclaw cron edit` on the PM instance survive subsequent deploys. To reset
+a job to its fleet.yaml definition, remove it manually:
+
+```bash
+# SSH to the PM instance
+openclaw cron rm <job-id>       # removes from jobs.json
+fleetmind deploy fleet.yaml     # re-seeds from fleet.yaml
+```
+
+**Operations:**
+
+```bash
+# On the PM bot instance — check sweep jobs
+openclaw cron list
+
+# Inspect a specific sweep
+openclaw cron show <job-id>
+
+# Force-run a sweep now (useful after an incident)
+openclaw cron run <job-id>
+
+# View recent sweep run history
+openclaw cron runs --id <job-id> --limit 20
+```
+
+**How WORKER_SWEEP works at runtime:**
+
+Each sweep fires an isolated agent turn with `WORKER_SWEEP: <worker_id>`. The
+PM bot's WORKER_SWEEP procedure (see `openclaw/pm-bot/workspace/AGENTS.md`):
+
+1. Queries DDB for `delegated` / `acked` tasks owned by the target worker.
+2. Checks each delegation thread for a terminal reply (`:white_check_mark:` or `:no_entry:`).
+3. Transitions any newly terminal tasks and spawns close-the-loop sub-agents.
+4. Replies `NO_REPLY` (silent run).
+
+The sweep is the resilience layer: it closes the loop when the DDB stream wake
+(EventBridge Pipe → SSM) missed a delivery or when the PM gateway was restarting
+when the worker's terminal reply arrived.
+
+## Step 5: Apply workspace snippets
 
 The `openclaw/pm-bot/workspace/` and `openclaw/worker-bot/workspace/` directories
 contain SOUL.md and AGENTS.md templates for each role. Push them to the
@@ -172,10 +252,10 @@ corresponding agent workspaces:
 fleetmind deploy fleet.yaml
 ```
 
-`fleetmind deploy` provisions workspaces and renders configs. The delegation
-workspace files are picked up automatically based on the `role` field in fleet.yaml.
+`fleetmind deploy` provisions workspaces, renders configs, and seeds cron
+sweep jobs into `~/.openclaw/cron/jobs.json` for each PM bot.
 
-## Step 5: Verify
+## Step 6: Verify
 
 Test that the CLI can reach DynamoDB:
 
@@ -318,9 +398,23 @@ cat ~/.fleetmind/ledger-pending/<task-id>-shipped.md | fleetmind narrative put -
 ```
 
 **PM bot not waking on terminal events**
-→ Check the Pipe DLQ (`{prefix}ledger-pipe-dlq`) and wake DLQ (`{prefix}ledger-wake-dlq`)
-   in the AWS console. Common causes: IAM permission on SSM SendCommand, wrong
+→ Two wake paths exist:
+
+1. **DDB stream wake** (fast, event-driven): Check the Pipe DLQ
+   (`{prefix}ledger-pipe-dlq`) and wake DLQ (`{prefix}ledger-wake-dlq`) in
+   the AWS console. Common causes: IAM permission on SSM SendCommand, wrong
    tag value for instance targeting, session key not in `sessions.json`.
+
+2. **WORKER_SWEEP** (polling, resilience layer): Check sweep jobs on the PM
+   instance — `openclaw cron list` and `openclaw cron runs --id <job-id>`.
+   If sweeps aren't registered, re-run `fleetmind deploy fleet.yaml`.
+
+**WORKER_SWEEP jobs missing after gateway restart**
+→ Sweep jobs persist in `jobs.json` and survive gateway restarts. If they're
+   missing, `jobs.json` may have been deleted or corrupted. Re-seed:
+   ```bash
+   fleetmind deploy fleet.yaml
+   ```
 
 **`task create` fails with "already exists"**
 → Regenerate the task ID (8 new hex bytes) and retry. Task IDs must be unique.

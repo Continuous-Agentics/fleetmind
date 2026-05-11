@@ -46,6 +46,42 @@ export const PersonaSchema = z.object({
 
 // ── Delegation config ────────────────────────────────────────────────────────
 
+/**
+ * A recurring sweep job seeded into the PM bot's OpenClaw cron scheduler.
+ *
+ * Each sweep fires an isolated agent turn with `WORKER_SWEEP: <worker_id>`
+ * so the PM bot can poll a given worker's in-flight tasks and close the loop
+ * on terminal updates. Sweeps are seeded idempotently into
+ * `~/.openclaw/cron/jobs.json` by `fleetmind deploy` — no AWS infrastructure
+ * required. Jobs survive gateway restarts (persisted in jobs.json).
+ *
+ * Specify either `every` (e.g. "5m") or `cron_expr` (5-field cron). Not both.
+ */
+export const CronSweepSchema = z.object({
+  /** Unique job name within the fleet (used for idempotent seeding). */
+  name: z.string(),
+  /** Agent ID of the worker bot this sweep targets. */
+  worker_id: z.string(),
+  /** Fixed interval (e.g. "5m", "10m"). Mutually exclusive with cron_expr. */
+  every: z.string().optional(),
+  /** 5-field cron expression (e.g. `*\/5 * * * *`). Mutually exclusive with every. */
+  cron_expr: z.string().optional(),
+  /** IANA timezone for cron_expr interpretation (e.g. "America/Los_Angeles"). */
+  tz: z.string().optional(),
+  /**
+   * Model override for the isolated sweep turn.
+   * Defaults to "haiku" — cost-optimised, same tier as SOD/EOD heartbeat jobs.
+   */
+  model: z.string().default("haiku"),
+  /** Human-readable description surfaced in `openclaw cron list`. */
+  description: z.string().optional(),
+}).refine(
+  (s) => !!(s.every ?? s.cron_expr),
+  { message: "Each sweep must specify either 'every' or 'cron_expr'" }
+);
+
+export type CronSweepConfig = z.infer<typeof CronSweepSchema>;
+
 /** Per-fleet delegation settings. Optional — fleets without delegation work normally. */
 export const DelegationFleetSchema = z.object({
   enabled: z.boolean().default(false),
@@ -77,6 +113,15 @@ export const DelegationAgentSchema = z.object({
   worker_bots: z.array(z.string()).optional(),
   /** Specialty label used by PM bots for routing decisions (worker bots). */
   specialty: z.string().optional(),
+  /**
+   * Recurring sweep jobs for this PM bot.
+   *
+   * Each sweep is seeded into `~/.openclaw/cron/jobs.json` by `fleetmind deploy`
+   * as an isolated agent-turn job firing `WORKER_SWEEP: <worker_id>`. Jobs are
+   * seeded idempotently (checked by name); existing jobs are not overwritten.
+   * Ignored on worker bots (`orchestrator: false`).
+   */
+  sweeps: z.array(CronSweepSchema).optional(),
 });
 
 export const AgentSchema = z.object({

@@ -100,6 +100,27 @@ agents:
 Match the task's domain to the worker's declared specialty. When ambiguous, ask
 the human before delegating.
 
+## WORKER_SWEEP Procedure
+
+Cron jobs named `<fleet>-sweep-<worker_id>` fire every 5 minutes and deliver
+`WORKER_SWEEP: <worker_id>` to an isolated session. When this event arrives:
+
+1. Query DDB for all `delegated` or `acked` tasks owned by `<worker_id>`:
+   ```bash
+   fleetmind query pending --worker <worker_id> --json
+   ```
+2. For each task, check whether a terminal reply (`:white_check_mark:` or
+   `:no_entry:`) already exists in the delegation thread. If yes and the DDB
+   status hasn't been transitioned yet, transition it now (`ship` or `block`).
+3. Spawn a close-the-loop sub-agent for each newly terminal task (idempotent:
+   check `Closeloop subagent:` field before spawning).
+4. Reply `NO_REPLY` (the sweep is silent — it uses the `message` tool for any
+   necessary channel posts, not the session reply).
+
+This is the same pattern as Carpe's `LARK_SWEEP` / `WREN_SWEEP`. The sweep
+closes the gap when DDB stream wake delivery fails or the worker's ship reply
+arrived while the PM gateway was restarting.
+
 ## Hard Limits
 
 - 🚫 NEVER write code, run deploys, or modify infrastructure. You orchestrate.
