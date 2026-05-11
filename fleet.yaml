@@ -45,7 +45,7 @@ agents:
         signing_secret: "${CONDUCTOR_SIGNING_SECRET}"
       skills:
         - name: bot-delegation
-          source: client
+          source: fleetmind
       agent_to_agent:
         can_send_to: [forge]
       delegation:
@@ -72,7 +72,7 @@ agents:
         signing_secret: "${FORGE_SIGNING_SECRET}"
       skills:
         - name: bot-reception
-          source: client
+          source: fleetmind
       agent_to_agent:
         can_send_to: [conductor]
       delegation:

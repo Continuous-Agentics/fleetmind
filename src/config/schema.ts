@@ -6,11 +6,15 @@
 import { z } from "zod";
 
 /** Where a skill comes from:
- *  - clawhub: public skill published on ClaWHub (e.g. by continuous-agentics)
- *  - private: Continuous Agentics proprietary skill library (requires CA_REGISTRY_TOKEN)
- *  - client:  skill in the client's own skills_repo (default)
+ *  - clawhub:   public skill published on ClaWHub (e.g. by continuous-agentics)
+ *  - private:   Continuous Agentics proprietary skill library (requires CA_REGISTRY_TOKEN)
+ *  - client:    skill in the client's own skills_repo (default)
+ *  - fleetmind: bundled first-party skill shipped with the fleetmind package
+ *               (e.g. bot-delegation, bot-reception). Resolves relative to the
+ *               fleetmind package root at openclaw/skills/<name>/, regardless of
+ *               where the operator's fleet.yaml or skills_repo lives.
  */
-export const SkillSourceSchema = z.enum(["clawhub", "private", "client"]).default("client");
+export const SkillSourceSchema = z.enum(["clawhub", "private", "client", "fleetmind"]).default("client");
 
 export const SkillRefSchema = z.union([
   // shorthand string → defaults to client source
