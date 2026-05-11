@@ -32,12 +32,6 @@ variable "agent_ports" {
   }
 }
 
-variable "workspace_volume_size_gb" {
-  description = "Size in GB of the EBS data volume shared by all agents (workspace, memory, state)."
-  type        = number
-  default     = 40
-}
-
 variable "openclaw_version" {
   description = "OpenClaw npm package version to install. Use 'latest' or pin to a specific version."
   type        = string
@@ -111,12 +105,6 @@ variable "enable_rds" {
 variable "agent_instance_types" {
   description = "Per-agent EC2 instance type overrides (map of agent_id → instance_type). Falls back to var.instance_type for any agent not listed."
   type        = map(string)
-  default     = {}
-}
-
-variable "agent_volume_sizes_gb" {
-  description = "Per-agent EBS workspace volume size in GB (map of agent_id → size). Falls back to var.workspace_volume_size_gb for any agent not listed."
-  type        = map(number)
   default     = {}
 }
 

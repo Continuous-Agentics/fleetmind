@@ -20,11 +20,6 @@ output "ssm_connect" {
   value       = { for k, v in aws_instance.agent : k => "aws ssm start-session --target ${v.id} --region ${var.aws_region}" }
 }
 
-output "workspace_volume_ids" {
-  description = "EBS workspace volume ID per agent. Each holds that agent's memory — never delete."
-  value       = { for k, v in aws_ebs_volume.agent_workspace : k => v.id }
-}
-
 output "agent_workspace_paths" {
   description = "Workspace directory path on each agent's instance."
   value       = { for name in var.agent_names : name => "/opt/openclaw/workspace/${name}" }

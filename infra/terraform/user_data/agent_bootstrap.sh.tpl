@@ -76,34 +76,12 @@ npm install -g "$OPENCLAW_PKG"
 OPENCLAW_BIN=$(which openclaw)
 echo "[bootstrap] openclaw installed at: $OPENCLAW_BIN"
 
-# ── EBS workspace volume (/dev/xvdf → /opt/openclaw/workspace) ────────────────
-for i in $(seq 1 30); do
-  [ -b /dev/xvdf ] && break
-  echo "[bootstrap] Waiting for EBS volume... ($i/30)"
-  sleep 2
-done
-
-[ -b /dev/xvdf ] || { echo "[bootstrap] ERROR: /dev/xvdf not found after 60s"; exit 1; }
-
-if ! blkid /dev/xvdf > /dev/null 2>&1; then
-  echo "[bootstrap] Formatting EBS volume (first use)"
-  mkfs.ext4 -F /dev/xvdf
-else
-  echo "[bootstrap] EBS already formatted — skipping mkfs (data preserved)"
-fi
-
-mkdir -p "$WORKSPACE_BASE"
-
-FSTAB_ENTRY="/dev/xvdf $WORKSPACE_BASE ext4 defaults,nofail 0 2"
-grep -qF "$FSTAB_ENTRY" /etc/fstab || echo "$FSTAB_ENTRY" >> /etc/fstab
-
-mount "$WORKSPACE_BASE" || mount -a
-echo "[bootstrap] Workspace mounted at $WORKSPACE_BASE"
-
-# ── Workspace directory for this agent ────────────────────────────────────────
+# ── Workspace directory for this agent (on root volume) ─────────────────────────
+# Workspace lives on the EC2 root volume. Persistent state belongs in the
+# shared substrates (task-ledger DDB, context-store DDB, narratives S3).
 mkdir -p "$WORKSPACE_DIR"
 chown -R ec2-user:ec2-user "$WORKSPACE_DIR"
-echo "[bootstrap] Workspace dir: $WORKSPACE_DIR"
+echo "[bootstrap] Workspace dir: $WORKSPACE_DIR (root volume)"
 
 # ── Secret fetch helper ───────────────────────────────────────────────────────
 cat > /usr/local/bin/fetch-agent-secrets << 'FETCH_EOF'
