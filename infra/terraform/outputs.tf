@@ -5,10 +5,8 @@ output "instance_ids" {
   value       = { for k, v in aws_instance.agent : k => v.id }
 }
 
-output "public_ips" {
-  description = "Public IP per agent instance."
-  value       = { for k, v in aws_instance.agent : k => v.public_ip }
-}
+# public_ips output removed — agents are now in private subnets with
+# associate_public_ip_address = false. Use private_ips or ssm_connect instead.
 
 output "private_ips" {
   description = "Private IP per agent instance."

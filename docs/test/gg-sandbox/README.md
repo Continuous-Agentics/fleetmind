@@ -58,8 +58,13 @@ terraform apply
 `fleetmind deploy` is currently filesystem-only. Workaround:
 1. `fleetmind deploy` locally renders each agent's workspace to
    `workspace-<agent_id>/`
-2. SCP each workspace to its EC2 (target: `/opt/openclaw/workspace/<agent_id>/`)
-3. `systemctl restart openclaw-gateway` via SSM
+2. Transfer each workspace to its EC2 via SSM Session Manager (instances are in
+   **private subnets with no public IPs** — SCP/SSH direct is not available):
+   ```bash
+   # Use SSM + S3 to push files, or AWS Systems Manager Run Command
+   # See: aws ssm start-session --target <instance-id> --region <region>
+   ```
+3. `systemctl restart openclaw-gateway` via SSM Run Command
 
 Once the deploy transport (issue #7-#15) lands, this collapses to a single
 `fleetmind deploy` call.
