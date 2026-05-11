@@ -29,21 +29,12 @@ openclaw/
 │                                # (accessibility, bundle hygiene, component tests,
 │                                #  error boundaries, UI decision docs)
 │
-├── skills/                      # role-aware skills shipped with fleetmind
-│   ├── bot-delegation/          # PM-bot skill: emit envelope, create task, narrative,
-│   │                            # query, transition lifecycle
-│   └── bot-reception/           # worker-bot skill: parse envelope, ack/ship/block,
-│                                # write narratives
-│
-├── orchestrator/                # legacy single-bot agent template (pre-PR #2)
-├── frontend-bot/                # legacy single-bot agent template (pre-PR #2)
-└── api-bot/                     # legacy single-bot agent template (pre-PR #2)
+└── skills/                      # role-aware skills shipped with fleetmind
+    ├── bot-delegation/          # PM-bot skill: emit envelope, create task, narrative,
+    │                            # query, transition lifecycle
+    └── bot-reception/           # worker-bot skill: parse envelope, ack/ship/block,
+                                 # write narratives
 ```
-
-> The `orchestrator/`, `frontend-bot/`, and `api-bot/` directories predate
-> the PR #2 architectural rewrite. They remain as reference material for
-> single-bot setups and may be cleaned up in a future release once nothing
-> internal references them.
 
 ## How composition works
 
