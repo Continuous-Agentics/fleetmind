@@ -163,9 +163,7 @@ ExecStartPre=/usr/local/bin/fetch-agent-secrets $FLEET_NAME $AGENT_ID $ENV_FILE 
 
 EnvironmentFile=$ENV_FILE
 
-ExecStart=$OPENCLAW_BIN start \
-  --workspace $WORKSPACE_DIR \
-  --port $AGENT_PORT
+ExecStart=$OPENCLAW_BIN gateway
 
 StandardOutput=journal
 StandardError=journal
@@ -179,7 +177,7 @@ echo "[bootstrap] STAGE 10: systemctl daemon-reload at $(date)"
 systemctl daemon-reload
 echo "[bootstrap] STAGE 11: systemctl enable at $(date)"
 systemctl enable "openclaw-$AGENT_ID"
-echo "[bootstrap] STAGE 12: systemctl start at $(date)"
-systemctl start "openclaw-$AGENT_ID"
-
-echo "[bootstrap] Done. Agent $AGENT_ID is live on port $AGENT_PORT (fleet: $FLEET_NAME)"
+echo "[bootstrap] STAGE 12: systemd unit installed and enabled; service NOT started"
+echo "[bootstrap]   To start: systemctl start openclaw-$AGENT_ID"
+echo "[bootstrap]   (Run after deploying workspace via: fleetmind deploy)"
+echo "[bootstrap] Done. Agent $AGENT_ID provisioned (fleet: $FLEET_NAME) — gateway will start on next boot or manual start"
