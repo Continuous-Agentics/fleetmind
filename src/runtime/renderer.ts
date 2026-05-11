@@ -14,7 +14,9 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
   // Agent list
   const agentList = agents.list.map((agent) => {
     const model = agent.model ?? defaults.model;
-    const workspace = `${defaults.workspace_base}/workspace-${agent.id}`;
+    // EC2-side workspace path: workspace_base/<agent_id> (no "workspace-" prefix).
+    // Matches the Terraform output agent_workspace_paths which uses plain <agent_id>.
+    const workspace = `${defaults.workspace_base}/${agent.id}`;
     const agentDir = `${defaults.workspace_base}/agents/${agent.id}/agent`;
     return {
       id: agent.id,

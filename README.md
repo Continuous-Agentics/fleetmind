@@ -59,10 +59,17 @@ fleetmind secrets set PIXEL_APP_TOKEN xapp-...
 # 4. Preview changes
 fleetmind diff
 
-# 5. Deploy — renders workspaces and pushes them to each agent's EC2
+# 5. Deploy — renders workspaces locally to ./rendered/workspaces/<agent_id>/
+#    and outputs openclaw.json + fleet.auto.tfvars to ./rendered/
 fleetmind deploy
 
-# 6. Restart each agent's gateway on its EC2
+# 6. Copy rendered workspaces to each EC2 (until deploy transport ships in issue #7)
+#    The local ./rendered/workspaces/<agent_id>/ dirs map to <workspace_base>/<agent_id>/
+#    on EC2 (workspace_base from fleet.yaml, typically /opt/openclaw/workspace).
+#    e.g.: scp -r ./rendered/workspaces/conductor ec2-user@<ip>:<workspace_base>/
+#          scp -r ./rendered/cron               ec2-user@<ip>:<workspace_base>/
+
+# 7. Restart each agent's gateway on its EC2
 #    e.g. via SSM: aws ssm send-command --targets ... --parameters \
 #      'commands=["openclaw gateway restart"]'
 ```
