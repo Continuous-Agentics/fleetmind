@@ -9,7 +9,7 @@
 # Shared across the fleet (provisioned elsewhere in this module):
 #   - VPC, subnets, NAT gateway, route tables (vpc.tf)
 #   - Security group (sg.tf)
-#   - RDS instance for shared fleet state (rds.tf)
+#   - Optional RDS instance (rds.tf, enable_rds=false by default)
 #   - DynamoDB context-store table (dynamodb.tf)
 #   - Secrets Manager placeholders (secrets.tf)
 #
