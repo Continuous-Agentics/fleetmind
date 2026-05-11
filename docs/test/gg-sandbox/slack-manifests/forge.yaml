@@ -1,6 +1,6 @@
 display_information:
   name: Forge
-  description: Backend worker bot for gg-sandbox fleetmind test fleet — receives delegations from Conductor.
+  description: Backend worker bot for gg-sandbox fleetmind test fleet - receives delegations from Conductor.
   background_color: "#8B4513"
   long_description: >
     Forge is the backend specialty worker bot for Grace's gg-sandbox test fleet

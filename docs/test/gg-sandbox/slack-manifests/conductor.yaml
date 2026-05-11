@@ -1,6 +1,6 @@
 display_information:
   name: Conductor
-  description: PM bot for gg-sandbox fleetmind test fleet — delegates work to worker bots.
+  description: PM bot for gg-sandbox fleetmind test fleet - delegates work to worker bots.
   background_color: "#2C3E50"
   long_description: >
     Conductor is the project-manager bot for Grace's gg-sandbox test fleet (Continuous-Agentics/fleetmind).
