@@ -123,7 +123,7 @@ fetch_secret() {
     --query SecretString --output text 2>/dev/null || echo "{}"
 }
 
-SHARED=$(fetch_secret "$FLEET/shared/anthropic")
+ANTHROPIC=$(fetch_secret "$FLEET/agents/$AGENT/anthropic")
 AGENT_SECRET=$(fetch_secret "$FLEET/agents/$AGENT/slack")
 
 python3 - << PYEOF > "$OUT"
@@ -135,7 +135,7 @@ def parse(s):
     except Exception:
         return {}
 
-combined = {**parse('''$SHARED'''), **parse('''$AGENT_SECRET''')}
+combined = {**parse('''$ANTHROPIC'''), **parse('''$AGENT_SECRET''')}
 for k, v in combined.items():
     # Basic sanitisation: skip values with newlines/quotes that would break env syntax
     v_str = str(v)
