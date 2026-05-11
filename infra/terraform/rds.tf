@@ -75,11 +75,4 @@ resource "aws_db_instance" "main" {
   tags = { Name = "${var.fleet_name}-postgres" }
 }
 
-terraform {
-  required_providers {
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.0"
-    }
-  }
-}
+
