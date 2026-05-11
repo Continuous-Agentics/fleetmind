@@ -52,3 +52,25 @@ output "vpc_id" {
   description = "VPC ID (created or adopted)."
   value       = local.vpc_id
 }
+
+# ── Task-ledger outputs (populated when delegation_enabled = true) ─────────────
+
+output "task_ledger_table_name" {
+  description = "DynamoDB task-ledger table name. Used by 'fleetmind task ack/ship' and the bot-delegation/bot-reception skills. Empty string when delegation_enabled = false."
+  value       = var.delegation_enabled ? module.task_ledger[0].table_name : ""
+}
+
+output "task_ledger_s3_bucket" {
+  description = "S3 bucket name for task narrative content. Empty string when delegation_enabled = false."
+  value       = var.delegation_enabled ? module.task_ledger[0].s3_bucket_name : ""
+}
+
+output "task_ledger_pm_policy_arn" {
+  description = "ARN of the bot-ledger-pm IAM policy. Empty string when delegation_enabled = false."
+  value       = var.delegation_enabled ? module.task_ledger[0].pm_policy_arn : ""
+}
+
+output "task_ledger_worker_policy_arn" {
+  description = "ARN of the bot-ledger-worker IAM policy. Empty string when delegation_enabled = false."
+  value       = var.delegation_enabled ? module.task_ledger[0].worker_policy_arn : ""
+}
