@@ -174,4 +174,18 @@ systemctl enable "openclaw-$AGENT_ID"
 echo "[bootstrap] STAGE 12: systemd unit installed and enabled; service NOT started"
 echo "[bootstrap]   To start: systemctl start openclaw-$AGENT_ID"
 echo "[bootstrap]   (Run after deploying workspace via: fleetmind deploy)"
+
+# ── STAGE 13: amazon-ssm-agent diagnostic ─────────────────────────────────────
+# AL2023 console output doesn't surface systemd unit state by default. Dump
+# ssm-agent's service status + recent journal to /dev/console so we can see
+# what's happening without needing SSM access (chicken-and-egg).
+echo "[bootstrap] STAGE 13: amazon-ssm-agent diagnostic at $(date)"
+echo "--- systemctl is-active amazon-ssm-agent ---" > /dev/console
+systemctl is-active amazon-ssm-agent > /dev/console 2>&1 || true
+echo "--- systemctl status amazon-ssm-agent (no pager) ---" > /dev/console
+systemctl status amazon-ssm-agent --no-pager > /dev/console 2>&1 || true
+echo "--- journalctl -u amazon-ssm-agent -n 50 --no-pager ---" > /dev/console
+journalctl -u amazon-ssm-agent -n 50 --no-pager > /dev/console 2>&1 || true
+echo "--- end ssm-agent diagnostic ---" > /dev/console
+
 echo "[bootstrap] Done. Agent $AGENT_ID provisioned (fleet: $FLEET_NAME) — gateway will start on next boot or manual start"
