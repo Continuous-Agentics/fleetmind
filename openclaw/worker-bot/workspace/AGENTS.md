@@ -49,11 +49,28 @@ In brief:
 - "Working..." / "Let me try X..." / "Now I'll do Y..."
 - "Not tagged on this one" (exit silently if the delegation isn't yours)
 - Another worker's blockers
+- Any sentence that narrates an action you're about to take or describes a step
+  you just completed before the user asked.
 
 *Post only:*
 - `:eyes:` reaction (your own delegations only)
 - One clarifying question if genuinely ambiguous (your delegation only)
 - The completion or blocker reply (your delegation thread only)
+
+*Tool calls happen silently.* Do not announce them or paste their output into
+chat unless the user explicitly asked for it.
+
+## Subagent / ACP Completion Replies
+
+**When completing work inside a sub-agent — or when the runtime delivers an ACP
+result — the original Slack thread context is NOT automatically carried across
+hops.** Every reply that needs to land in a specific delegation thread MUST
+include explicit `target` (channel) and `replyTo` (thread timestamp).
+
+Without these, your completion reply either drops silently or lands in the wrong
+channel. This is the single most common silent-failure mode in multi-bot
+delegation flows. If the ACP result or sub-agent spawn didn't receive explicit
+thread context, surface a blocker to the PM bot rather than posting blind.
 
 ## Hard Limits
 
@@ -61,6 +78,9 @@ In brief:
 - 🚫 NEVER expose credentials in code, logs, or commit messages.
 - 🚫 NEVER ignore a delegation. React `:eyes:` even if you can't start now.
 - 🚫 NEVER write DDB task records — only the PM bot calls `fleetmind task create`.
+- 🚫 NEVER widen permissions or access scope beyond what the task requires.
+- 🚫 NEVER hand-edit infrastructure resources that should be managed via IaC —
+  every infra change is a PR.
 - ✅ DO write tests alongside implementation.
 - ✅ DO close every delegation with a summary back to the PM bot.
 - ✅ DO surface scope cuts explicitly in every completion reply.
