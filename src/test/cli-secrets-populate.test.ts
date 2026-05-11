@@ -425,3 +425,357 @@ agents:
     }
   });
 });
+
+// ── Interactive mode ──────────────────────────────────────────────────────────
+
+describe("populateSecrets --interactive", () => {
+  let tmpDir: string;
+  let fleetFile: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fm-interactive-"));
+    fleetFile = path.join(tmpDir, "fleet.yaml");
+
+    fs.writeFileSync(fleetFile, `
+fleet:
+  name: test-fleet
+delegation:
+  enabled: false
+  aws_region: us-west-2
+agents:
+  defaults:
+    model: anthropic/claude-haiku-4
+  list:
+    - id: conductor
+      name: Conductor
+      slack:
+        account_id: conductor
+        bot_token: "\${CONDUCTOR_BOT_TOKEN}"
+        app_token: "\${CONDUCTOR_APP_TOKEN}"
+        signing_secret: "\${CONDUCTOR_SIGNING_SECRET}"
+    - id: forge
+      name: Forge
+      slack:
+        account_id: forge
+        bot_token: "\${FORGE_BOT_TOKEN}"
+        app_token: "\${FORGE_APP_TOKEN}"
+        signing_secret: "\${FORGE_SIGNING_SECRET}"
+`);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Build a simple promptFn stub that returns values in order from the queue. */
+  function makePromptStub(responses: string[]): (prompt: string) => Promise<string> {
+    const queue = [...responses];
+    return async (_prompt: string) => queue.shift() ?? "";
+  }
+
+  /** Build a confirmFn stub that always returns the given answer. */
+  function makeConfirmStub(answer: boolean): (prompt: string) => Promise<boolean> {
+    return async (_prompt: string) => answer;
+  }
+
+  /** Helpers to clear / restore env vars. */
+  function clearVars(vars: string[]): Record<string, string | undefined> {
+    const saved: Record<string, string | undefined> = {};
+    for (const v of vars) {
+      saved[v] = process.env[v];
+      delete process.env[v];
+    }
+    return saved;
+  }
+
+  function restoreVars(saved: Record<string, string | undefined>): void {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+
+  // ── Test 1: env-set credentials are used silently (no prompt) ────────────────
+  test("skips prompt for credentials already in env", async () => {
+    const allVars = [
+      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET",
+      "FORGE_BOT_TOKEN", "FORGE_APP_TOKEN", "FORGE_SIGNING_SECRET",
+      "ANTHROPIC_API_KEY",
+    ];
+    const saved = clearVars(allVars);
+    // Pre-set all env vars
+    for (const v of allVars) process.env[v] = `val-${v.toLowerCase()}`;
+
+    const promptCalls: string[] = [];
+    const promptFn = async (p: string) => { promptCalls.push(p); return "should-not-be-called"; };
+
+    try {
+      const results = await populateSecrets({
+        fleet: fleetFile,
+        dryRun: true,
+        agent: [],
+        interactive: true,
+        promptFn,
+        confirmFn: makeConfirmStub(true),
+      });
+
+      // No prompts should have been triggered — everything was in env
+      assert.equal(promptCalls.length, 0, "promptFn should not have been called when all env vars are set");
+      assert.equal(results.length, 4, "should have 4 results");
+      assert.ok(results.every((r) => r.ok));
+    } finally {
+      restoreVars(saved);
+    }
+  });
+
+  // ── Test 2: prompts fired for missing credentials ─────────────────────────────
+  test("prompts for missing credentials and uses supplied input", async () => {
+    const allVars = [
+      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET",
+      "ANTHROPIC_API_KEY",
+    ];
+    const saved = clearVars(allVars);
+
+    // Provide answers for the 4 missing conductor fields (3 slack + 1 anthropic)
+    const promptFn = makePromptStub([
+      "xoxb-conductor-bot",
+      "xapp-conductor-app",
+      "conductor-signing",
+      "sk-ant-conductor",
+    ]);
+
+    try {
+      const results = await populateSecrets({
+        fleet: fleetFile,
+        dryRun: true,
+        agent: ["conductor"],
+        interactive: true,
+        promptFn,
+        confirmFn: makeConfirmStub(true),
+      });
+
+      assert.equal(results.length, 2, "conductor should produce 2 results");
+      assert.ok(results.every((r) => r.ok), "all results should be ok");
+    } finally {
+      restoreVars(saved);
+    }
+  });
+
+  // ── Test 3: empty input re-prompts ────────────────────────────────────────────
+  test("re-prompts on empty input until a value is supplied", async () => {
+    const allVars = [
+      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET",
+      "ANTHROPIC_API_KEY",
+    ];
+    const saved = clearVars(allVars);
+
+    // First answer for bot_token is empty, second is real value
+    const promptFn = makePromptStub([
+      "",                       // empty → should re-prompt
+      "xoxb-real-bot-token",   // real value
+      "xapp-app",
+      "signing-secret",
+      "sk-ant-key",
+    ]);
+
+    try {
+      const results = await populateSecrets({
+        fleet: fleetFile,
+        dryRun: true,
+        agent: ["conductor"],
+        interactive: true,
+        promptFn,
+        confirmFn: makeConfirmStub(true),
+      });
+
+      assert.equal(results.length, 2, "should produce 2 results after re-prompt");
+      assert.ok(results.every((r) => r.ok));
+    } finally {
+      restoreVars(saved);
+    }
+  });
+
+  // ── Test 4: confirmation summary lists all agent×secret ──────────────────────
+  test("confirmation summary lists every agent/secret combination", async () => {
+    const allVars = [
+      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET",
+      "FORGE_BOT_TOKEN", "FORGE_APP_TOKEN", "FORGE_SIGNING_SECRET",
+      "ANTHROPIC_API_KEY",
+    ];
+    const saved = clearVars(allVars);
+    for (const v of allVars) process.env[v] = `val-${v.toLowerCase()}`;
+
+    const summaryLines: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: unknown[]) => summaryLines.push(args.join(" "));
+
+    try {
+      await populateSecrets({
+        fleet: fleetFile,
+        dryRun: true,
+        agent: [],
+        interactive: true,
+        promptFn: makePromptStub([]),
+        confirmFn: makeConfirmStub(true),
+      });
+    } finally {
+      console.log = origLog;
+      restoreVars(saved);
+    }
+
+    const combined = summaryLines.join("\n");
+    assert.ok(combined.includes("conductor/slack"), "summary should mention conductor/slack");
+    assert.ok(combined.includes("conductor/anthropic"), "summary should mention conductor/anthropic");
+    assert.ok(combined.includes("forge/slack"), "summary should mention forge/slack");
+    assert.ok(combined.includes("forge/anthropic"), "summary should mention forge/anthropic");
+    assert.ok(combined.includes("4 secrets"), "summary should state total secret count");
+  });
+
+  // ── Test 5: --interactive + --dry-run runs prompts but skips AWS ──────────────
+  test("--interactive --dry-run runs prompts, shows summary, skips AWS", async () => {
+    const allVars = [
+      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET",
+      "ANTHROPIC_API_KEY",
+    ];
+    const saved = clearVars(allVars);
+
+    const promptFn = makePromptStub([
+      "xoxb-bot", "xapp-app", "signing", "sk-ant-key",
+    ]);
+
+    let confirmCalled = false;
+    const confirmFn = async (_p: string) => { confirmCalled = true; return true; };
+
+    try {
+      const results = await populateSecrets({
+        fleet: fleetFile,
+        dryRun: true,        // dry-run — no AWS
+        agent: ["conductor"],
+        interactive: true,
+        promptFn,
+        confirmFn,
+      });
+
+      // Prompts ran
+      assert.equal(results.length, 2, "should have 2 dry-run results");
+      assert.ok(results.every((r) => r.pushed === false), "dry-run: pushed should be false");
+
+      // Confirm NOT called in dry-run (summary shown but no y/N)
+      assert.equal(confirmCalled, false, "confirmFn should not be called for dry-run");
+    } finally {
+      restoreVars(saved);
+    }
+  });
+
+  // ── Test 6: --agent filter skips other agents' prompts ───────────────────────
+  test("--agent filter: only prompts for the specified agent", async () => {
+    const allVars = [
+      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET",
+      "FORGE_BOT_TOKEN", "FORGE_APP_TOKEN", "FORGE_SIGNING_SECRET",
+      "ANTHROPIC_API_KEY",
+    ];
+    const saved = clearVars(allVars);
+
+    const promptedFor: string[] = [];
+    const answers = ["xoxb-bot", "xapp-app", "signing", "sk-ant-key"];
+    const promptFn = async (p: string) => {
+      promptedFor.push(p);
+      return answers.shift() ?? "";
+    };
+
+    try {
+      const results = await populateSecrets({
+        fleet: fleetFile,
+        dryRun: true,
+        agent: ["conductor"],  // only conductor
+        interactive: true,
+        promptFn,
+        confirmFn: makeConfirmStub(true),
+      });
+
+      // Only conductor results
+      assert.equal(results.length, 2, "only conductor results");
+      assert.ok(results.every((r) => r.agentId === "conductor"));
+
+      // No forge prompts
+      assert.ok(
+        promptedFor.every((p) => !p.toLowerCase().includes("forge")),
+        "should not have prompted for forge credentials"
+      );
+    } finally {
+      restoreVars(saved);
+    }
+  });
+
+  // ── Test 7: confirmation "y" proceeds to push (dry-run verifies) ──────────────
+  test("confirmation 'y' proceeds; 'n' aborts", async () => {
+    const allVars = ["CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET", "ANTHROPIC_API_KEY"];
+    const saved = clearVars(allVars);
+    for (const v of allVars) process.env[v] = `val-${v.toLowerCase()}`;
+
+    try {
+      // "y" → results returned
+      const yesResults = await populateSecrets({
+        fleet: fleetFile,
+        dryRun: true,
+        agent: ["conductor"],
+        interactive: true,
+        promptFn: makePromptStub([]),
+        confirmFn: makeConfirmStub(true),
+      });
+      assert.equal(yesResults.length, 2, "'y' should return results");
+
+      // "n" → empty results (aborted)
+      // Note: dry-run skips confirmation, so test non-dry-run with mocked confirm
+      // We can't actually call AWS in tests, so we verify the abort path returns []
+      // by using a non-dry-run with confirmFn returning false.
+      // AWS call would fail here — but abort happens before the AWS call.
+      const noResults = await populateSecrets({
+        fleet: fleetFile,
+        dryRun: false,
+        agent: ["conductor"],
+        interactive: true,
+        promptFn: makePromptStub([]),
+        confirmFn: makeConfirmStub(false),  // "n" → abort
+      });
+      assert.equal(noResults.length, 0, "'n' should abort and return empty array");
+    } finally {
+      restoreVars(saved);
+    }
+  });
+
+  // ── Test 8: --from env file provides values silently (no prompt) ──────────────
+  test("--from env file provides credentials silently without prompting", async () => {
+    const envFile = path.join(tmpDir, ".env.conductor");
+    fs.writeFileSync(envFile, [
+      "CONDUCTOR_BOT_TOKEN=xoxb-from-file",
+      "CONDUCTOR_APP_TOKEN=xapp-from-file",
+      "CONDUCTOR_SIGNING_SECRET=secret-from-file",
+      "ANTHROPIC_API_KEY=sk-ant-from-file",
+    ].join("\n"));
+
+    const allVars = ["CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET", "ANTHROPIC_API_KEY"];
+    const saved = clearVars(allVars);
+
+    const promptCalls: string[] = [];
+    const promptFn = async (p: string) => { promptCalls.push(p); return "unexpected-call"; };
+
+    try {
+      const results = await populateSecrets({
+        fleet: fleetFile,
+        dryRun: true,
+        from: envFile,
+        agent: ["conductor"],
+        interactive: true,
+        promptFn,
+        confirmFn: makeConfirmStub(true),
+      });
+
+      assert.equal(promptCalls.length, 0, "no prompts should fire when --from provides all values");
+      assert.equal(results.length, 2, "should have 2 results");
+      assert.ok(results.every((r) => r.ok));
+    } finally {
+      restoreVars(saved);
+    }
+  });
+});

@@ -14,6 +14,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import readline from "node:readline";
 import yaml from "js-yaml";
 import chalk from "chalk";
 import { SecretsManagerClient, PutSecretValueCommand } from "@aws-sdk/client-secrets-manager";
@@ -27,6 +28,11 @@ export interface PopulateOptions {
   from?: string;
   agent?: string[];
   region?: string;
+  interactive?: boolean;
+  /** Injectable prompt function for hidden input — used in tests to avoid raw-mode TTY. */
+  promptFn?: (prompt: string) => Promise<string>;
+  /** Injectable confirm function for y/N prompt — used in tests. */
+  confirmFn?: (prompt: string) => Promise<boolean>;
 }
 
 interface AgentSlack {
@@ -42,6 +48,7 @@ interface AgentAnthropicConfig {
 
 interface RawAgent {
   id?: string;
+  name?: string;
   slack?: AgentSlack;
   anthropic?: AgentAnthropicConfig;
 }
@@ -103,6 +110,64 @@ export function resolveValue(
   }
   // Already a literal (not a placeholder)
   return value;
+}
+
+// ── Interactive prompts ──────────────────────────────────────────────────────
+
+/**
+ * Prompt for a hidden (secret) value using raw-mode stdin.
+ * No echo. Backspace supported. Ctrl-C exits with code 130.
+ * Injectable via PopulateOptions.promptFn for unit tests.
+ */
+export async function promptHidden(prompt: string): Promise<string> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  return new Promise((resolve) => {
+    process.stdout.write(prompt);
+    let value = "";
+    process.stdin.setRawMode?.(true);
+    process.stdin.resume();
+    process.stdin.setEncoding("utf8");
+    const onData = (chunk: Buffer | string) => {
+      const ch = chunk.toString();
+      for (const c of ch) {
+        if (c === "\r" || c === "\n") {
+          process.stdin.setRawMode?.(false);
+          process.stdin.removeListener("data", onData);
+          process.stdin.pause();
+          process.stdout.write("\n");
+          rl.close();
+          resolve(value);
+          return;
+        } else if (c === "\u0003") {
+          // Ctrl-C
+          process.stdout.write("\n");
+          process.stdin.setRawMode?.(false);
+          process.stdin.removeListener("data", onData);
+          process.stdin.pause();
+          rl.close();
+          process.exit(130);
+        } else if (c === "\u007F" || c === "\b") {
+          value = value.slice(0, -1);
+        } else {
+          value += c;
+        }
+      }
+    };
+    process.stdin.on("data", onData);
+  });
+}
+
+/**
+ * Prompt for a y/N confirmation using plain readline (no hidden input needed).
+ */
+export async function promptConfirm(prompt: string): Promise<boolean> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(prompt, (answer) => {
+      rl.close();
+      resolve(answer.toLowerCase() === "y");
+    });
+  });
 }
 
 // ── Redaction ─────────────────────────────────────────────────────────────────
@@ -194,6 +259,78 @@ export function resolveAnthropic(
   };
 }
 
+// ── Interactive resolution helpers ──────────────────────────────────────────
+
+/**
+ * Resolve Slack credentials field-by-field, prompting for any missing values.
+ * Uses env-supplied value silently; only calls promptFn for gaps.
+ * Re-prompts on empty input.
+ */
+async function resolveSlackInteractive(
+  agentId: string,
+  agentName: string,
+  slack: AgentSlack | undefined,
+  env: Record<string, string>,
+  promptFn: (prompt: string) => Promise<string>
+): Promise<SlackResolution> {
+  const fields: Array<{
+    field: keyof AgentSlack;
+    outKey: keyof SlackResolution["values"];
+  }> = [
+    { field: "bot_token", outKey: "SLACK_BOT_TOKEN" },
+    { field: "app_token", outKey: "SLACK_APP_TOKEN" },
+    { field: "signing_secret", outKey: "SLACK_SIGNING_SECRET" },
+  ];
+
+  const values: SlackResolution["values"] = {};
+
+  for (const { field, outKey } of fields) {
+    const raw = slack?.[field];
+    const varName = extractPlaceholder(raw);
+
+    let resolved: string | null = null;
+    if (varName) {
+      resolved = env[varName] ?? null;
+    } else if (raw) {
+      resolved = raw;
+    }
+
+    if (resolved) {
+      values[outKey] = resolved;
+    } else {
+      // Prompt until non-empty
+      let value = "";
+      while (!value) {
+        value = await promptFn(`${agentName} / ${outKey}: `);
+      }
+      values[outKey] = value;
+    }
+  }
+
+  return { ok: true, values, missing: [] };
+}
+
+/**
+ * Resolve the Anthropic API key, prompting if not available from env.
+ * Re-prompts on empty input.
+ */
+async function resolveAnthropicInteractive(
+  agentId: string,
+  agentName: string,
+  anthropicConfig: AgentAnthropicConfig | undefined,
+  env: Record<string, string>,
+  promptFn: (prompt: string) => Promise<string>
+): Promise<AnthropicResolution> {
+  const res = resolveAnthropic(agentId, anthropicConfig, env);
+  if (res.ok) return res;
+
+  let value = "";
+  while (!value) {
+    value = await promptFn(`${agentName} / ANTHROPIC_API_KEY: `);
+  }
+  return { ok: true, value, missing: [] };
+}
+
 // ── Core populate logic ───────────────────────────────────────────────────────
 
 export interface PopulateResult {
@@ -234,6 +371,10 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
     ? new Set(options.agent)
     : null;
 
+  const filteredAgents = agents.filter(
+    (a) => a.id && (!targetIds || targetIds.has(a.id))
+  );
+
   // Determine AWS region
   const region =
     options.region ??
@@ -241,6 +382,102 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
     process.env["AWS_REGION"] ??
     process.env["AWS_DEFAULT_REGION"] ??
     "us-east-1";
+
+  // ── Interactive mode ────────────────────────────────────────────────────────
+  if (options.interactive) {
+    const promptFn = options.promptFn ?? promptHidden;
+    const confirmFn = options.confirmFn ?? promptConfirm;
+
+    // Phase 1: resolve all secrets, prompting for any missing credentials
+    interface ReadySecret {
+      agentId: string;
+      secretType: "slack" | "anthropic";
+      secretName: string;
+      data: Record<string, string>;
+      keyCount: number;
+    }
+    const ready: ReadySecret[] = [];
+
+    for (const agent of filteredAgents) {
+      const agentId = agent.id!;
+      const agentName = agent.name ?? agentId;
+
+      // Slack
+      const slackSecretName = `${fleetName}/agents/${agentId}/slack`;
+      const slackRes = await resolveSlackInteractive(agentId, agentName, agent.slack, env, promptFn);
+      ready.push({
+        agentId,
+        secretType: "slack",
+        secretName: slackSecretName,
+        data: slackRes.values as Record<string, string>,
+        keyCount: Object.keys(slackRes.values).length,
+      });
+
+      // Anthropic
+      const anthropicSecretName = `${fleetName}/agents/${agentId}/anthropic`;
+      const anthropicRes = await resolveAnthropicInteractive(agentId, agentName, agent.anthropic, env, promptFn);
+      ready.push({
+        agentId,
+        secretType: "anthropic",
+        secretName: anthropicSecretName,
+        data: { ANTHROPIC_API_KEY: anthropicRes.value! },
+        keyCount: 1,
+      });
+    }
+
+    // Phase 2: show confirmation summary
+    console.log(`\nAbout to push ${ready.length} secrets:`);
+    for (const r of ready) {
+      console.log(`  ✓ ${r.agentId}/${r.secretType} (${r.keyCount} key${r.keyCount !== 1 ? "s" : ""})`);
+    }
+    console.log();
+
+    // Phase 3: y/N confirmation (skipped for --dry-run)
+    if (!options.dryRun) {
+      const confirmed = await confirmFn("Push to AWS? [y/N]: ");
+      if (!confirmed) {
+        console.log("Aborted.");
+        return [];
+      }
+    }
+
+    // Phase 4: push (or dry-run skip)
+    let interactiveClient: SecretsManagerClient | null = null;
+    if (!options.dryRun) {
+      interactiveClient = new SecretsManagerClient({ region });
+    }
+
+    const interactiveResults: PopulateResult[] = [];
+    for (const r of ready) {
+      if (options.dryRun) {
+        interactiveResults.push({
+          agentId: r.agentId,
+          secretType: r.secretType,
+          secretName: r.secretName,
+          ok: true,
+          pushed: false,
+          keyCount: r.keyCount,
+        });
+      } else {
+        await interactiveClient!.send(new PutSecretValueCommand({
+          SecretId: r.secretName,
+          SecretString: JSON.stringify(r.data),
+        }));
+        interactiveResults.push({
+          agentId: r.agentId,
+          secretType: r.secretType,
+          secretName: r.secretName,
+          ok: true,
+          pushed: true,
+          keyCount: r.keyCount,
+        });
+      }
+    }
+
+    return interactiveResults;
+  }
+
+  // ── Non-interactive mode (existing logic) ────────────────────────────────────
 
   // Set up Secrets Manager client (not used in dry-run)
   let client: SecretsManagerClient | null = null;
