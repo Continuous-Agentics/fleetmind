@@ -6,7 +6,34 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
-### Changed
+### Changed (potentially breaking for existing fleets)
+
+- **Per-agent EBS workspace volume removed.** Workspace files now live on the
+  EC2 root volume at `/opt/openclaw/workspace/<agent_id>/`. Persistent state
+  should use the shared substrates (task-ledger DDB, context-store DDB,
+  narratives S3) instead.
+  - `ec2.tf`: removed `aws_ebs_volume.agent_workspace` + `aws_volume_attachment.agent_workspace`
+  - `variables.tf`: removed `workspace_volume_size_gb` + `agent_volume_sizes_gb`
+  - `outputs.tf`: removed `workspace_volume_ids`
+  - `agent_bootstrap.sh.tpl`: removed EBS detect/mount/fstab block; workspace
+    directory is created with `mkdir -p` on the root volume at bootstrap time
+  - `fleet.example.yaml`: removed `agent_volume_sizes_gb` override example
+
+  **Migration note for existing fleets:** EBS volumes provisioned by prior
+  versions have `prevent_destroy = true`. After applying this change,
+  `terraform plan` will show destroy intent for those resources, which
+  `prevent_destroy` will block. Two resolution paths:
+  1. *(Preferred)* Manually detach and delete the EBS volumes via the AWS
+     console before applying this PR, then run `terraform apply`.
+  2. Drop the resources from Terraform state without destroying them, then
+     delete manually later:
+     ```
+     terraform state rm 'aws_ebs_volume.agent_workspace["orchestrator"]'
+     terraform state rm 'aws_volume_attachment.agent_workspace["orchestrator"]'
+     # repeat for each agent
+     ```
+  For `gg-sandbox` (throwaway environment), path 2 (`terraform state rm`) is
+  recommended.
 
 - **Per-agent Anthropic API key secret** — The Anthropic API key is now provisioned
   per agent at `fleetmind/agents/<name>/anthropic` (was a single shared secret at

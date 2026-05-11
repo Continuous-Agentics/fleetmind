@@ -3,8 +3,12 @@
 # The README spec ("one EC2 per agent, one gateway per EC2") is implemented
 # here via for_each over local.agents_map. Each agent gets:
 #   - A dedicated EC2 instance (bootstrapped with ONLY that agent's service)
-#   - A dedicated EBS workspace volume (workspace, memory, state)
 #   - A dedicated IAM role + instance profile (see iam.tf)
+#
+# Workspace files live on the EC2 root volume at /opt/openclaw/workspace/<agent_id>/.
+# Persistent state belongs in the shared substrates: task-ledger DDB, context-store
+# DDB, and narratives S3. Per-agent EBS workspace volumes were removed in favour of
+# this simpler pattern (root vol + shared substrates).
 #
 # Shared across the fleet (provisioned elsewhere in this module):
 #   - VPC, subnets, NAT gateway, route tables (vpc.tf)
@@ -15,17 +19,16 @@
 #
 # Fault tolerance per agent:
 #   - Process crash   → systemd Restart=always, back up in 10s
-#   - Instance reboot → EBS remounts via fstab, agent service auto-starts
-#   - Instance loss   → EBS survives (prevent_destroy), reattach to new instance
+#   - Instance reboot → agent service auto-starts; workspace on root vol survives reboot
+#   - Instance loss   → push workspace via S3+SSM (deploy transport, see issue #7)
 
 locals {
-  # Build a map of agent_id → { port, instance_type, volume_size_gb }
+  # Build a map of agent_id → { port, instance_type }
   # so all per-agent for_each resources share one canonical source of truth.
   agents_map = {
     for name in var.agent_names : name => {
-      port            = var.agent_ports[name]
-      instance_type   = lookup(var.agent_instance_types, name, var.instance_type)
-      volume_size_gb  = lookup(var.agent_volume_sizes_gb, name, var.workspace_volume_size_gb)
+      port          = var.agent_ports[name]
+      instance_type = lookup(var.agent_instance_types, name, var.instance_type)
     }
   }
 }
@@ -68,36 +71,4 @@ resource "aws_instance" "agent" {
   }
 }
 
-# ── Per-agent EBS workspace volume ────────────────────────────────────────────
-# Each agent gets its own volume so workspace state (memory, session files,
-# skills) survives instance replacement. Volumes are scoped to the same AZ as
-# the instance they're attached to.
 
-resource "aws_ebs_volume" "agent_workspace" {
-  for_each = local.agents_map
-
-  availability_zone = aws_instance.agent[each.key].availability_zone
-  size              = each.value.volume_size_gb
-  type              = "gp3"
-  encrypted         = true
-
-  tags = {
-    Name                  = "${var.fleet_name}-${each.key}-workspace"
-    "fleetmind:agent_id"  = each.key
-    "fleetmind:fleet_name" = var.fleet_name
-  }
-
-  lifecycle {
-    # Never destroy — this volume holds all agent memory and state.
-    prevent_destroy = true
-  }
-}
-
-resource "aws_volume_attachment" "agent_workspace" {
-  for_each = local.agents_map
-
-  device_name  = "/dev/xvdf"
-  volume_id    = aws_ebs_volume.agent_workspace[each.key].id
-  instance_id  = aws_instance.agent[each.key].id
-  force_detach = false
-}
