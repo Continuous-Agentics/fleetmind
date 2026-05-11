@@ -39,28 +39,23 @@ echo "[bootstrap] Fleet: $FLEET_NAME | Agent: $AGENT_ID | Port: $AGENT_PORT"
 echo "[bootstrap] STAGE 1: dnf update starting at $(date)"
 dnf update -y
 echo "[bootstrap] STAGE 2: dnf install starting at $(date)"
-dnf install -y git curl tar unzip
+dnf install -y git tar unzip jq
 
-# ── Node.js via nvm ───────────────────────────────────────────────────────────
-echo "[bootstrap] STAGE 3: nvm install starting at $(date)"
-export NVM_DIR="/opt/nvm"
-mkdir -p "$NVM_DIR"
+# ── GitHub CLI (matches Carpe bootstrap pattern) ──────────────────────────────
+echo "[bootstrap] STAGE 2b: gh CLI install starting at $(date)"
+dnf install -y 'dnf-command(config-manager)' 2>/dev/null || true
+dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
+dnf install -y gh
 
-curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | NVM_DIR="$NVM_DIR" bash
+# ── Node.js via NodeSource ────────────────────────────────────────────────────
+# Simpler than nvm; system-wide install; matches the pattern used by
+# Carpe's working bootstrap.
+echo "[bootstrap] STAGE 3: NodeSource repo setup at $(date)"
+curl -fsSL "https://rpm.nodesource.com/setup_$${NODE_VERSION}.x" | bash -
+echo "[bootstrap] STAGE 4: nodejs install starting at $(date)"
+dnf install -y nodejs
 
-export NVM_DIR="$NVM_DIR"
-source "$NVM_DIR/nvm.sh"
-
-echo "[bootstrap] STAGE 4: node install starting at $(date)"
-nvm install "$NODE_VERSION"
-nvm alias default "$NODE_VERSION"
-nvm use default
-
-NODE_BIN=$(dirname "$(which node)")
-
-echo "export NVM_DIR=\"$NVM_DIR\"" >> /etc/profile.d/nvm.sh
-echo "source \"\$NVM_DIR/nvm.sh\""  >> /etc/profile.d/nvm.sh
-
+NODE_BIN="/usr/bin"
 echo "[bootstrap] Node $(node --version) installed at $NODE_BIN"
 
 # ── AWS CLI v2 ────────────────────────────────────────────────────────────────
@@ -155,7 +150,6 @@ StartLimitBurst=5
 StartLimitIntervalSec=60
 
 Environment=HOME=/home/ec2-user
-Environment=NVM_DIR=$NVM_DIR
 Environment=PATH=$NODE_BIN:/usr/local/bin:/usr/bin:/bin
 
 # Fetch fresh secrets before each start (idempotent)
