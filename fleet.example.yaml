@@ -100,6 +100,30 @@ agents:
       # `orchestrator: true` above is what marks this agent as a PM in the schema.
       delegation:
         worker_bots: [pixel, forge]
+        # Recurring sweep jobs seeded into the PM bot's OpenClaw cron scheduler.
+        # `fleetmind deploy` writes these into ~/.openclaw/cron/jobs.json on the
+        # PM instance — no AWS infrastructure required. Jobs survive gateway
+        # restarts and are visible via `openclaw cron list` on the PM instance.
+        #
+        # Each sweep fires an isolated agent turn with message "WORKER_SWEEP: <worker_id>"
+        # on the configured schedule (every 5 min by default). The PM bot's
+        # WORKER_SWEEP procedure (see openclaw/pm-bot/workspace/AGENTS.md) polls
+        # the worker's in-flight tasks and closes the loop on any terminal updates.
+        #
+        # Seeding is idempotent: re-running `fleetmind deploy` skips jobs whose
+        # name is already registered in jobs.json, so manual edits via
+        # `openclaw cron edit` are preserved across deploys.
+        sweeps:
+          - name: conductor-sweep-pixel
+            worker_id: pixel
+            every: 5m
+            model: haiku         # cost-optimised; same tier as heartbeat jobs
+            description: "Poll Pixel's in-flight tasks for terminal status updates"
+          - name: conductor-sweep-forge
+            worker_id: forge
+            every: 5m
+            model: haiku
+            description: "Poll Forge's in-flight tasks for terminal status updates"
 
     - id: pixel
       name: Pixel

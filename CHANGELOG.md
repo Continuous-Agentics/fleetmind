@@ -6,6 +6,26 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **WORKER_SWEEP cron seeding** — PM bots can now declare recurring sweep jobs
+  directly in `fleet.yaml` under `delegation.sweeps`. `fleetmind deploy` seeds
+  them idempotently into `~/.openclaw/cron/jobs.json` on the PM instance.
+  No new AWS infrastructure required — scheduling is fully handled by the
+  OpenClaw gateway's built-in cron scheduler.
+  - New `CronSweepSchema` in `src/config/schema.ts` (`name`, `worker_id`,
+    `every` | `cron_expr`, `tz`, `model`, `description`).
+  - `provisioner.ts` `seedCronSweeps()` function: reads existing `jobs.json`,
+    skips already-registered names (idempotent), appends new sweep jobs,
+    writes atomically (temp file + rename).
+  - `diffFleet()` reports sweep additions in `fleetmind diff` output.
+  - Sweep job IDs are deterministic (SHA-256 of `fleet:agent:sweep-name`)
+    so re-deploys on fresh instances produce the same ID and run history
+    remains coherent.
+  - `fleet.example.yaml` updated with a `sweeps:` example block.
+  - `openclaw/pm-bot/workspace/AGENTS.md` documents the `WORKER_SWEEP` procedure.
+  - `docs/integration/delegation.md` Step 4 replaced with sweep configuration guide.
+
 ## [0.3.0] — 2026-05-08
 
 ### Added
