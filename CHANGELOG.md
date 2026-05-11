@@ -6,6 +6,22 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Per-agent Anthropic API key secret** — The Anthropic API key is now provisioned
+  per agent at `fleetmind/agents/<name>/anthropic` (was a single shared secret at
+  `fleetmind/shared/anthropic`). Matches the existing per-agent Slack token pattern.
+  The per-agent IAM role already granted `agents/<name>/*` access, so no IAM change
+  was required. After deploy, populate each new secret with:
+  ```
+  aws secretsmanager put-secret-value \
+    --secret-id fleetmind/agents/<name>/anthropic \
+    --secret-string '{"ANTHROPIC_API_KEY":"sk-ant-..."}'
+  ```
+  The old `fleetmind/shared/anthropic` secret can be deleted manually after migration.
+  Files changed: `secrets.tf`, `outputs.tf`, `user_data/agent_bootstrap.sh.tpl`.
+  Deleted: `user_data/bootstrap.sh.tpl` (legacy single-host bootstrap, unreferenced).
+
 ### Added
 
 - **WORKER_SWEEP cron seeding** — PM bots can now declare recurring sweep jobs

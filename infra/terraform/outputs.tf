@@ -41,10 +41,10 @@ output "rds_endpoint" {
 }
 
 output "secrets_arns" {
-  description = "Secrets Manager ARNs."
+  description = "Secrets Manager ARNs — slack and anthropic keys per agent."
   value = merge(
-    { for k, v in aws_secretsmanager_secret.agent_slack : "agent_${k}" => v.arn },
-    { shared_anthropic = aws_secretsmanager_secret.anthropic.arn }
+    { for k, v in aws_secretsmanager_secret.agent_slack : "${k}_slack" => v.arn },
+    { for k, v in aws_secretsmanager_secret.agent_anthropic : "${k}_anthropic" => v.arn }
   )
 }
 
