@@ -218,9 +218,10 @@ describe("seedCronSweeps (filesystem)", () => {
       { name: "sweep-pixel", worker_id: "pixel", every: "5m" },
     ]);
 
-    await provisionAgent(fleet, agent, false);
+    // Pass tmpDir as localBase so output goes to tmpDir/rendered/cron/jobs.json
+    await provisionAgent(fleet, agent, false, tmpDir);
 
-    const jobsPath = path.join(tmpDir, "cron", "jobs.json");
+    const jobsPath = path.join(tmpDir, "rendered", "cron", "jobs.json");
     assert.ok(fs.existsSync(jobsPath), "jobs.json should be created");
 
     const f = JSON.parse(fs.readFileSync(jobsPath, "utf-8"));
@@ -235,7 +236,7 @@ describe("seedCronSweeps (filesystem)", () => {
   });
 
   test("preserves existing jobs and only appends new ones", async () => {
-    const cronDir = path.join(tmpDir, "cron");
+    const cronDir = path.join(tmpDir, "rendered", "cron");
     fs.mkdirSync(cronDir, { recursive: true });
     const existingJob = {
       id: "existing-id",
@@ -260,7 +261,7 @@ describe("seedCronSweeps (filesystem)", () => {
       { name: "sweep-forge", worker_id: "forge", every: "5m" }, // new
     ]);
 
-    await provisionAgent(fleet, agent, false);
+    await provisionAgent(fleet, agent, false, tmpDir);
 
     const f = JSON.parse(fs.readFileSync(path.join(cronDir, "jobs.json"), "utf-8"));
     assert.equal(f.jobs.length, 2, "should have original + new job");
@@ -279,9 +280,9 @@ describe("seedCronSweeps (filesystem)", () => {
       { name: "sweep-pixel", worker_id: "pixel", every: "5m" },
     ]);
 
-    await provisionAgent(fleet, agent, true /* dryRun */);
+    await provisionAgent(fleet, agent, true /* dryRun */, tmpDir);
 
-    const jobsPath = path.join(tmpDir, "cron", "jobs.json");
+    const jobsPath = path.join(tmpDir, "rendered", "cron", "jobs.json");
     assert.ok(!fs.existsSync(jobsPath), "jobs.json should NOT be created on dry run");
   });
 
@@ -292,9 +293,9 @@ describe("seedCronSweeps (filesystem)", () => {
       orchestrator: false,
     } as unknown as AgentConfig;
 
-    await provisionAgent(fleet, workerAgent, false);
+    await provisionAgent(fleet, workerAgent, false, tmpDir);
 
-    const jobsPath = path.join(tmpDir, "cron", "jobs.json");
+    const jobsPath = path.join(tmpDir, "rendered", "cron", "jobs.json");
     assert.ok(!fs.existsSync(jobsPath), "worker bot should not get cron seeding");
   });
 
@@ -305,17 +306,17 @@ describe("seedCronSweeps (filesystem)", () => {
     ]);
 
     // First deploy
-    await provisionAgent(fleet, agent, false);
+    await provisionAgent(fleet, agent, false, tmpDir);
     const first = JSON.parse(
-      fs.readFileSync(path.join(tmpDir, "cron", "jobs.json"), "utf-8")
+      fs.readFileSync(path.join(tmpDir, "rendered", "cron", "jobs.json"), "utf-8")
     );
     const firstId = first.jobs[0].id;
 
-    // Wipe the cron dir and re-deploy (simulates a fresh instance)
-    fs.rmSync(path.join(tmpDir, "cron"), { recursive: true, force: true });
-    await provisionAgent(fleet, agent, false);
+    // Wipe the rendered dir and re-deploy (simulates a fresh instance)
+    fs.rmSync(path.join(tmpDir, "rendered", "cron"), { recursive: true, force: true });
+    await provisionAgent(fleet, agent, false, tmpDir);
     const second = JSON.parse(
-      fs.readFileSync(path.join(tmpDir, "cron", "jobs.json"), "utf-8")
+      fs.readFileSync(path.join(tmpDir, "rendered", "cron", "jobs.json"), "utf-8")
     );
     const secondId = second.jobs[0].id;
 

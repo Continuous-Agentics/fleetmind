@@ -1,3 +1,4 @@
+import path from "node:path";
 import { Command } from "commander";
 import { loadFleet } from "../../config/loader.js";
 import { provisionFleet } from "../../runtime/provisioner.js";
@@ -13,13 +14,20 @@ export function registerDeploy(program: Command): void {
     .action((fleetArg: string | undefined, opts) => {
       const fleetFile = fleetArg ?? "fleet.yaml";
       try {
+        const localBase = process.cwd();
         const fleet = loadFleet(fleetFile);
-        provisionFleet(fleet, opts.dryRun ?? false);
+        provisionFleet(fleet, opts.dryRun ?? false, localBase);
 
         if (opts.render !== false && !opts.dryRun) {
           const written = writeOutputs(fleet);
           for (const [name, p] of Object.entries(written)) {
             log.ok(`Rendered ${name} → ${p}`);
+          }
+          // Show where workspace directories were written so operators know
+          // exactly where to look (and what to SCP to EC2).
+          const wsBase = path.join(localBase, "rendered", "workspaces");
+          for (const agent of fleet.agents.list) {
+            log.ok(`Rendered workspace:${agent.id} → ${path.join(wsBase, agent.id)}/`);
           }
         }
 
