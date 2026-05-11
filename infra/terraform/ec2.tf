@@ -38,9 +38,12 @@ resource "aws_instance" "agent" {
 
   ami                    = local.ami_id
   instance_type          = each.value.instance_type
-  subnet_id              = local.public_subnets[0]
-  vpc_security_group_ids = [aws_security_group.fleet.id]
-  iam_instance_profile   = aws_iam_instance_profile.agent[each.key].name
+  # Agents go in private subnets — they only need outbound access (Slack Socket
+  # Mode + AWS API via NAT). No public IP required.
+  subnet_id                   = local.private_subnets[index(var.agent_names, each.key) % 2]
+  associate_public_ip_address = false
+  vpc_security_group_ids      = [aws_security_group.fleet.id]
+  iam_instance_profile        = aws_iam_instance_profile.agent[each.key].name
 
   root_block_device {
     volume_type           = "gp3"
