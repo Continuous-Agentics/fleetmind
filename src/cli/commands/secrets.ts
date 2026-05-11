@@ -2,7 +2,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { saveSecret, listSecretKeys, exportSecrets } from "../../utils/secrets.js";
 import { log } from "../../utils/log.js";
-import { populateSecrets, printResults, loadEnvFile } from "./populate.js";
+import { populateSecrets, printResults, loadEnvFile, promptHidden, promptConfirm } from "./populate.js";
 
 export function registerSecrets(program: Command): void {
   const secrets = program
@@ -47,6 +47,7 @@ export function registerSecrets(program: Command): void {
     .option("--from <path>", "Load env vars from a .env-style file (does not override existing env)")
     .option("--agent <id>", "Populate only this agent (repeatable)", (val: string, prev: string[]) => [...prev, val], [] as string[])
     .option("--region <region>", "AWS region (default: delegation.aws_region from fleet.yaml or AWS env)")
+    .option("-i, --interactive", "Prompt for each missing credential interactively (hidden input)", false)
     .action(async (opts) => {
       try {
         const env: Record<string, string> = { ...process.env } as Record<string, string>;
@@ -62,6 +63,7 @@ export function registerSecrets(program: Command): void {
           from: opts.from,
           agent: opts.agent as string[],
           region: opts.region,
+          interactive: opts.interactive as boolean,
         });
         printResults(results, opts.dryRun, env);
       } catch (err: unknown) {
