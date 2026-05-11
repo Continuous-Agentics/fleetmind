@@ -485,6 +485,10 @@ Load these only when the task you're handling needs them:
 - *[references/active-delegations-format.md](references/active-delegations-format.md)* —
   exact block template for `memory/active-delegations.md`, field semantics, and
   the reopen-on-reship procedure.
+- *[references/envelope-template.md](references/envelope-template.md)* —
+  canonical delegation envelope shape, multi-worker channel discipline
+  (never @-mention non-recipient workers in the body), and what to keep out
+  of envelopes.
 - *[references/sub-agent-task-templates.md](references/sub-agent-task-templates.md)* —
   canonical, copy-pasteable `task:` briefs for every delegation-lifecycle
   sub-agent (close-the-loop, In-Review, signoff, blocked). Each template embeds
@@ -532,4 +536,7 @@ Load these only when the task you're handling needs them:
     reference the file; no ad-hoc composition.
   - `active-delegations-format.md` added to references with reopen-on-reship
     procedure.
+  - `envelope-template.md` added to references: canonical envelope shape,
+    multi-worker channel discipline (never @-mention non-recipient workers in
+    the envelope body — they wake on every mention), and the keep-it-out list.
 - **1.0.0** — Initial release.
