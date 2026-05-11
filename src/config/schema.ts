@@ -124,6 +124,19 @@ export const DelegationAgentSchema = z.object({
   sweeps: z.array(CronSweepSchema).optional(),
 });
 
+/**
+ * Optional per-agent Anthropic config.
+ *
+ * api_key may be a ${VAR} placeholder or a literal value.
+ * Resolution order for `fleetmind secrets populate`:
+ *   1. ${<AGENT_ID_UPPER>_ANTHROPIC_API_KEY} env var
+ *   2. This field (resolved from env if it's a placeholder)
+ *   3. Fleet-wide ${ANTHROPIC_API_KEY} env var
+ */
+export const AnthropicAgentSchema = z.object({
+  api_key: z.string().optional(),
+});
+
 export const AgentSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -133,6 +146,8 @@ export const AgentSchema = z.object({
   model: z.string().optional(),
   persona: PersonaSchema.default({}),
   slack: SlackAccountSchema,
+  /** Optional per-agent Anthropic configuration. */
+  anthropic: AnthropicAgentSchema.optional(),
   skills: z.array(SkillRefSchema).default([]),
   plugins: z.array(z.string()).optional(),
   agent_to_agent: AgentToAgentSchema.default({}),
@@ -244,6 +259,7 @@ export type DelegationAgentConfig = z.infer<typeof DelegationAgentSchema>;
 export type SkillSource = z.infer<typeof SkillSourceSchema>;
 export type SkillRef = { name: string; source: SkillSource; author?: string; version?: string };
 export type SlackAccount = z.infer<typeof SlackAccountSchema>;
+export type AnthropicAgentConfig = z.infer<typeof AnthropicAgentSchema>;
 export type AgentConfig = z.infer<typeof AgentSchema>;
 export type AgentDefaults = z.infer<typeof AgentDefaultsSchema>;
 export type SkillsRepo = z.infer<typeof SkillsRepoSchema>;
