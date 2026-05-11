@@ -103,3 +103,19 @@ variable "enable_rds" {
   type        = bool
   default     = false
 }
+
+# ── Per-agent overrides (optional) ────────────────────────────────────────────
+# All default to empty maps so existing deployments are unaffected.
+# Use these in tfvars to give specific agents different sizing.
+
+variable "agent_instance_types" {
+  description = "Per-agent EC2 instance type overrides (map of agent_id → instance_type). Falls back to var.instance_type for any agent not listed."
+  type        = map(string)
+  default     = {}
+}
+
+variable "agent_volume_sizes_gb" {
+  description = "Per-agent EBS workspace volume size in GB (map of agent_id → size). Falls back to var.workspace_volume_size_gb for any agent not listed."
+  type        = map(number)
+  default     = {}
+}
