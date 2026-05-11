@@ -21,4 +21,4 @@ agent_orchestrators = {
 # OpenClaw session key for terminal-wake routing.
 # Format: agent:main:slack:channel:<channel_id>
 # REPLACE: set this to the Slack channel ID where Conductor lives, e.g. C0ABC123XYZ
-wake_target_session_key = "agent:main:slack:channel:REPLACE_WITH_CHANNEL_ID"
+wake_target_session_key = "agent:main:slack:channel:C0B2NNJEFKR"
