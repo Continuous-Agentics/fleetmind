@@ -5,6 +5,17 @@
 # Commit fleet.example.yaml instead.
 #
 # Deploy with: fleetmind deploy fleet.yaml
+#
+# Infrastructure note: each agent in this fleet gets its OWN EC2 instance and
+# EBS workspace volume ("one EC2 per agent, one gateway per EC2"). To override
+# sizing for specific agents, pass per-agent maps in fleet.auto.tfvars or a
+# custom .tfvars file:
+#
+#   agent_instance_types = { conductor = "t3.large", forge = "t3.medium" }
+#   agent_volume_sizes_gb = { conductor = 60 }
+#
+# Defaults (var.instance_type = t3.medium, var.workspace_volume_size_gb = 40)
+# apply for any agent not listed in those maps.
 
 # ── Metadata ──────────────────────────────────────────────────────────────────
 fleet:

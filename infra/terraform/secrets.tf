@@ -59,8 +59,7 @@ locals {
 
   anthropic_placeholder = <<-JSON
     {
-      "ANTHROPIC_API_KEY": "REPLACE_ME_sk-ant-...",
-      "DATABASE_URL": "POPULATED_AFTER_RDS_APPLY"
+      "ANTHROPIC_API_KEY": "REPLACE_ME_sk-ant-..."
     }
   JSON
 }
