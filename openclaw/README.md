@@ -11,23 +11,33 @@ workspace lives at `OPENCLAW_STATE_DIR/workspace/`.
 
 ```
 openclaw/
-├── INTEGRATION.md           # how fleetmind composes the gateway from fleet.yaml
+├── INTEGRATION.md               # how fleetmind composes the gateway from fleet.yaml
 │
-├── pm-bot/                  # PM-bot role template (delegation-enabled)
-│   └── workspace/           # SOUL/AGENTS snippets composed into orchestrator agents
+├── pm-bot/                      # PM-bot role template (delegation-enabled)
+│   └── workspace/               # SOUL/AGENTS snippets composed into orchestrator agents
 │
-├── worker-bot/              # worker-bot role template
-│   └── workspace/           # SOUL/AGENTS snippets composed into specialist agents
+├── worker-bot/                  # generic worker-bot role template
+│   └── workspace/               # SOUL/AGENTS snippets composed into specialist agents
 │
-├── skills/                  # role-aware skills shipped with fleetmind
-│   ├── bot-delegation/      # PM-bot skill: emit envelope, create task, narrative,
-│   │                        # query, transition lifecycle
-│   └── bot-reception/       # worker-bot skill: parse envelope, ack/ship/block,
-│                            # write narratives
+├── backend-worker-bot/          # backend specialist role template
+│   └── workspace/               # worker-bot base + backend discipline
+│                                # (idempotency, timeouts, observability, schema-as-interface,
+│                                #  IaC-only infra, integration tests with service stubs)
 │
-├── orchestrator/            # legacy single-bot agent template (pre-PR #2)
-├── frontend-bot/            # legacy single-bot agent template (pre-PR #2)
-└── api-bot/                 # legacy single-bot agent template (pre-PR #2)
+├── frontend-worker-bot/         # frontend specialist role template
+│   └── workspace/               # worker-bot base + frontend discipline
+│                                # (accessibility, bundle hygiene, component tests,
+│                                #  error boundaries, UI decision docs)
+│
+├── skills/                      # role-aware skills shipped with fleetmind
+│   ├── bot-delegation/          # PM-bot skill: emit envelope, create task, narrative,
+│   │                            # query, transition lifecycle
+│   └── bot-reception/           # worker-bot skill: parse envelope, ack/ship/block,
+│                                # write narratives
+│
+├── orchestrator/                # legacy single-bot agent template (pre-PR #2)
+├── frontend-bot/                # legacy single-bot agent template (pre-PR #2)
+└── api-bot/                     # legacy single-bot agent template (pre-PR #2)
 ```
 
 > The `orchestrator/`, `frontend-bot/`, and `api-bot/` directories predate
@@ -54,6 +64,25 @@ openclaw/
 Skills shipped under `openclaw/skills/` (such as `bot-delegation` and
 `bot-reception`) are first-party fleetmind skills and are picked up
 automatically when the relevant role and `delegation.enabled` are set.
+
+## Choosing a worker template
+
+Three worker templates are available; pick at deploy time:
+
+| Template dir | Use when… |
+|---|---|
+| `worker-bot/` | specialty not determined, or you want a clean base to overlay |
+| `backend-worker-bot/` | agent will build APIs, service handlers, data models, IaC |
+| `frontend-worker-bot/` | agent will build UI, components, client-side state |
+
+Each specialty template is a superset of `worker-bot/` — same delegation
+protocol, same voice discipline, plus ~20–30 lines of specialty-specific
+rules. Operator selects which template seeds an agent's workspace at
+deploy time via `fleet.yaml` (`agents.list[].role`).
+
+**Long-term:** specialty-overlay merging (Option Y) would let workers
+compose `worker-bot/` base + a specialty overlay without duplication.
+Tracked as a future fleetmind feature.
 
 ## Adding to a role template
 

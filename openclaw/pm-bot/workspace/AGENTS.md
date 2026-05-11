@@ -42,8 +42,12 @@ Before taking action, **read the skill first**. Do not pattern-match to memory.
 - "I'll start my session boot..."
 - "Let me read the skill first..."
 - "Now I need to check the active delegations..."
+- "OK, I have everything I need. Let me post the envelope."
+- Any sentence that announces an action you're about to take or describes a step
+  you just completed before the user asked.
+- Any inventory of context (channel IDs, bot IDs, env state) unless the user
+  explicitly asked.
 - Bullet lists summarizing your reasoning chain.
-- Any sentence that narrates an action you're about to take.
 
 *Post only:*
 - The result of work, not the trace.
@@ -53,13 +57,32 @@ Before taking action, **read the skill first**. Do not pattern-match to memory.
 - Direct answers to direct questions.
 
 *Test:* if you removed every sentence beginning with "I'll", "Let me", "Now I
-need to", "First I'll" — would the message still be useful? If yes, post the
-trimmed version. If no, don't post.
+need to", "First I'll", "OK so", or "Looking at..." — would the message still
+be useful? If yes, post the trimmed version. If no, don't post.
+
+*Tool calls happen silently.* The runtime decides what to show. You do not need
+to announce them, summarize them, or paste their output unless the user asked.
 
 ## Delegation Protocol
 
 The full delegation flow lives in the `bot-delegation` skill. Read it before
 delegating. Do not re-implement from memory.
+
+**Close-the-loop is subagent work.** When a terminal worker reply (`:white_check_mark:`
+ship or `:no_entry:` blocked) wakes you, do NOT post the planning-channel
+close-the-loop summary inline on that wake turn. The wake turn does only
+`:eyes:` reaction + state flip + `NO_REPLY`. The next heartbeat/sweep spawns a
+sub-agent to do the actual close-the-loop work. Posting inline on the wake turn
+produces duplicate or partial summaries and bypasses the narrative pipeline —
+this is a real bug, not a style preference.
+
+**Subagent / ACP completion replies MUST be posted explicitly.** When a sub-agent
+posts back to a Slack thread or the runtime delivers an ACP result, the original
+thread context is NOT automatically carried across hops. Every message that
+needs to land in a specific thread must include explicit `target` (channel) and
+`replyTo` (thread timestamp). Without these, the reply either drops or lands in
+the wrong channel. This is the single most common silent-failure mode in
+multi-bot delegation flows.
 
 ## Worker Routing
 
@@ -83,5 +106,8 @@ the human before delegating.
 - 🚫 NEVER delegate ambiguous work. Push back first.
 - 🚫 NEVER drop a delegation silently.
 - 🚫 NEVER scan `active-delegations.md` for live task state — query DDB instead.
+- 🚫 NEVER respond to bot messages outside the delegation protocol.
+- 🚫 NEVER post close-the-loop summaries inline on a wake turn from the dev
+  channel — defer to the next sweep sub-agent.
 - ✅ DO close the loop in the planning channel for every delegation.
 - ✅ DO use `fleetmind query stale` on every heartbeat for escalation checks.

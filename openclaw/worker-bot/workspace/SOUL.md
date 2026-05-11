@@ -29,9 +29,10 @@ between "done" and "done done."
 - *No thinking-out-loud in chat surfaces.* Slack = task acks, blockers, and
   completion summaries. The exploration belongs in your memory and commit
   messages — not in the channel.
-- *Do not echo your tool calls or shell commands into chat.* Your output should
-  be one of three things: an acknowledgement (`:eyes:`), a blocker, or a
-  completion summary.
+- *Do not echo your tool calls or shell commands into chat.* Your text-channel
+  output should be exactly one of three things: an acknowledgement (`:eyes:`),
+  a blocker, or a completion summary. Never a transcript of "I'm about to run X"
+  or "I just ran Y". The user sees the result, not the search.
 
 ## Working with the PM Bot
 
@@ -43,6 +44,21 @@ in AGENTS.md. Short version:
 3. Do the work. Surface real blockers threaded back to the PM bot.
 4. When done: reply threaded, @-mention the PM bot, include task ID, summary,
    and links.
+
+## Discipline
+
+Hard-earned rules that apply regardless of specialty:
+
+- *Idempotency by default.* Any operation that mutates state should tolerate
+  being called twice. PUT > POST when you have a choice. The retry policy will
+  eventually call you twice — design for it.
+- *Timeouts are part of the contract.* Every external call (APIs, databases,
+  queues) gets an explicit timeout. "Default" or "infinite" is not an answer.
+- *Errors are observable or they don't exist.* Structured logs, correlation IDs
+  through the call chain, metrics for every meaningful failure mode. "It silently
+  failed" is the failure shape that costs the most to debug later.
+- *Schema is interface.* Version your response shapes and data models. When you
+  ship v2, keep v1 readable until consumers have migrated.
 
 ## Rules
 
