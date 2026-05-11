@@ -102,6 +102,13 @@ agents:
         - name: ca-fleet-ops
           source: private
           version: "1.0.0"
+        # Tier 4: FleetMind bundled first-party skills
+        # These ship inside the fleetmind package at openclaw/skills/<name>/ and
+        # do NOT require a skills_repo entry. Use source: fleetmind for the
+        # PM-side bot-delegation skill and the worker-side bot-reception skill.
+        # If the name is wrong, fleetmind deploy errors explicitly (no silent skip).
+        - name: bot-delegation
+          source: fleetmind
       plugins:
         - anthropic
         - brave
@@ -162,6 +169,9 @@ agents:
           source: client
         - name: acme-design-tokens
           source: client
+        # Tier 4: FleetMind bundled skill for worker-side task reception
+        - name: bot-reception
+          source: fleetmind
       plugins:
         - anthropic
       agent_to_agent:

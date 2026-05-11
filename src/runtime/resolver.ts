@@ -1,18 +1,50 @@
 /**
- * FleetMind skill resolver — three-tier skill source resolution.
+ * FleetMind skill resolver — four-tier skill source resolution.
  *
- * Tier 1: clawhub  — public skills on ClaWHub, installed via the `clawhub` CLI
- * Tier 2: private  — Continuous Agentics proprietary library (GitHub Packages / npm private)
- * Tier 3: client   — skills in the client's own skills_repo (default)
+ * Tier 1: clawhub   — public skills on ClaWHub, installed via the `clawhub` CLI
+ * Tier 2: private   — Continuous Agentics proprietary library (GitHub Packages / npm private)
+ * Tier 3: client    — skills in the client's own skills_repo (default)
+ * Tier 4: fleetmind — first-party skills bundled with the fleetmind package
+ *                     (openclaw/skills/<name>/), resolved via the package root.
  */
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import type { Fleet, SkillRef, PrivateRegistry } from "../config/schema.js";
 import { log } from "../utils/log.js";
 
 const CLIENT_CACHE = path.join(process.env.HOME ?? "/tmp", ".fleetmind", "skills-cache");
+
+// ---------------------------------------------------------------------------
+// Package-root detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute the fleetmind package root once and cache it.
+ *
+ * Works in both execution contexts:
+ *   - Dev / tsx:  src/runtime/resolver.ts  → go up 2 dirs → package root
+ *   - Built CLI:  dist/runtime/resolver.js → go up 2 dirs → package root
+ *
+ * The bundled first-party skills live at <packageRoot>/openclaw/skills/<name>/.
+ */
+function resolveFleetmindPackageRoot(): string {
+  // import.meta.url is the file:// URL of *this* module (resolver.ts / resolver.js).
+  // Going up two directories from src/runtime/ or dist/runtime/ always yields the
+  // package root regardless of CWD or where the operator's fleet.yaml lives.
+  const thisFile = fileURLToPath(import.meta.url);
+  return path.resolve(path.dirname(thisFile), "..", "..");
+}
+
+let _packageRoot: string | undefined;
+
+/** Cached package-root path. */
+export function fleetmindPackageRoot(): string {
+  if (!_packageRoot) _packageRoot = resolveFleetmindPackageRoot();
+  return _packageRoot;
+}
 
 // ---------------------------------------------------------------------------
 // Tier 1: ClaWHub — via the `clawhub` CLI
@@ -136,6 +168,47 @@ async function resolvePrivate(
 }
 
 // ---------------------------------------------------------------------------
+// Tier 4: FleetMind bundled first-party skills
+// ---------------------------------------------------------------------------
+
+/**
+ * FleetMind first-party skills are shipped inside the fleetmind package itself
+ * at `openclaw/skills/<skill.name>/`. They are NOT in the client's skills_repo
+ * and do NOT require any CLI tooling beyond fleetmind itself.
+ *
+ * Use `source: fleetmind` in fleet.yaml for bundled skills like bot-delegation
+ * and bot-reception. If the skill name is wrong, an explicit error is raised
+ * (not a silent skip) because a typo in fleet.yaml is always a user error.
+ */
+async function resolveFleetmind(
+  skill: SkillRef,
+  destDir: string,
+  dryRun: boolean
+): Promise<boolean> {
+  const pkgRoot = fleetmindPackageRoot();
+  const src = path.join(pkgRoot, "openclaw", "skills", skill.name);
+
+  if (!fs.existsSync(src)) {
+    log.error(
+      `  [fleetmind] Skill "${skill.name}" not found in bundled skills at ${src}. ` +
+      `Check the skill name — bundled skills: bot-delegation, bot-reception.`
+    );
+    return false;
+  }
+
+  if (dryRun) {
+    log.dim(`  (dry-run) Would copy bundled skill ${skill.name} from ${src}`);
+    return true;
+  }
+
+  const dest = path.join(destDir, skill.name);
+  if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true });
+  fs.cpSync(src, dest, { recursive: true });
+  log.ok(`  [fleetmind] ${skill.name} installed from bundled skills`);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Tier 3: Client skills repo
 // ---------------------------------------------------------------------------
 
@@ -203,6 +276,9 @@ export async function installSkill(
       break;
     case "private":
       await resolvePrivate(skill, destDir, fleet.private_registry, dryRun);
+      break;
+    case "fleetmind":
+      await resolveFleetmind(skill, destDir, dryRun);
       break;
     case "client":
     default:
