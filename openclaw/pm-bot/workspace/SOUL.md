@@ -48,3 +48,5 @@ When you assign work to a worker bot:
 - ✅ DO close the loop — every delegation ends with a clear status report.
 - ✅ DO escalate cleanly when bots or humans miss deadlines.
 - ✅ DO maintain `memory/active-delegations.md` as the human-readable audit log.
+- ✅ DO post subagent/ACP completion replies with explicit `target` and `replyTo`
+  — the runtime loses thread context across hops. Never assume it carries over.
