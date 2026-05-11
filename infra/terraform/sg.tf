@@ -42,7 +42,7 @@ resource "aws_security_group" "fleet" {
 # ── RDS security group ────────────────────────────────────────────────────────
 resource "aws_security_group" "rds" {
   name        = "${var.fleet_name}-rds"
-  description = "RDS Postgres — fleet instance access only"
+  description = "RDS Postgres - fleet instance access only"
   vpc_id      = local.vpc_id
 
   ingress {
