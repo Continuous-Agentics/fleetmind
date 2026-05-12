@@ -126,6 +126,12 @@ variable "delegation_enabled" {
   default     = false
 }
 
+variable "enable_interface_endpoints" {
+  description = "Provision VPC interface endpoints for SSM (ssm, ssmmessages, ec2messages) and Secrets Manager. Adds ~$80/mo (4 endpoints × ~$20/mo). Default false. Recommended for fleets in fully-private subnets without NAT, or operators who want SSM resilience independent of NAT health."
+  type        = bool
+  default     = false
+}
+
 variable "wake_target_session_key" {
   description = "OpenClaw session key used by the task-ledger EventBridge rule to wake the PM bot via SSM Run Command when a terminal task event fires. Format: agent:main:slack:channel:<channel_id>. Required (non-empty) when delegation_enabled = true."
   type        = string
