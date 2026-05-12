@@ -133,10 +133,13 @@ for k, v in combined.items():
     # Basic sanitisation: skip values with newlines/quotes that would break env syntax
     v_str = str(v)
     if "\n" not in v_str and "'" not in v_str:
+        # Canonical name (e.g. SLACK_BOT_TOKEN, ANTHROPIC_API_KEY)
         print(f"{k}={v_str}")
-        # Also emit per-agent-prefixed alias so fleet.yaml refs like
-        # CONDUCTOR_BOT_TOKEN resolve correctly in the gateway config
-        print(f"{agent_upper}_{k}={v_str}")
+        # Per-agent alias for fleet.yaml refs like <AGENT>_BOT_TOKEN, <AGENT>_APP_TOKEN, etc.
+        # Strip a leading SLACK_ so SLACK_BOT_TOKEN -> <AGENT>_BOT_TOKEN to match the convention
+        # used in fleet.yaml. Non-SLACK keys are aliased verbatim (harmless extras).
+        alias_key = k[6:] if k.startswith("SLACK_") else k
+        print(f"{agent_upper}_{alias_key}={v_str}")
 PYEOF
 
 echo "[secrets] Loaded $(wc -l < "$OUT") vars for agent: $AGENT"
