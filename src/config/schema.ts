@@ -147,6 +147,7 @@ export const AgentSchema = z.object({
   emoji: z.string().default("🤖"),
   description: z.string().default(""),
   orchestrator: z.boolean().default(false),
+  role: z.enum(["pm", "backend-worker", "frontend-worker", "worker"]).default("worker"),
   model: z.string().optional(),
   persona: PersonaSchema.default({}),
   slack: SlackAccountSchema,

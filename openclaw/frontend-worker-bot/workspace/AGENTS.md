@@ -1,4 +1,4 @@
-# AGENTS.md — Frontend Worker Bot
+# AGENTS.md — {{NAME}} ({{EMOJI}})
 
 > **Role:** frontend-worker
 > **Specialty:** frontend

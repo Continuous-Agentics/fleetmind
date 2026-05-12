@@ -1,4 +1,4 @@
-# AGENTS.md — Project Manager Bot
+# AGENTS.md — {{NAME}} ({{EMOJI}})
 
 > **Role:** project-manager
 > **State of truth:** DynamoDB task ledger (live); `memory/active-delegations.md` is a human-readable audit log only
