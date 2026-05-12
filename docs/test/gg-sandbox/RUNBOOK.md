@@ -297,7 +297,11 @@ fleetmind render
 This writes to `./rendered/`:
 ```
 rendered/
-  openclaw.json          ← one config covering all agents (see Step 5b)
+  openclaw/
+    conductor/
+      openclaw.json      ← per-agent config for the conductor gateway (see Step 5b)
+    forge/
+      openclaw.json      ← per-agent config for the forge gateway
   fleet.auto.tfvars      ← Terraform variable overrides
   workspaces/
     conductor/           ← SOUL.md, AGENTS.md, IDENTITY.md, USER.md, skills/
@@ -306,27 +310,30 @@ rendered/
     jobs.json            ← cron sweeps for conductor (WORKER_SWEEP jobs)
 ```
 
-Inspect the rendered `openclaw.json` to confirm tokens are baked in (not `${...}` placeholders):
+Inspect the rendered `openclaw.json` for an agent to confirm tokens are placeholders (not baked-in):
 ```bash
-cat rendered/openclaw.json | jq '.channels.slack.accounts'
+cat rendered/openclaw/conductor/openclaw.json | jq '.channels.slack.accounts'
 ```
 
-### 5b. What `openclaw.json` contains
+### 5b. What `openclaw.json` contains — per-agent slices
 
-`renderOpenClawJson()` (in `src/runtime/renderer.ts`) produces a complete per-fleet config covering:
+`fleetmind render` emits one `openclaw.json` **per agent** via `renderAgentOpenClawJson()` (in `src/runtime/renderer.ts`). Each file contains only what that agent's gateway needs — the render-vs-deploy topology mismatch has been resolved.
+
+Per-agent slice contents:
 
 | Section | Contents |
 |---------|----------|
-| `agents.list` | id, name, workspace path (EC2-side), model, `default: true` for orchestrator |
-| `bindings` | Slack accountId → agentId routing, one per agent |
-| `channels.slack.accounts` | botToken, appToken, webhookPath, groupPolicy per Slack account |
-| `channels.slack` | mode, typing/ack reactions, allowBots, historyLimit, streaming |
-| `gateway` | port (18789), mode (local), bind (loopback) |
-| `tools` | profile (coding), agentToAgent allow list, web search (disabled in test fleet) |
-| `session` | dmScope (per-channel-peer) |
-| `hooks.internal` | boot-md, session-memory, command-logger |
-| `plugins.entries` | anthropic: enabled |
-| `commands` | native: auto, nativeSkills: auto, restart: true |
+| `agents.list` | **Only this agent's entry.** `default: true` on the orchestrator only. |
+| `bindings` | **Only this agent's** Slack accountId → agentId routing entry. |
+| `channels.slack.accounts` | **Only this agent's** Slack account (botToken, appToken, webhookPath, groupPolicy). |
+| `tools.agentToAgent.allow` | **Only entries where `from === <this agent>`** — outbound delegation routes only. |
+| `plugins.entries` | **Only this agent's** plugin list (not the union of all agents). |
+| `channels.slack` | mode, typing/ack reactions, allowBots, historyLimit, streaming — shared, unchanged. |
+| `gateway` | port (18789), mode (local), bind (loopback) — shared, unchanged. |
+| `tools` | profile (coding), web search (disabled in test fleet) — shared, unchanged. |
+| `session` | dmScope (per-channel-peer) — shared, unchanged. |
+| `hooks.internal` | boot-md, session-memory, command-logger — shared, unchanged. |
+| `commands` | native: auto, nativeSkills: auto, restart: true — shared, unchanged. |
 
 **What is NOT in `openclaw.json`:**
 - **Anthropic API key** — intentionally absent. Delivered via `EnvironmentFile` from Secrets Manager (`ANTHROPIC_API_KEY`). OpenClaw reads it from environment; no credential entry needed in the config file.
@@ -405,14 +412,13 @@ scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
   -r ./rendered/workspaces/forge \
   ec2-user@$FORGE_IP:/opt/openclaw/workspace/
 
-# SCP openclaw.json to each instance (each agent reads the same fleet config;
-# the gateway uses its own agentId to select the matching binding)
+# SCP per-agent openclaw.json to each instance (each has its own slice)
 scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
-  ./rendered/openclaw.json \
+  ./rendered/openclaw/conductor/openclaw.json \
   ec2-user@$CONDUCTOR_IP:/opt/openclaw/workspace/conductor/.openclaw/openclaw.json
 
 scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
-  ./rendered/openclaw.json \
+  ./rendered/openclaw/forge/openclaw.json \
   ec2-user@$FORGE_IP:/opt/openclaw/workspace/forge/.openclaw/openclaw.json
 
 # SCP cron jobs (conductor only — it's the PM bot)
@@ -444,10 +450,10 @@ for AGENT in conductor forge; do
     ]"
 done
 
-# Push openclaw.json to each instance
+# Push per-agent openclaw.json to each instance (each has its own slice)
 for AGENT in conductor forge; do
   INSTANCE_ID=$(terraform -chdir=infra/terraform output -json instance_ids | jq -r ".$AGENT")
-  B64=$(base64 -w0 ./rendered/openclaw.json)
+  B64=$(base64 -w0 ./rendered/openclaw/${AGENT}/openclaw.json)
   aws ssm send-command \
     --region us-west-2 \
     --instance-ids $INSTANCE_ID \
