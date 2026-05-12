@@ -18,6 +18,7 @@ import { registerTask } from "./commands/task.js";
 import { registerNarrative } from "./commands/narrative.js";
 import { registerQuery } from "./commands/query.js";
 import { registerGithubApp } from "./commands/github-app.js";
+import { registerSelfUpgrade } from "./commands/self-upgrade.js";
 import { registerSlackDiscover, registerSlackManifests } from "./commands/slack.js";
 import { registerPullSelf } from "./commands/pull-self.js";
 
@@ -55,6 +56,7 @@ registerTask(program);
 registerNarrative(program);
 registerQuery(program);
 registerGithubApp(program);
+registerSelfUpgrade(program);
 registerSlackDiscover(program);
 registerSlackManifests(program);
 registerPullSelf(program);
