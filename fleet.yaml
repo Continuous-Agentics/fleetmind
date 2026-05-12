@@ -21,7 +21,7 @@ delegation:
 
 agents:
   defaults:
-    model: anthropic/claude-haiku-4
+    model: anthropic/claude-haiku-4-5
     workspace_base: /opt/openclaw/workspace
     plugins:
       - anthropic
@@ -55,7 +55,7 @@ agents:
           - name: conductor-sweep-forge
             worker_id: forge
             every: 5m
-            model: anthropic/claude-haiku-4
+            model: anthropic/claude-haiku-4-5
 
     - id: forge
       name: Forge
