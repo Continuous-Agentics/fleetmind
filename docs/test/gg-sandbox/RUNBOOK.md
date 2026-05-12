@@ -251,13 +251,12 @@ The gateway process will have `ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_APP
 
 ```bash
 cd /path/to/fleetmind
-
-# Ensure all token env vars are set in your shell (see Prerequisites)
-# The loader expands ${VAR} references in fleet.yaml at parse time,
-# so rendered files will contain actual token values — not placeholders.
-
 fleetmind render
 ```
+
+> **Do NOT export the Slack tokens to your shell before running `fleetmind render`.** The config loader (`src/config/loader.ts:expandEnv`) replaces every `${VAR}` reference in `fleet.yaml` with `process.env[VAR]` at parse time. If `SLACK_BOT_TOKEN` etc. are set in your shell, the literal token values get baked into `rendered/openclaw.json` — a file that then gets shipped to EC2 (and might end up in shell history / scratch dirs / your laptop's backup). With the tokens **unset** at render time, the loader leaves the `${SLACK_BOT_TOKEN}` placeholder strings in the rendered file; the gateway expands them from its own environment at startup (see Step 5b for the full chain).
+>
+> The Anthropic key is never present in `openclaw.json` regardless — the SDK reads `ANTHROPIC_API_KEY` from env directly.
 
 This writes to `./rendered/`:
 ```
@@ -306,6 +305,35 @@ What the renderer currently produces:
 **What is NOT in `openclaw.json`:**
 - **Anthropic API key** — intentionally absent. Delivered via `EnvironmentFile` from Secrets Manager (`ANTHROPIC_API_KEY`). OpenClaw reads it from environment; no credential entry needed in the config file.
 - **Gateway auth** — no `gateway.auth` section. See Step 5c.
+
+#### How Slack secrets get from AWS Secrets Manager into a running gateway
+
+`fleet.yaml` keeps `${SLACK_BOT_TOKEN}` etc. as placeholders. With the tokens unset at render time (see Step 5a callout), `rendered/openclaw.json` keeps those placeholders intact:
+
+```
+"channels": {
+  "slack": {
+    "accounts": {
+      "conductor-fleetmind": {
+        "botToken": "${SLACK_BOT_TOKEN}",
+        "appToken": "${SLACK_APP_TOKEN}",
+        "webhookPath": "/slack/conductor-fleetmind",
+        ...
+      }
+    }
+  }
+}
+```
+
+OpenClaw expands `${VAR}` in any config string at gateway startup (`docs/gateway/configuration-reference.md`). The runtime chain on each EC2:
+
+1. systemd starts `openclaw-<agent>.service`
+2. `ExecStartPre=/usr/local/bin/fetch-agent-secrets` calls Secrets Manager for `${fleet}/agents/${agent_id}/slack` and `${fleet}/agents/${agent_id}/anthropic`, merges JSON into `/run/openclaw-<agent>.env`
+3. `EnvironmentFile=/run/openclaw-<agent>.env` injects `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_SIGNING_SECRET`, `ANTHROPIC_API_KEY` into the gateway process env
+4. Gateway parses `openclaw.json`; `${SLACK_BOT_TOKEN}` etc. are resolved against process env — real tokens never touch disk under the workspace
+5. Anthropic SDK separately reads `ANTHROPIC_API_KEY` from env directly (never referenced in the config file)
+
+Net result: tokens live in AWS Secrets Manager and ephemeral `/run` files; the rendered `openclaw.json` is safe to commit / SCP / inspect.
 
 ### 5c. Onboarding — `openclaw onboard` and why you skip it
 
