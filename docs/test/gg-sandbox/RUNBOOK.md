@@ -97,11 +97,12 @@ After creating each app, collect and export to your shell:
 ```bash
 export CONDUCTOR_BOT_TOKEN="xoxb-..."
 export CONDUCTOR_APP_TOKEN="xapp-..."
-export CONDUCTOR_SIGNING_SECRET="..."
 export FORGE_BOT_TOKEN="xoxb-..."
 export FORGE_APP_TOKEN="xapp-..."
-export FORGE_SIGNING_SECRET="..."
 export ANTHROPIC_API_KEY="sk-ant-..."   # used for both agents in this test fleet
+
+> **Note:** `signing_secret` is not needed for socket-mode setups (what fleetmind uses).
+> It is only required for HTTP request-mode Slack apps. Do not export it.
 ```
 
 > **These env vars must be set for the entire session.** The `fleetmind render` step bakes them into `openclaw.json` at render time (see Step 5). They're also needed for `fleetmind secrets populate` (Step 4).
@@ -269,7 +270,9 @@ cd /path/to/fleetmind   # repo root
 fleetmind secrets populate --interactive --region us-west-2
 ```
 
-The `populate` command reads `fleet.yaml`, identifies the `${VAR}` placeholders in each agent's `slack.bot_token` / `app_token` / `signing_secret` fields, resolves them from your environment, and pushes them to Secrets Manager using the standard key names (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_SIGNING_SECRET`).
+The `populate` command reads `fleet.yaml`, identifies the `${VAR}` placeholders in each agent's `slack.bot_token` and `app_token` fields, resolves them from your environment, and pushes them to Secrets Manager using the standard key names (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`).
+
+> **Note:** `signing_secret` / `SLACK_SIGNING_SECRET` is **not** required for socket-mode bots and is not prompted for or stored.
 
 For the Anthropic key (one per agent in this fleet):
 ```bash
@@ -293,8 +296,7 @@ aws secretsmanager put-secret-value \
   --secret-id "gg-sandbox/agents/conductor/slack" \
   --secret-string "{
     \"SLACK_BOT_TOKEN\":\"$CONDUCTOR_BOT_TOKEN\",
-    \"SLACK_APP_TOKEN\":\"$CONDUCTOR_APP_TOKEN\",
-    \"SLACK_SIGNING_SECRET\":\"$CONDUCTOR_SIGNING_SECRET\"
+    \"SLACK_APP_TOKEN\":\"$CONDUCTOR_APP_TOKEN\"
   }"
 
 # Forge Slack tokens
@@ -303,8 +305,7 @@ aws secretsmanager put-secret-value \
   --secret-id "gg-sandbox/agents/forge/slack" \
   --secret-string "{
     \"SLACK_BOT_TOKEN\":\"$FORGE_BOT_TOKEN\",
-    \"SLACK_APP_TOKEN\":\"$FORGE_APP_TOKEN\",
-    \"SLACK_SIGNING_SECRET\":\"$FORGE_SIGNING_SECRET\"
+    \"SLACK_APP_TOKEN\":\"$FORGE_APP_TOKEN\"
   }"
 ```
 
@@ -315,7 +316,7 @@ At each gateway start, the systemd unit runs `ExecStartPre=/usr/local/bin/fetch-
 2. Merges the two JSON blobs into a flat key=value file at `/run/openclaw-<agent_id>.env`
 3. The systemd `EnvironmentFile=/run/openclaw-<agent_id>.env` directive makes these available to the `openclaw gateway` process
 
-The gateway process will have `ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_SIGNING_SECRET` in its environment at startup. OpenClaw reads the Anthropic API key from the `ANTHROPIC_API_KEY` environment variable natively (standard Anthropic SDK pattern).
+The gateway process will have `ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, and `SLACK_APP_TOKEN` in its environment at startup. OpenClaw reads the Anthropic API key from the `ANTHROPIC_API_KEY` environment variable natively (standard Anthropic SDK pattern). `SLACK_SIGNING_SECRET` is not stored or injected — it is not used by socket-mode bots.
 
 ---
 

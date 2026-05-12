@@ -45,7 +45,6 @@ agents:
         channels: ["C0B2NNJEFKR", "C0B324RF1QW"]  # PM home + delegation channel
         bot_token: "${CONDUCTOR_BOT_TOKEN}"
         app_token: "${CONDUCTOR_APP_TOKEN}"
-        signing_secret: "${CONDUCTOR_SIGNING_SECRET}"
         background_color: "#2C3E50"        # Slack App manifest display colour
         long_description: >
           Conductor is the project-manager bot for Grace's gg-sandbox test fleet (Continuous-Agentics/fleetmind).
@@ -83,7 +82,6 @@ agents:
         channels: ["C0B324RF1QW"]          # delegation channel only
         bot_token: "${FORGE_BOT_TOKEN}"
         app_token: "${FORGE_APP_TOKEN}"
-        signing_secret: "${FORGE_SIGNING_SECRET}"
         background_color: "#8B4513"        # Slack App manifest display colour (role default)
         long_description: >
           Forge is the backend specialty worker bot for Grace's gg-sandbox test fleet

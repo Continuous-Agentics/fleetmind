@@ -38,7 +38,6 @@ export interface PopulateOptions {
 interface AgentSlack {
   bot_token?: string;
   app_token?: string;
-  signing_secret?: string;
   account_id?: string;
 }
 
@@ -182,7 +181,7 @@ export function redact(value: string): string {
 
 export interface SlackResolution {
   ok: boolean;
-  values: { SLACK_BOT_TOKEN?: string; SLACK_APP_TOKEN?: string; SLACK_SIGNING_SECRET?: string };
+  values: { SLACK_BOT_TOKEN?: string; SLACK_APP_TOKEN?: string };
   missing: string[];
 }
 
@@ -203,7 +202,6 @@ export function resolveSlack(
   const fields: Array<{ field: keyof AgentSlack; outKey: keyof SlackResolution["values"] }> = [
     { field: "bot_token", outKey: "SLACK_BOT_TOKEN" },
     { field: "app_token", outKey: "SLACK_APP_TOKEN" },
-    { field: "signing_secret", outKey: "SLACK_SIGNING_SECRET" },
   ];
 
   for (const { field, outKey } of fields) {
@@ -279,7 +277,6 @@ async function resolveSlackInteractive(
   }> = [
     { field: "bot_token", outKey: "SLACK_BOT_TOKEN" },
     { field: "app_token", outKey: "SLACK_APP_TOKEN" },
-    { field: "signing_secret", outKey: "SLACK_SIGNING_SECRET" },
   ];
 
   const values: SlackResolution["values"] = {};
