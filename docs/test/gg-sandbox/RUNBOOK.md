@@ -300,8 +300,19 @@ For each agent that needs GitHub access:
 
 1. Create the GitHub App and generate a private key (see [`docs/GITHUB-APPS.md`](../../GITHUB-APPS.md) for the full creation flow)
 2. Install the app on the agent's project repo and note the Installation ID
-3. Run the store script:
+3. Store the credentials (prefer the CLI; fall back to the bash script if no Node runtime):
 
+**CLI (preferred):**
+```bash
+fleetmind github-app store \
+  --fleet gg-sandbox \
+  --agent <agent_id> \
+  --app-id <app-id> \
+  --installation-id <installation-id> \
+  --pem-file /path/to/private-key.pem
+```
+
+**Bash fallback:**
 ```bash
 infra/scripts/store-bot-github-app.sh \
   --fleet gg-sandbox \

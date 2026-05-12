@@ -17,6 +17,7 @@ import { registerContext } from "./commands/context.js";
 import { registerTask } from "./commands/task.js";
 import { registerNarrative } from "./commands/narrative.js";
 import { registerQuery } from "./commands/query.js";
+import { registerGithubApp } from "./commands/github-app.js";
 
 // Inject stored secrets into env before any command runs
 injectSecrets();
@@ -41,5 +42,6 @@ registerContext(program);
 registerTask(program);
 registerNarrative(program);
 registerQuery(program);
+registerGithubApp(program);
 
 program.parse();

@@ -1,4 +1,7 @@
 #!/bin/bash
+# Note: prefer `fleetmind github-app store` (the TS CLI version) for new
+# deploys. This script is retained for operators without a node runtime.
+#
 # store-bot-github-app.sh — Store a per-agent GitHub App's credentials in SSM
 #
 # Usage:

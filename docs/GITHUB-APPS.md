@@ -130,6 +130,21 @@ On the app's settings page, scroll to **Private keys** and click **Generate a pr
 
 ### Step 4 — Store credentials in SSM
 
+**Preferred (CLI):**
+
+```bash
+fleetmind github-app store \
+  --fleet <fleet_name> \
+  --agent <agent_id> \
+  --app-id <app-id> \
+  --installation-id <installation-id> \
+  --pem-file /path/to/private-key.pem
+```
+
+Add `--dry-run` to preview what would be written without calling AWS.
+
+**Fallback (bash, no Node runtime required):**
+
 ```bash
 infra/scripts/store-bot-github-app.sh \
   --fleet <fleet_name> \
@@ -139,7 +154,7 @@ infra/scripts/store-bot-github-app.sh \
   --pem-file /path/to/private-key.pem
 ```
 
-The script prompts for confirmation before writing. It stores:
+Both methods store:
 - `app-id` and `installation-id` as plain `String` parameters
 - `pem` as a `SecureString` (encrypted with the default SSM KMS key)
 
