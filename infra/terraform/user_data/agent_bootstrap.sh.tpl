@@ -345,6 +345,11 @@ cat > "/etc/systemd/system/openclaw-$AGENT_ID.service" << EOF
 Description=OpenClaw Agent ($AGENT_ID) — $FLEET_NAME fleet
 After=network-online.target
 Wants=network-online.target
+# Workspace config is deployed by 'fleetmind push fleet' (after bootstrap completes).
+# systemd silently skips start until that file exists, avoiding a restart-loop on
+# first boot before the operator's first push. Once pull-self ships the workspace,
+# 'systemctl restart' (which pull-self --restart triggers) starts the service fresh.
+ConditionPathExists=$WORKSPACE_DIR/.openclaw/openclaw.json
 
 [Service]
 Type=simple
@@ -376,11 +381,11 @@ EOF
 
 echo "[bootstrap] STAGE 10: systemctl daemon-reload at $(date)"
 systemctl daemon-reload
-echo "[bootstrap] STAGE 11: systemctl enable at $(date)"
-systemctl enable "openclaw-$AGENT_ID"
-echo "[bootstrap] STAGE 12: systemd unit installed and enabled; service NOT started"
-echo "[bootstrap]   To start: systemctl start openclaw-$AGENT_ID"
-echo "[bootstrap]   (Run after deploying workspace via: fleetmind deploy)"
+echo "[bootstrap] STAGE 11: systemctl enable --now at $(date)"
+systemctl enable --now "openclaw-$AGENT_ID" || true
+echo "[bootstrap] STAGE 12: systemd unit installed and enabled"
+echo "[bootstrap]   ConditionPathExists gates start until 'fleetmind push fleet' ships the workspace."
+echo "[bootstrap]   On first push, 'fleetmind push fleet --restart' triggers the initial start."
 
 # ── STAGE 13: amazon-ssm-agent diagnostic ─────────────────────────────────────
 # AL2023 console output doesn't surface systemd unit state by default. Dump
