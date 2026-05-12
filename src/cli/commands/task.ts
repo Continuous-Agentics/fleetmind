@@ -46,6 +46,7 @@ export interface TaskLedgerLike {
   ackTask(taskId: string, worker: string, project?: string): Promise<void>;
   shipTask(taskId: string, worker: string, project?: string): Promise<void>;
   blockTask(taskId: string, worker: string, project?: string): Promise<void>;
+  unblockTask(taskId: string, worker: string, reason?: string, project?: string): Promise<void>;
   signoffTask(taskId: string, project?: string): Promise<void>;
   abandonTask(taskId: string, project?: string): Promise<void>;
   mergeTask(taskId: string, project?: string): Promise<void>;
@@ -73,6 +74,16 @@ export interface WorkerTaskOptions {
   worker: string;
   project?: string;
   fleet?: string;
+  json?: boolean;
+}
+
+export interface UnblockTaskOptions {
+  taskId: string;
+  worker: string;
+  reason?: string;
+  project?: string;
+  fleet?: string;
+  region?: string;
   json?: boolean;
 }
 
@@ -201,6 +212,14 @@ export async function blockTask(
   ledger: TaskLedgerLike
 ): Promise<void> {
   return ledger.blockTask(opts.taskId, opts.worker, opts.project);
+}
+
+/** Unblock a task (blocked → accepted). */
+export async function unblockTask(
+  opts: UnblockTaskOptions,
+  ledger: TaskLedgerLike
+): Promise<void> {
+  return ledger.unblockTask(opts.taskId, opts.worker, opts.reason, opts.project);
 }
 
 /** Sign off on a shipped task (shipped → signed_off). */
@@ -345,6 +364,31 @@ export function registerTask(program: Command): void {
           opts.json
             ? { task_id: opts.taskId, status: "blocked" }
             : `Task ${opts.taskId} blocked (status: blocked)`,
+          opts.json ?? false
+        );
+      } catch (err) { handleError(err); }
+    });
+
+  // ── unblock ──────────────────────────────────────────────────────────────
+
+  task
+    .command("unblock")
+    .description("Unblock a task (worker: blocked→accepted), ready to ship again")
+    .requiredOption("--task-id <hex>", "Task ID (8-char hex)")
+    .requiredOption("--worker <id>", "Worker bot identifier")
+    .option("--reason <text>", "Why the block was resolved (stored in unblocked_reason)")
+    .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
+    .option("--region <region>", "AWS region (default us-west-2)")
+    .option("--json", "Output JSON")
+    .action(async (opts: UnblockTaskOptions) => {
+      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
+      try {
+        await unblockTask(opts, ledger);
+        output(
+          opts.json
+            ? { task_id: opts.taskId, status: "accepted" }
+            : `Task ${opts.taskId} unblocked (status: accepted)`,
           opts.json ?? false
         );
       } catch (err) { handleError(err); }

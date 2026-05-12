@@ -32,6 +32,7 @@ import {
   ackTask,
   shipTask,
   blockTask,
+  unblockTask,
   signoffTask,
   abandonTask,
   mergeTask,
@@ -151,6 +152,25 @@ function makeMockLedger(initial?: TaskRecord[]): { ledger: TaskLedgerLike; state
         GSI1PK: gsi1pk(record.project, "blocked"),
         GSI2PK: gsi2pk("blocked"),
       });
+    },
+
+    async unblockTask(taskId, worker, reason, project) {
+      state.calls.push({ method: "unblockTask", args: [taskId, worker, reason, project] });
+      const record = state.records.get(taskId);
+      if (!record || record.status !== "blocked") {
+        throw new TaskConditionError(`unblock condition failed for ${taskId}`);
+      }
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { blocked_at, ...rest } = record;
+      const updated: TaskRecord = {
+        ...rest,
+        status: "accepted",
+        unblocked_at: NOW,
+        GSI1PK: gsi1pk(record.project, "accepted"),
+        GSI2PK: gsi2pk("accepted"),
+      };
+      if (reason) updated.unblocked_reason = reason;
+      state.records.set(taskId, updated);
     },
 
     async signoffTask(taskId, project) {
@@ -405,6 +425,87 @@ describe("blockTask", () => {
       () => blockTask({ taskId: "a1b2c3d4", worker: "U_WORKER", fleet: "fleet.yaml" }, ledger),
       TaskConditionError
     );
+  });
+});
+
+
+// ── Tests: unblock ───────────────────────────────────────────────────────────
+
+describe("unblockTask", () => {
+  test("happy path — blocked→accepted with reason", async () => {
+    const rec = makeRecord({ status: "blocked", blocked_at: NOW });
+    const { ledger, state } = makeMockLedger([rec]);
+    await unblockTask(
+      { taskId: "a1b2c3d4", worker: "U_WORKER", reason: "auth restored", fleet: "fleet.yaml" },
+      ledger
+    );
+    const updated = state.records.get("a1b2c3d4")!;
+    assert.equal(updated.status, "accepted");
+    assert.equal(updated.unblocked_at, NOW);
+    assert.equal(updated.unblocked_reason, "auth restored");
+    assert.equal(updated.blocked_at, undefined);
+    assert.equal(updated.GSI1PK, gsi1pk("website-rewrite", "accepted"));
+    assert.equal(updated.GSI2PK, gsi2pk("accepted"));
+  });
+
+  test("happy path — blocked→accepted without reason", async () => {
+    const rec = makeRecord({ status: "blocked", blocked_at: NOW });
+    const { ledger, state } = makeMockLedger([rec]);
+    await unblockTask(
+      { taskId: "a1b2c3d4", worker: "U_WORKER", fleet: "fleet.yaml" },
+      ledger
+    );
+    const updated = state.records.get("a1b2c3d4")!;
+    assert.equal(updated.status, "accepted");
+    assert.equal(updated.unblocked_at, NOW);
+    assert.equal(updated.unblocked_reason, undefined);
+    assert.equal(updated.blocked_at, undefined);
+  });
+
+  test("condition failed — task in accepted state (not blocked)", async () => {
+    const rec = makeRecord({ status: "accepted" });
+    const { ledger } = makeMockLedger([rec]);
+    await assert.rejects(
+      () => unblockTask({ taskId: "a1b2c3d4", worker: "U_WORKER", fleet: "fleet.yaml" }, ledger),
+      TaskConditionError
+    );
+  });
+
+  test("condition failed — task in shipped state", async () => {
+    const rec = makeRecord({ status: "shipped" });
+    const { ledger } = makeMockLedger([rec]);
+    await assert.rejects(
+      () => unblockTask({ taskId: "a1b2c3d4", worker: "U_WORKER", fleet: "fleet.yaml" }, ledger),
+      TaskConditionError
+    );
+  });
+
+  test("missing task-id — condition failed (task not in records)", async () => {
+    const { ledger } = makeMockLedger();
+    await assert.rejects(
+      () => unblockTask({ taskId: "00000000", worker: "U_WORKER", fleet: "fleet.yaml" }, ledger),
+      TaskConditionError
+    );
+  });
+
+  test("--json output shape — resolves without error", async () => {
+    const rec = makeRecord({ status: "blocked", blocked_at: NOW });
+    const { ledger } = makeMockLedger([rec]);
+    await assert.doesNotReject(
+      () => unblockTask({ taskId: "a1b2c3d4", worker: "U_WORKER", fleet: "fleet.yaml", json: true }, ledger)
+    );
+  });
+
+  test("GSI keys updated correctly (project from existing record)", async () => {
+    const rec = makeRecord({ status: "blocked", blocked_at: NOW, project: "website-rewrite" });
+    const { ledger, state } = makeMockLedger([rec]);
+    await unblockTask(
+      { taskId: "a1b2c3d4", worker: "U_WORKER", reason: "dep installed", fleet: "fleet.yaml" },
+      ledger
+    );
+    const updated = state.records.get("a1b2c3d4")!;
+    assert.equal(updated.GSI1PK, "PROJECT#website-rewrite#STATUS#accepted");
+    assert.equal(updated.GSI2PK, "STATUS#accepted");
   });
 });
 

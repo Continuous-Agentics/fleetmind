@@ -59,6 +59,8 @@ export const TaskRecordSchema = z.object({
   signed_off_at: z.string().optional(),
   merged_at: z.string().optional(),
   blocked_at: z.string().optional(),
+  unblocked_at: z.string().optional(),
+  unblocked_reason: z.string().optional(),
   abandoned_at: z.string().optional(),
   /** ISO 8601 timestamp of the last nag sent by the PM bot for this task */
   last_nag_at: z.string().optional(),

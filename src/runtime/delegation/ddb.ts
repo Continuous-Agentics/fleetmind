@@ -248,6 +248,46 @@ export class TaskLedger {
   }
 
   /**
+   * Unblock a task (blocked → accepted).
+   * Condition: status = blocked
+   *
+   * Clears blocked_at / blocked_reason; sets unblocked_at (and optionally
+   * unblocked_reason). Updates both GSI keys to accepted.
+   *
+   * Two-call sequence: first fetches the existing record to read the project
+   * slug (needed for GSI1PK), then issues the conditional update.
+   * `project` may be passed to skip the GetItem.
+   */
+  async unblockTask(
+    taskId: string,
+    worker: string,
+    reason?: string,
+    project?: string
+  ): Promise<void> {
+    const now = nowISO();
+    const proj = project ?? (await this._getProject(taskId));
+    const reasonExpr = reason ? ", unblocked_reason = :reason" : "";
+    const reasonValues: Record<string, unknown> = reason
+      ? { ":reason": reason }
+      : {};
+    await this._updateStatus(taskId, {
+      updateExpression:
+        `SET #st = :accepted, GSI1PK = :gsi1pk, GSI2PK = :gsi2pk, unblocked_at = :now${reasonExpr} REMOVE blocked_at, blocked_reason`,
+      conditionExpression: "attribute_exists(PK) AND #st = :expected",
+      expressionAttributeNames: { "#st": "status" },
+      expressionAttributeValues: {
+        ":expected": "blocked",
+        ":accepted": "accepted",
+        ":gsi1pk": gsi1pk(proj, "accepted"),
+        ":gsi2pk": gsi2pk("accepted"),
+        ":now": now,
+        ...reasonValues,
+      },
+      errorContext: "unblock (blocked→accepted)",
+    });
+  }
+
+  /**
    * Human (or sign-off skill) signs off on a shipped task.
    * Condition: status = shipped AND lifecycle = requires-human-signoff
    *
