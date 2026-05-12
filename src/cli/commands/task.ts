@@ -18,7 +18,7 @@
 
 import { Command, Option } from "commander";
 import { randomBytes } from "crypto";
-import { loadFleet } from "../../config/loader.js";
+import { resolveAndLoadFleet } from "../../config/loader.js";
 import { TaskLedger, TaskConditionError } from "../../runtime/delegation/ddb.js";
 import type { TaskRecord } from "../../runtime/delegation/types.js";
 import { log } from "../../utils/log.js";
@@ -64,7 +64,7 @@ export interface CreateTaskOptions {
   tracker?: string;
   lifecycle?: "requires-human-signoff" | "shipped-is-done";
   taskId?: string;
-  fleet: string;
+  fleet?: string;
   json?: boolean;
 }
 
@@ -72,26 +72,26 @@ export interface WorkerTaskOptions {
   taskId: string;
   worker: string;
   project?: string;
-  fleet: string;
+  fleet?: string;
   json?: boolean;
 }
 
 export interface ProjectTaskOptions {
   taskId: string;
   project?: string;
-  fleet: string;
+  fleet?: string;
   json?: boolean;
 }
 
 export interface GetTaskOptions {
   taskId: string;
-  fleet: string;
+  fleet?: string;
   json?: boolean;
 }
 
 export interface SetNagOptions {
   taskId: string;
-  fleet: string;
+  fleet?: string;
   json?: boolean;
 }
 
@@ -105,7 +105,7 @@ export interface TaskCommandResult {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function makeLedger(fleet: ReturnType<typeof loadFleet>): TaskLedger {
+function makeLedger(fleet: ReturnType<typeof resolveAndLoadFleet>): TaskLedger {
   const d = fleet.delegation;
   if (!d?.enabled || !d.table_name) {
     log.error(
@@ -260,10 +260,10 @@ export function registerTask(program: Command): void {
         .default("requires-human-signoff"),
     )
     .option("--task-id <hex>", "Override generated task ID (8-char hex)")
-    .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
     .action(async (opts: CreateTaskOptions) => {
-      const ledger = makeLedger(loadFleet(opts.fleet));
+      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
         const record = await createTask(opts, ledger);
         output(
@@ -289,10 +289,10 @@ export function registerTask(program: Command): void {
     .requiredOption("--task-id <hex>", "Task ID (8-char hex)")
     .requiredOption("--worker <id>", "Worker bot identifier")
     .option("--project <slug>", "Project slug (avoids a GetItem round-trip; skill knows from prior 'task get')")
-    .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
     .action(async (opts: WorkerTaskOptions) => {
-      const ledger = makeLedger(loadFleet(opts.fleet));
+      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
         await ackTask(opts, ledger);
         output(
@@ -312,10 +312,10 @@ export function registerTask(program: Command): void {
     .requiredOption("--task-id <hex>", "Task ID")
     .requiredOption("--worker <id>", "Worker bot identifier")
     .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
-    .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
     .action(async (opts: WorkerTaskOptions) => {
-      const ledger = makeLedger(loadFleet(opts.fleet));
+      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
         await shipTask(opts, ledger);
         output(
@@ -335,10 +335,10 @@ export function registerTask(program: Command): void {
     .requiredOption("--task-id <hex>", "Task ID")
     .requiredOption("--worker <id>", "Worker bot identifier")
     .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
-    .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
     .action(async (opts: WorkerTaskOptions) => {
-      const ledger = makeLedger(loadFleet(opts.fleet));
+      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
         await blockTask(opts, ledger);
         output(
@@ -357,10 +357,10 @@ export function registerTask(program: Command): void {
     .description("Sign off on a shipped task (shipped→signed_off, requires lifecycle=requires-human-signoff)")
     .requiredOption("--task-id <hex>", "Task ID")
     .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
-    .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
     .action(async (opts: ProjectTaskOptions) => {
-      const ledger = makeLedger(loadFleet(opts.fleet));
+      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
         await signoffTask(opts, ledger);
         output(
@@ -379,10 +379,10 @@ export function registerTask(program: Command): void {
     .description("Abandon a task (PM bot only: any status→abandoned, except merged/abandoned)")
     .requiredOption("--task-id <hex>", "Task ID")
     .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
-    .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
     .action(async (opts: ProjectTaskOptions) => {
-      const ledger = makeLedger(loadFleet(opts.fleet));
+      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
         await abandonTask(opts, ledger);
         output(
@@ -401,10 +401,10 @@ export function registerTask(program: Command): void {
     .description("Mark a task merged (shipped|signed_off→merged)")
     .requiredOption("--task-id <hex>", "Task ID")
     .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
-    .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
     .action(async (opts: ProjectTaskOptions) => {
-      const ledger = makeLedger(loadFleet(opts.fleet));
+      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
         await mergeTask(opts, ledger);
         output(
@@ -422,10 +422,10 @@ export function registerTask(program: Command): void {
     .command("get")
     .description("Get a task record by task ID")
     .requiredOption("--task-id <hex>", "Task ID")
-    .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON (default: human-readable)")
     .action(async (opts: GetTaskOptions) => {
-      const ledger = makeLedger(loadFleet(opts.fleet));
+      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       const record = await getTask(opts, ledger);
       if (!record) {
         log.warn(`Task not found: ${opts.taskId}`);
@@ -463,10 +463,10 @@ export function registerTask(program: Command): void {
     .command("set-nag")
     .description("Set last_nag_at to now (idempotent; used by PM heartbeat)")
     .requiredOption("--task-id <hex>", "Task ID")
-    .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
     .action(async (opts: SetNagOptions) => {
-      const ledger = makeLedger(loadFleet(opts.fleet));
+      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
         await setNagTask(opts, ledger);
         output(
