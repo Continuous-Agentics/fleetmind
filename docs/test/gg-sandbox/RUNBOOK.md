@@ -276,18 +276,28 @@ Inspect the rendered `openclaw.json` to confirm tokens are baked in (not `${...}
 cat rendered/openclaw.json | jq '.channels.slack.accounts'
 ```
 
-### 5b. What `openclaw.json` contains
+### 5b. What `openclaw.json` contains — and the render-vs-deploy mismatch
 
-`renderOpenClawJson()` (in `src/runtime/renderer.ts`) produces a complete per-fleet config covering:
+> ⚠️ **Known gap.** `renderOpenClawJson()` (in `src/runtime/renderer.ts`) emits a single fleet-wide config: one `agents.list` with both agents, one `bindings` array routing both Slack accounts, and both Slack accounts populated under `channels.slack.accounts`. That shape is for a future *one gateway, N agents* topology.
+>
+> The gg-sandbox deploy uses the opposite shape: *one gateway per agent*, with each EC2 running its own `openclaw-<agent_id>.service` systemd unit. Each gateway only has its own agent's Slack secret in `EnvironmentFile`.
+>
+> We have not resolved this yet. Two viable paths when we get to Step 5d:
+> 1. **Per-agent slice.** Filter the rendered `openclaw.json` to a per-agent view (one entry in `agents.list`, one binding, one Slack account) before shipping to each EC2. Closest to the actual deploy shape.
+> 2. **Ship full config to all boxes.** Each gateway loads both agents but only one Slack account can authenticate (only its own token is in env). Cheaper, but leaves dead config entries and the wrong agent listed as a peer for `agentToAgent`.
+>
+> *TODO: settle this in Step 5d before SCP, and update this section to match what we actually do.*
+
+What the renderer currently produces:
 
 | Section | Contents |
 |---------|----------|
-| `agents.list` | id, name, workspace path (EC2-side), model, `default: true` for orchestrator |
-| `bindings` | Slack accountId → agentId routing, one per agent |
-| `channels.slack.accounts` | botToken, appToken, webhookPath, groupPolicy per Slack account |
+| `agents.list` | id, name, workspace path (EC2-side), model, `default: true` for orchestrator — **entries for all agents in the fleet** |
+| `bindings` | Slack accountId → agentId routing, one per agent — **all agents** |
+| `channels.slack.accounts` | botToken, appToken, webhookPath, groupPolicy per Slack account — **all agents** |
 | `channels.slack` | mode, typing/ack reactions, allowBots, historyLimit, streaming |
 | `gateway` | port (18789), mode (local), bind (loopback) |
-| `tools` | profile (coding), agentToAgent allow list, web search (disabled in test fleet) |
+| `tools` | profile (coding), agentToAgent allow list (cross-agent allow), web search (disabled in test fleet) |
 | `session` | dmScope (per-channel-peer) |
 | `hooks.internal` | boot-md, session-memory, command-logger |
 | `plugins.entries` | anthropic: enabled |
@@ -350,7 +360,9 @@ For the test deploy, skip this entirely. The gateway will start fine without aut
 
 ### 5d. Transport workspaces to EC2
 
-> **Current state:** `fleetmind deploy` renders locally but does not push to EC2 (issues #7–#15 — deploy transport not yet shipped). The workaround is SCP over a bastion, or SSM file transfer.
+> **Current state for gg-sandbox:** the rendered workspaces have been pushed to an S3 bucket (Grace, 2026-05-12). Pull-side from EC2 (via SSM Run Command → `aws s3 cp`) is the planned transport for this deploy. *TODO: fill in the actual bucket path, S3 layout, and SSM pull command we end up using.*
+>
+> **Open issues:** `fleetmind deploy` renders locally but does not push to EC2 (issues #7–#15 — deploy transport not yet shipped). The legacy workaround documented below (SCP via bastion / SSM `send-command` push) is preserved for reference until we settle the S3 pull flow.
 
 The local rendered workspace path is `./rendered/workspaces/<agent_id>/`. The EC2 target path is `<workspace_base>/<agent_id>/` (no `workspace-` prefix) — for this fleet: `/opt/openclaw/workspace/<agent_id>/`.
 
