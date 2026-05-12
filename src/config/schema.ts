@@ -211,7 +211,7 @@ export const OpenClawConfigSchema = z.object({
     profile: z.string().default("coding"),
     web_search: z.object({
       enabled: z.boolean().default(true),
-      provider: z.string().default("brave"),
+      provider: z.string().default("duckduckgo"),
     }).default({}),
   }).default({}),
   slack: z.object({
