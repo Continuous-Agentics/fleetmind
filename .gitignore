@@ -24,3 +24,4 @@ tfplan
 rendered/
 notes.md
 infra/terraform/terraform.tfvars
+infra/terraform/backend.hcl
