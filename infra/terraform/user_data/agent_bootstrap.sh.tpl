@@ -147,6 +147,162 @@ FETCH_EOF
 
 chmod +x /usr/local/bin/fetch-agent-secrets
 
+# ── GitHub App token script ──────────────────────────────────────────────────
+echo "[bootstrap] STAGE 8b: gh-app-token install starting at $(date)"
+
+# Write agent identity file so gh-app-token can discover FLEET_NAME / AGENT_ID
+mkdir -p /etc/fleetmind
+cat > /etc/fleetmind/agent.env << AGENTENV_EOF
+FLEET_NAME=$FLEET_NAME
+AGENT_ID=$AGENT_ID
+AGENTENV_EOF
+chmod 644 /etc/fleetmind/agent.env
+
+# Install the gh-app-token script
+cat > /usr/local/bin/gh-app-token << 'GHTOKEN_EOF'
+#!/bin/bash
+# gh-app-token — Generate short-lived GitHub App installation tokens
+#
+# Usage:
+#   gh-app-token              # Read+write token for this agent's project repo (default)
+#   gh-app-token --app project  # Same as above (explicit)
+#
+# Environment variables (optional overrides):
+#   GH_APP_ID            — GitHub App ID (skips SSM lookup)
+#   GH_INSTALLATION_ID   — GitHub Installation ID (skips SSM lookup)
+#   GH_APP_PEM           — PEM private key contents (skips SSM lookup)
+#   GH_APP_PEM_FILE      — Path to PEM file (skips SSM lookup)
+#   AWS_REGION            — AWS region for SSM (default: us-west-2)
+#
+# SSM Parameter paths:
+#   /fleetmind/<fleet_name>/agents/<agent_id>/github-app/{app-id,installation-id,pem}
+#
+# Requires: openssl, curl, jq, aws cli
+
+set -euo pipefail
+
+SCRIPT_NAME="$(basename "$0")"
+AWS_REGION="$${AWS_REGION:-us-west-2}"
+
+die() { echo "$${SCRIPT_NAME}: error: $*" >&2; exit 1; }
+
+base64url() {
+  openssl enc -base64 -A | tr '+/' '-_' | tr -d '='
+}
+
+APP_TYPE="project"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --app)
+      [[ $# -lt 2 ]] && die "Missing value for --app (expected: project)"
+      APP_TYPE="$2"
+      shift 2
+      ;;
+    --help|-h)
+      head -25 "$0" | grep '^#' | sed 's/^# \?//'
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+[[ "$APP_TYPE" != "project" ]] && die "Unknown app type: $APP_TYPE (only 'project' is supported)"
+
+AGENT_ENV_FILE="/etc/fleetmind/agent.env"
+if [[ -f "$AGENT_ENV_FILE" ]]; then
+  # shellcheck source=/dev/null
+  source "$AGENT_ENV_FILE"
+fi
+
+FLEET_NAME="$${FLEET_NAME:-}"
+AGENT_ID="$${AGENT_ID:-}"
+
+[[ -z "$FLEET_NAME" ]] && die "FLEET_NAME not set. Is /etc/fleetmind/agent.env present and populated?"
+[[ -z "$AGENT_ID" ]]   && die "AGENT_ID not set. Is /etc/fleetmind/agent.env present and populated?"
+
+SSM_PREFIX="/fleetmind/$${FLEET_NAME}/agents/$${AGENT_ID}/github-app"
+
+fetch_ssm() {
+  local name="$1"
+  aws ssm get-parameter \
+    --name "$name" \
+    --region "$AWS_REGION" \
+    --with-decryption \
+    --query 'Parameter.Value' \
+    --output text 2>/dev/null || die "Failed to fetch SSM parameter: $name"
+}
+
+if [[ -n "$${GH_APP_ID:-}" ]]; then
+  APP_ID="$GH_APP_ID"
+else
+  APP_ID=$(fetch_ssm "$${SSM_PREFIX}/app-id")
+fi
+
+if [[ -n "$${GH_INSTALLATION_ID:-}" ]]; then
+  INSTALLATION_ID="$GH_INSTALLATION_ID"
+else
+  INSTALLATION_ID=$(fetch_ssm "$${SSM_PREFIX}/installation-id")
+fi
+
+if [[ -n "$${GH_APP_PEM:-}" ]]; then
+  PEM_KEY="$GH_APP_PEM"
+elif [[ -n "$${GH_APP_PEM_FILE:-}" ]]; then
+  [[ ! -f "$GH_APP_PEM_FILE" ]] && die "PEM file not found: $GH_APP_PEM_FILE"
+  PEM_KEY=$(cat "$GH_APP_PEM_FILE")
+else
+  PEM_KEY=$(fetch_ssm "$${SSM_PREFIX}/pem")
+fi
+
+[[ -z "$APP_ID" ]]          && die "App ID is empty"
+[[ -z "$INSTALLATION_ID" ]] && die "Installation ID is empty"
+[[ -z "$PEM_KEY" ]]         && die "PEM key is empty"
+
+NOW=$(date +%s)
+IAT=$((NOW - 60))
+EXP=$((NOW + 600))
+
+HEADER=$(echo -n '{"alg":"RS256","typ":"JWT"}' | base64url)
+PAYLOAD=$(echo -n "{\"iss\":$${APP_ID},\"iat\":$${IAT},\"exp\":$${EXP}}" | base64url)
+
+PEM_TMP=$(mktemp)
+trap 'rm -f "$PEM_TMP"' EXIT
+echo "$PEM_KEY" > "$PEM_TMP"
+
+SIGNATURE=$(echo -n "$${HEADER}.$${PAYLOAD}" | \
+  openssl dgst -sha256 -sign "$PEM_TMP" | base64url)
+
+JWT="$${HEADER}.$${PAYLOAD}.$${SIGNATURE}"
+
+RESPONSE=$(curl -sS -w "\n%%{http_code}" \
+  -X POST \
+  -H "Authorization: Bearer $${JWT}" \
+  -H "Accept: application/vnd.github+json" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  "https://api.github.com/app/installations/$${INSTALLATION_ID}/access_tokens") \
+  || die "Failed to connect to GitHub API (network/DNS/TLS error)"
+
+HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+BODY=$(echo "$RESPONSE" | sed '$d')
+
+if [[ "$HTTP_CODE" != "201" ]]; then
+  die "GitHub API returned HTTP $${HTTP_CODE}: $${BODY}"
+fi
+
+TOKEN=$(echo "$BODY" | jq -r '.token')
+EXPIRES=$(echo "$BODY" | jq -r '.expires_at')
+
+[[ "$TOKEN" == "null" || -z "$TOKEN" ]] && die "Failed to extract token from response: $${BODY}"
+
+echo "$TOKEN"
+echo "Token expires: $${EXPIRES}" >&2
+GHTOKEN_EOF
+
+install -m 755 /usr/local/bin/gh-app-token /usr/local/bin/gh-app-token
+echo "[bootstrap] gh-app-token installed at /usr/local/bin/gh-app-token"
+
 # ── systemd service for this agent ────────────────────────────────────────────
 echo "[bootstrap] STAGE 9: systemd unit write starting at $(date)"
 echo "[bootstrap] Creating systemd service for agent: $AGENT_ID (port $AGENT_PORT)"
