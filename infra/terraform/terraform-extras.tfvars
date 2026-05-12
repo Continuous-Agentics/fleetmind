@@ -30,4 +30,4 @@ wake_target_session_key = "agent:main:slack:channel:C0B2NNJEFKR"
 enable_interface_endpoints = true
 
 # ── fleetmind package version (installed on each agent EC2 in STAGE 6b) ─────
-fleetmind_version = "0.4.0"
+fleetmind_version = "0.4.2"

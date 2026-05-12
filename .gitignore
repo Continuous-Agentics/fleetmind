@@ -10,10 +10,17 @@ dist/
 *.db
 node_modules/
 dist/
+*.pem
 
 # Terraform
 .terraform/
 .terraform.lock.hcl
 *.tfstate
+*.tfstate.*
 *.tfstate.backup
 *.tfplan
+tfplan
+
+rendered/
+notes.md
+infra/terraform/terraform.tfvars
