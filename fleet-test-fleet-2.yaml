@@ -49,9 +49,9 @@ agents:
           the loop on every assignment.
       slack:
         account_id: blanket
-        # TODO: fill in after creating Blanket's Slack app.
-        # bot_user_id: "U…"  ← run `fleetmind slack discover --fleet fleet-test-fleet-2.yaml`
-        channels: []                    # ["<home>", "<delegation>"] once known
+        # TODO: fill in after `fleetmind secrets populate` + `fleetmind slack discover`.
+        # bot_user_id: "U…"
+        channels: ["C0B3J7CT6RJ", "C0B3CGSNATG"]   # PM home + dev/delegation
         bot_token: "${BLANKET_BOT_TOKEN}"
         app_token: "${BLANKET_APP_TOKEN}"
         background_color: "#2C3E50"
@@ -86,9 +86,9 @@ agents:
           from Blanket (the PM bot) and ship them.
       slack:
         account_id: charlie
-        # TODO: fill in after creating Charlie's Slack app.
+        # TODO: fill in after `fleetmind secrets populate` + `fleetmind slack discover`.
         # bot_user_id: "U…"
-        channels: []                    # ["<delegation>"] once known
+        channels: ["C0B3CGSNATG"]                  # dev/delegation channel only
         bot_token: "${CHARLIE_BOT_TOKEN}"
         app_token: "${CHARLIE_APP_TOKEN}"
         background_color: "#8B4513"
