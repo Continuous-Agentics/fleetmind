@@ -300,7 +300,7 @@ echo "$TOKEN"
 echo "Token expires: $${EXPIRES}" >&2
 GHTOKEN_EOF
 
-install -m 755 /usr/local/bin/gh-app-token /usr/local/bin/gh-app-token
+chmod 755 /usr/local/bin/gh-app-token
 echo "[bootstrap] gh-app-token installed at /usr/local/bin/gh-app-token"
 
 # ── systemd service for this agent ────────────────────────────────────────────
