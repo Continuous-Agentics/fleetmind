@@ -37,6 +37,7 @@ import {
   abandonTask,
   mergeTask,
   setNagTask,
+  updateTask,
 } from "../cli/commands/task.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -225,6 +226,42 @@ function makeMockLedger(initial?: TaskRecord[]): { ledger: TaskLedgerLike; state
         throw new TaskConditionError(`set-nag: task not found: ${taskId}`);
       }
       state.records.set(taskId, { ...record, last_nag_at: NOW });
+    },
+
+    async updateTaskMetadata(taskId, updates, options) {
+      state.calls.push({ method: "updateTaskMetadata", args: [taskId, updates, options] });
+      const record = state.records.get(taskId);
+      if (!record) {
+        throw new TaskConditionError(`Task not found: ${taskId}. Cannot update metadata of a non-existent task.`);
+      }
+      if (record.status === "merged" || record.status === "abandoned") {
+        throw new TaskConditionError(
+          `Task ${taskId} is in terminal status '${record.status}'. Terminal tasks are frozen — metadata cannot be updated.`
+        );
+      }
+      const now = NOW;
+      const by = options?.by ?? "test-agent";
+      const updated: TaskRecord = { ...record, updated_at: now, updated_by: by };
+
+      if (updates.title !== undefined) updated.title = updates.title as string;
+      if (updates.description !== undefined) updated.description = updates.description as string;
+      if (updates.definition_of_done !== undefined) updated.definition_of_done = updates.definition_of_done;
+      if (updates.worker_id !== undefined) updated.worker = updates.worker_id;
+      if (updates.thread_url !== undefined) updated.delegation_thread = updates.thread_url;
+      if (updates.envelope_ts !== undefined) updated.delegation_envelope_ts = updates.envelope_ts;
+      if (updates.project !== undefined) {
+        updated.project = updates.project;
+        updated.GSI1PK = gsi1pk(updates.project, record.status);
+      }
+
+      if (options?.reason !== undefined) {
+        const entry = { at: now, by, reason: options.reason, fields_changed: Object.keys(updates) };
+        const existing = updated.update_history ?? [];
+        updated.update_history = [...existing, entry].slice(-20);
+      }
+
+      state.records.set(taskId, updated);
+      return updated;
     },
   };
 
@@ -685,5 +722,180 @@ describe("state machine — full lifecycle", () => {
       () => abandonTask({ taskId: "12345678", fleet: "fleet.yaml" }, ledger),
       TaskConditionError
     );
+  });
+});
+
+// ── Tests: updateTask ─────────────────────────────────────────────────────────
+
+describe("updateTask", () => {
+  test("single field update (--title only) — only that field + updated_at/updated_by changed", async () => {
+    const rec = makeRecord({ status: "accepted" });
+    const { ledger, state } = makeMockLedger([rec]);
+    const result = await updateTask(
+      { taskId: "a1b2c3d4", title: "New Title", fleet: "fleet.yaml" },
+      ledger
+    );
+    assert.equal(result.title, "New Title");
+    assert.ok(result.updated_at, "updated_at should be set");
+    assert.ok(result.updated_by, "updated_by should be set");
+    // Other fields unchanged
+    assert.equal(result.status, "accepted");
+    assert.equal(result.project, "website-rewrite");
+    assert.equal(state.calls.at(-1)?.method, "updateTaskMetadata");
+  });
+
+  test("multiple fields at once — all updated", async () => {
+    const rec = makeRecord({ status: "delegated" });
+    const { ledger } = makeMockLedger([rec]);
+    const result = await updateTask(
+      {
+        taskId: "a1b2c3d4",
+        title: "Revised Title",
+        dod: "New definition of done",
+        worker: "U_NEW_WORKER",
+        fleet: "fleet.yaml",
+      },
+      ledger
+    );
+    assert.equal(result.title, "Revised Title");
+    assert.equal(result.definition_of_done, "New definition of done");
+    assert.equal(result.worker, "U_NEW_WORKER");
+  });
+
+  test("no field flags → exit 1 with clear error (process.exit spy)", async () => {
+    // We test this by checking the exported function returns an error path via
+    // process.exit, which we catch by wrapping in a try-catch on the exit mock.
+    const rec = makeRecord({ status: "accepted" });
+    const { ledger } = makeMockLedger([rec]);
+
+    const originalExit = process.exit.bind(process);
+    let exitCode: number | undefined;
+    // Temporarily override process.exit to capture code without actually exiting
+    (process as NodeJS.Process).exit = ((code?: number) => {
+      exitCode = code;
+      throw new Error(`process.exit(${code})`);
+    }) as never;
+
+    try {
+      await updateTask({ taskId: "a1b2c3d4", fleet: "fleet.yaml" }, ledger);
+      assert.fail("Should have exited");
+    } catch (err: unknown) {
+      assert.ok((err as Error).message.includes("process.exit(1)"), `Expected exit(1), got: ${(err as Error).message}`);
+      assert.equal(exitCode, 1);
+    } finally {
+      (process as NodeJS.Process).exit = originalExit as never;
+    }
+  });
+
+  test("update merged task → exit 2 TaskConditionError", async () => {
+    const rec = makeRecord({ status: "merged" });
+    const { ledger } = makeMockLedger([rec]);
+    await assert.rejects(
+      () => updateTask({ taskId: "a1b2c3d4", title: "No", fleet: "fleet.yaml" }, ledger),
+      TaskConditionError
+    );
+  });
+
+  test("update abandoned task → TaskConditionError", async () => {
+    const rec = makeRecord({ status: "abandoned" });
+    const { ledger } = makeMockLedger([rec]);
+    await assert.rejects(
+      () => updateTask({ taskId: "a1b2c3d4", dod: "No", fleet: "fleet.yaml" }, ledger),
+      TaskConditionError
+    );
+  });
+
+  test("--project change updates GSI1PK with current status", async () => {
+    const rec = makeRecord({
+      status: "accepted",
+      GSI1PK: gsi1pk("website-rewrite", "accepted"),
+      GSI2PK: gsi2pk("accepted"),
+    });
+    const { ledger, state } = makeMockLedger([rec]);
+    await updateTask(
+      { taskId: "a1b2c3d4", project: "new-project", fleet: "fleet.yaml" },
+      ledger
+    );
+    const updated = state.records.get("a1b2c3d4")!;
+    assert.equal(updated.project, "new-project");
+    assert.equal(updated.GSI1PK, gsi1pk("new-project", "accepted"));
+    // GSI2PK (status-only index) is untouched by a project rename
+    assert.equal(updated.GSI2PK, gsi2pk("accepted"));
+  });
+
+  test("--reason appends to update_history", async () => {
+    const rec = makeRecord({ status: "delegated" });
+    const { ledger, state } = makeMockLedger([rec]);
+    await updateTask(
+      { taskId: "a1b2c3d4", dod: "Narrowed scope", reason: "PM cut scope after worker review", fleet: "fleet.yaml" },
+      ledger
+    );
+    const updated = state.records.get("a1b2c3d4")!;
+    assert.ok(Array.isArray(updated.update_history), "update_history should be an array");
+    assert.equal(updated.update_history!.length, 1);
+    assert.equal(updated.update_history![0]!.reason, "PM cut scope after worker review");
+    assert.ok(updated.update_history![0]!.fields_changed.includes("definition_of_done"));
+  });
+
+  test("--by overrides env-derived updated_by", async () => {
+    const rec = makeRecord({ status: "accepted" });
+    const { ledger, state } = makeMockLedger([rec]);
+    await updateTask(
+      { taskId: "a1b2c3d4", title: "Override test", by: "explicit-bot-id", fleet: "fleet.yaml" },
+      ledger
+    );
+    const updated = state.records.get("a1b2c3d4")!;
+    assert.equal(updated.updated_by, "explicit-bot-id");
+  });
+
+  test("--description-file reads from file", async () => {
+    const rec = makeRecord({ status: "delegated" });
+    const { ledger, state } = makeMockLedger([rec]);
+
+    // Write a temp file
+    const { writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const tmpFile = join(tmpdir(), `fleetmind-test-${Date.now()}.txt`);
+    writeFileSync(tmpFile, "Description from file\n");
+
+    await updateTask(
+      { taskId: "a1b2c3d4", descriptionFile: tmpFile, fleet: "fleet.yaml" },
+      ledger
+    );
+    const updated = state.records.get("a1b2c3d4")!;
+    assert.equal(updated.description, "Description from file");
+  });
+
+  test("--json output shape — result includes task_id, status, updated_at", async () => {
+    const rec = makeRecord({ status: "delegated" });
+    const { ledger } = makeMockLedger([rec]);
+    const result = await updateTask(
+      { taskId: "a1b2c3d4", title: "JSON test", json: true, fleet: "fleet.yaml" },
+      ledger
+    );
+    assert.ok("task_id" in result);
+    assert.ok("status" in result);
+    assert.ok("updated_at" in result);
+  });
+
+  test("update_history bounded to 20 entries — older entries dropped", async () => {
+    // Simulate a record with 20 existing history entries
+    const existingHistory = Array.from({ length: 20 }, (_, i) => ({
+      at: NOW,
+      by: "bot",
+      reason: `change ${i}`,
+      fields_changed: ["title"],
+    }));
+    const rec = makeRecord({ status: "accepted", update_history: existingHistory });
+    const { ledger, state } = makeMockLedger([rec]);
+    await updateTask(
+      { taskId: "a1b2c3d4", title: "21st update", reason: "one more", fleet: "fleet.yaml" },
+      ledger
+    );
+    const updated = state.records.get("a1b2c3d4")!;
+    assert.ok(updated.update_history!.length <= 20, "history should be bounded to 20");
+    // Last entry should be the most recent
+    assert.equal(updated.update_history!.at(-1)!.reason, "one more");
   });
 });
