@@ -215,6 +215,19 @@ fleetmind task block \
 
 ---
 
+## Unblock pattern
+
+If you've called `task block` and the blocking condition has since been resolved (transient auth gap
+fixed, missing dep installed, etc.), call `task unblock` to transition back to `accepted` and resume:
+
+```bash
+fleetmind task unblock --task-id <hex> --worker <your-id> --reason "auth restored"
+```
+
+Then proceed with the normal ship pattern (`narrative put` → `task ship`).
+
+---
+
 ## On Completion: Slack Reply
 
 After the S3 + DDB writes succeed, post a threaded reply mentioning the PM bot:
