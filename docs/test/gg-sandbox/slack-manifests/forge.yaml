@@ -1,18 +1,13 @@
 display_information:
   name: Forge
-  description: Backend worker bot for gg-sandbox fleetmind test fleet - receives delegations from Conductor.
+  description: Backend worker — gg-sandbox test fleet
   background_color: "#8B4513"
-  long_description: >
-    Forge is the backend specialty worker bot for Grace's gg-sandbox test fleet
-    (Continuous-Agentics/fleetmind). It receives task envelopes from Conductor (the PM bot),
-    acknowledges with :eyes:, ships work back through a DynamoDB task ledger, and posts completion
-    summaries. Runs on dedicated EC2 in AWS account 251714435910 (us-west-2).
-
+  long_description: |
+    Forge is the backend specialty worker bot for Grace's gg-sandbox test fleet (Continuous-Agentics/fleetmind). It receives task envelopes from Conductor (the PM bot), acknowledges with :eyes:, ships work back through a DynamoDB task ledger, and posts completion summaries. Runs on dedicated EC2 in AWS account 251714435910 (us-west-2).
 features:
   bot_user:
     display_name: Forge
     always_online: true
-
 oauth_config:
   scopes:
     bot:
@@ -34,7 +29,6 @@ oauth_config:
       - users:read
       - files:read
       - files:write
-
 settings:
   event_subscriptions:
     bot_events:

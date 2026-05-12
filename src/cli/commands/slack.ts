@@ -1,20 +1,9 @@
 /**
- * `fleetmind slack discover` — auto-populate `bot_user_id` for each agent in
- * fleet.yaml by fetching its Slack bot token from AWS Secrets Manager and
- * calling Slack's `auth.test` endpoint.
+ * `fleetmind slack` — Slack utilities for fleet agents.
  *
- * Run this after `fleetmind secrets populate`. It can also be re-run after
- * token rotation or when a new agent is added.
- *
- * Usage:
- *   fleetmind slack discover [options]
- *
- * Options:
- *   --fleet <path>     fleet.yaml path (default: ./fleet.yaml)
- *   --region <region>  AWS region for Secrets Manager (default: us-west-2)
- *   --agent <id>       limit to specific agent(s) — repeatable
- *   --dry-run          print proposed changes without writing fleet.yaml
- *   --force            overwrite existing bot_user_id values
+ * Subcommands:
+ *   discover    Auto-populate bot_user_id for each agent from Secrets Manager.
+ *   manifests   Generate per-agent Slack App manifest YAMLs from fleet.yaml.
  */
 
 import fs from "node:fs";
@@ -430,6 +419,286 @@ export function registerSlackDiscover(program: Command): void {
         } else if (result.discoveredCount === 0 && result.failedCount > 0) {
           process.exit(1);
         }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error(msg);
+        process.exit(1);
+      }
+    });
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// `fleetmind slack manifests` — generate per-agent Slack App manifest YAMLs
+// ═════════════════════════════════════════════════════════════════════════════
+
+import { stringify as yamlStringify } from "yaml";
+import { resolveFleetSource } from "../../config/loader.js";
+
+// ── Default background colours per agent role ─────────────────────────────────
+
+/** Role → hex background colour for the Slack App manifest. */
+export const ROLE_BACKGROUND_COLORS: Record<string, string> = {
+  pm: "#003366",
+  "backend-worker": "#8B4513",
+  "frontend-worker": "#4B0082",
+  worker: "#555555",
+};
+
+/** The default bot OAuth scopes included in every generated manifest. */
+export const DEFAULT_SCOPES = [
+  "app_mentions:read",
+  "channels:history",
+  "channels:read",
+  "chat:write",
+  "chat:write.public",
+  "groups:history",
+  "groups:read",
+  "im:history",
+  "im:read",
+  "im:write",
+  "mpim:history",
+  "mpim:read",
+  "mpim:write",
+  "reactions:read",
+  "reactions:write",
+  "users:read",
+  "files:read",
+  "files:write",
+];
+
+/** The default bot event subscriptions included in every generated manifest. */
+export const DEFAULT_EVENTS = [
+  "app_mention",
+  "message.channels",
+  "message.groups",
+  "message.im",
+  "message.mpim",
+  "reaction_added",
+  "reaction_removed",
+];
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+/** Subset of the agent we need for manifest generation. */
+export interface ManifestAgentInput {
+  id: string;
+  name: string;
+  role?: string;
+  description?: string;
+  slack?: {
+    long_description?: string;
+    background_color?: string;
+    extra_scopes?: string[];
+    extra_events?: string[];
+  };
+}
+
+/** A raw fleet.yaml-like shape for manifest generation (flexible, no Zod). */
+export interface ManifestFleetInput {
+  fleet?: { name?: string };
+  agents?: { list?: ManifestAgentInput[] };
+}
+
+/** Options for the manifest generator. */
+export interface ManifestsOptions {
+  /** fleet.yaml path (passed via --fleet). */
+  fleet?: string;
+  /** Output directory (default: ./rendered/slack-manifests/). */
+  out: string;
+  /** Agent IDs to restrict generation to. Empty = all agents. */
+  agent: string[];
+  /** Injectable fs.mkdirSync equivalent for tests. */
+  mkdirFn?: (p: string) => void;
+  /** Injectable file-write function for tests. */
+  writeFn?: (filePath: string, content: string) => void;
+}
+
+/** Result for a single agent's manifest write. */
+export interface ManifestWriteResult {
+  agentId: string;
+  filePath: string;
+}
+
+/** Result for the full manifests run. */
+export interface ManifestsResult {
+  written: ManifestWriteResult[];
+}
+
+// ── Core logic ────────────────────────────────────────────────────────────────
+
+/**
+ * Build the Slack App manifest object for a single agent.
+ * Returns a plain JS object suitable for YAML serialisation.
+ */
+export function buildManifest(
+  agent: ManifestAgentInput,
+  fleetName: string
+): Record<string, unknown> {
+  const role = agent.role ?? "worker";
+  const bgColor =
+    agent.slack?.background_color ??
+    ROLE_BACKGROUND_COLORS[role] ??
+    ROLE_BACKGROUND_COLORS["worker"];
+
+  // Build long_description: prefer explicit field, otherwise synthesise.
+  const longDesc =
+    agent.slack?.long_description ??
+    `${agent.name} is a ${role} bot for the ${fleetName} fleet.\n` +
+      `${agent.description ?? ""}`.trim();
+
+  // Merge extra scopes (deduped, extras after defaults).
+  const extraScopes = agent.slack?.extra_scopes ?? [];
+  const scopes = [
+    ...DEFAULT_SCOPES,
+    ...extraScopes.filter((s) => !DEFAULT_SCOPES.includes(s)),
+  ];
+
+  // Merge extra events (deduped, extras after defaults).
+  const extraEvents = agent.slack?.extra_events ?? [];
+  const events = [
+    ...DEFAULT_EVENTS,
+    ...extraEvents.filter((e) => !DEFAULT_EVENTS.includes(e)),
+  ];
+
+  return {
+    display_information: {
+      name: agent.name,
+      description: agent.description ?? "",
+      background_color: bgColor,
+      long_description: longDesc,
+    },
+    features: {
+      bot_user: {
+        display_name: agent.name,
+        always_online: true,
+      },
+    },
+    oauth_config: {
+      scopes: {
+        bot: scopes,
+      },
+    },
+    settings: {
+      event_subscriptions: {
+        bot_events: events,
+      },
+      interactivity: {
+        is_enabled: true,
+      },
+      org_deploy_enabled: false,
+      socket_mode_enabled: true,
+      token_rotation_enabled: false,
+    },
+  };
+}
+
+/**
+ * Generate manifest YAMLs for all target agents and write them to disk.
+ */
+export async function generateManifests(
+  options: ManifestsOptions
+): Promise<ManifestsResult> {
+  // Resolve fleet
+  const fleetSource = resolveFleetSource(options.fleet);
+  if (fleetSource.kind !== "file") {
+    throw new Error(
+      'slack manifests requires a fleet.yaml file — pass --fleet <path> or run from ' +
+        'a directory containing fleet.yaml.'
+    );
+  }
+
+  const { load } = await import("js-yaml");
+  const raw = load(fs.readFileSync(fleetSource.path, "utf-8")) as ManifestFleetInput;
+
+  const fleetName = raw?.fleet?.name;
+  if (!fleetName) throw new Error("fleet.name is required in fleet.yaml");
+
+  const agents = raw?.agents?.list ?? [];
+  if (agents.length === 0) throw new Error("No agents found in fleet.yaml");
+
+  const targetIds =
+    options.agent.length > 0 ? new Set(options.agent) : null;
+
+  const targets = agents.filter(
+    (a) => a.id && (!targetIds || targetIds.has(a.id))
+  );
+
+  if (targets.length === 0) {
+    throw new Error(
+      `No agents matched filter: ${options.agent.join(", ")}`
+    );
+  }
+
+  // Ensure output directory exists.
+  const outDir = path.resolve(options.out);
+  const mkdirFn =
+    options.mkdirFn ??
+    ((p: string) => fs.mkdirSync(p, { recursive: true }));
+  mkdirFn(outDir);
+
+  const writeFn: WriteFn =
+    options.writeFn ??
+    ((p, content) => fs.writeFileSync(p, content, "utf-8"));
+
+  const written: ManifestWriteResult[] = [];
+
+  for (const agent of targets) {
+    const manifest = buildManifest(agent, fleetName);
+    const yaml = yamlStringify(manifest, { lineWidth: 0 });
+    const filePath = path.join(outDir, `${agent.id}.yaml`);
+    writeFn(filePath, yaml);
+    written.push({ agentId: agent.id, filePath });
+  }
+
+  return { written };
+}
+
+// ── Output formatting ─────────────────────────────────────────────────────────
+
+export function printManifestsResult(result: ManifestsResult): void {
+  console.log();
+  for (const w of result.written) {
+    log.ok(`${w.agentId}: ${chalk.cyan(w.filePath)}`);
+  }
+  console.log();
+  console.log(
+    `  ${chalk.green(result.written.length)} manifest${result.written.length !== 1 ? "s" : ""} written`
+  );
+}
+
+// ── Commander registration ────────────────────────────────────────────────────
+
+export function registerSlackManifests(program: Command): void {
+  // Re-use or find the existing `slack` subcommand if already registered.
+  let slackCmd = program.commands.find((c) => c.name() === "slack");
+  if (!slackCmd) {
+    slackCmd = program
+      .command("slack")
+      .description("Slack utilities for fleet agents");
+  }
+
+  slackCmd
+    .command("manifests")
+    .description(
+      "Generate per-agent Slack App manifest YAMLs from fleet.yaml. " +
+      "Writes one <agent_id>.yaml per agent to the output directory."
+    )
+    .option("--fleet <path>", "fleet.yaml path (default: resolved via resolveFleetSource)")
+    .option("--out <dir>", "output directory", "./rendered/slack-manifests/")
+    .option(
+      "--agent <id>",
+      "limit to specific agent (repeatable)",
+      (val: string, prev: string[]) => [...prev, val],
+      [] as string[]
+    )
+    .action(async (opts: { fleet?: string; out: string; agent: string[] }) => {
+      try {
+        const result = await generateManifests({
+          fleet: opts.fleet,
+          out: opts.out,
+          agent: opts.agent,
+        });
+        printManifestsResult(result);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         log.error(msg);
