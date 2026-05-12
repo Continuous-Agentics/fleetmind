@@ -23,6 +23,7 @@ AGENT_PORT="${agent_port}"
 AWS_REGION="${aws_region}"
 NODE_VERSION="${node_version}"
 OPENCLAW_VERSION="${openclaw_version}"
+FLEETMIND_VERSION="${fleetmind_version}"
 
 WORKSPACE_BASE="/opt/openclaw/workspace"
 WORKSPACE_DIR="$WORKSPACE_BASE/$AGENT_ID"
@@ -87,6 +88,38 @@ echo "[bootstrap] Installing $OPENCLAW_PKG ..."
 npm install -g "$OPENCLAW_PKG"
 OPENCLAW_BIN=$(which openclaw)
 echo "[bootstrap] openclaw installed at: $OPENCLAW_BIN"
+
+# ── fleetmind CLI ─────────────────────────────────────────────────────────────
+# Install @continuous-agentics/fleetmind from GitHub Packages (private, scoped).
+# Auth: a read-only PAT with read:packages scope is stored in SSM as a shared
+# SecureString. All agents in all fleets read the same param.
+echo "[bootstrap] STAGE 6b: fleetmind install starting at $(date)"
+
+GITHUB_PACKAGES_TOKEN=$(aws ssm get-parameter \
+  --name "/fleetmind/shared/github-packages-token" \
+  --with-decryption \
+  --region "$AWS_REGION" \
+  --query Parameter.Value \
+  --output text)
+
+# Write per-instance .npmrc for root (npm install -g runs as root)
+cat > /root/.npmrc << NPMRC_EOF
+//npm.pkg.github.com/:_authToken=$${GITHUB_PACKAGES_TOKEN}
+@continuous-agentics:registry=https://npm.pkg.github.com
+NPMRC_EOF
+chmod 600 /root/.npmrc
+
+echo "[bootstrap] Installing @continuous-agentics/fleetmind@$FLEETMIND_VERSION ..."
+npm install -g "@continuous-agentics/fleetmind@$FLEETMIND_VERSION"
+
+# Verify
+FLEETMIND_BIN=$(which fleetmind)
+echo "[bootstrap] fleetmind installed at: $FLEETMIND_BIN"
+fleetmind --version
+
+# Clean up .npmrc — token served its purpose; future installs re-auth from SSM
+rm -f /root/.npmrc
+echo "[bootstrap] /root/.npmrc removed (token cleaned up)"
 
 # ── Workspace directory for this agent (on root volume) ─────────────────────────
 # Workspace lives on the EC2 root volume. Persistent state belongs in the
