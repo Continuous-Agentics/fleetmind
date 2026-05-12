@@ -16,6 +16,9 @@
  *      (for the agent gateway to use on EC2).
  *   4. deploy does not try to mkdir an absolute path on the operator's machine.
  *   5. Cron sweeps write to <localBase>/rendered/cron/ (not to workspace_base/cron/).
+ *   6. Per-agent openclaw.json slices (renderAgentOpenClawJson) contain only the
+ *      named agent's entries for agents.list, bindings, Slack accounts, and a2a allow.
+ *   7. writeOutputs emits one file per agent at rendered/openclaw/<agent_id>/openclaw.json.
  */
 
 import assert from "node:assert/strict";
@@ -25,7 +28,7 @@ import path from "node:path";
 import { test, describe, beforeEach, afterEach } from "node:test";
 
 import { provisionAgent, provisionFleet } from "../runtime/provisioner.js";
-import { renderOpenClawJson } from "../runtime/renderer.js";
+import { renderOpenClawJson, renderAgentOpenClawJson, writeOutputs } from "../runtime/renderer.js";
 import type { Fleet, AgentConfig } from "../config/schema.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -118,7 +121,7 @@ function makeForgeAgent(): AgentConfig {
   } as unknown as AgentConfig;
 }
 
-// ── Test suite ────────────────────────────────────────────────────────────────
+// ── Test suite: provisioner deploy path regression ────────────────────────────
 
 describe("deploy local-render-path regression", () => {
   let tmpDir: string;
@@ -275,5 +278,200 @@ describe("deploy local-render-path regression", () => {
 
     const renderedDir = path.join(tmpDir, "rendered");
     assert.ok(!fs.existsSync(renderedDir), "rendered/ dir must NOT be created on dry run");
+  });
+});
+
+// ── Per-agent openclaw.json slice tests ──────────────────────────────────────
+
+describe("renderAgentOpenClawJson — per-agent slice", () => {
+  // ── agents.list is a single entry ─────────────────────────────────────────
+
+  test("conductor slice contains only conductor in agents.list", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+
+    const json = renderAgentOpenClawJson(fleet, "conductor") as {
+      agents: { list: Array<{ id: string }> };
+    };
+
+    assert.equal(json.agents.list.length, 1, "agents.list must have exactly one entry");
+    assert.equal(json.agents.list[0]!.id, "conductor");
+  });
+
+  test("forge slice contains only forge in agents.list", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+
+    const json = renderAgentOpenClawJson(fleet, "forge") as {
+      agents: { list: Array<{ id: string }> };
+    };
+
+    assert.equal(json.agents.list.length, 1);
+    assert.equal(json.agents.list[0]!.id, "forge");
+  });
+
+  // ── default: true only on orchestrator ────────────────────────────────────
+
+  test("orchestrator slice has default:true", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+
+    const json = renderAgentOpenClawJson(fleet, "conductor") as {
+      agents: { list: Array<{ id: string; default?: boolean }> };
+    };
+
+    assert.equal(json.agents.list[0]!.default, true, "orchestrator slice must have default: true");
+  });
+
+  test("non-orchestrator slice does NOT have default:true", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+
+    const json = renderAgentOpenClawJson(fleet, "forge") as {
+      agents: { list: Array<{ id: string; default?: boolean }> };
+    };
+
+    assert.ok(
+      json.agents.list[0]!.default !== true,
+      "non-orchestrator slice must NOT have default: true"
+    );
+  });
+
+  // ── bindings — only this agent ─────────────────────────────────────────────
+
+  test("conductor slice has only conductor binding", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+
+    const json = renderAgentOpenClawJson(fleet, "conductor") as {
+      bindings: Array<{ agentId: string; match: { accountId: string } }>;
+    };
+
+    assert.equal(json.bindings.length, 1);
+    assert.equal(json.bindings[0]!.agentId, "conductor");
+    assert.equal(json.bindings[0]!.match.accountId, "conductor");
+  });
+
+  // ── channels.slack.accounts — only this agent ─────────────────────────────
+
+  test("conductor slice has only conductor Slack account", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+
+    const json = renderAgentOpenClawJson(fleet, "conductor") as {
+      channels: { slack: { accounts: Record<string, unknown> } };
+    };
+
+    const accounts = json.channels.slack.accounts;
+    assert.ok("conductor" in accounts, "conductor account must be present");
+    assert.ok(!("forge" in accounts), "forge account must NOT be present in conductor slice");
+  });
+
+  // ── tools.agentToAgent.allow — only from:this-agent ───────────────────────
+
+  test("conductor slice a2a allow contains only from:conductor entries", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+
+    const json = renderAgentOpenClawJson(fleet, "conductor") as {
+      tools: { agentToAgent: { allow: Array<{ from: string; to: string }> } };
+    };
+
+    for (const entry of json.tools.agentToAgent.allow) {
+      assert.equal(
+        entry.from,
+        "conductor",
+        `a2a allow must only have from:conductor; got from:${entry.from}`
+      );
+    }
+  });
+
+  test("forge slice a2a allow contains only from:forge entries", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+
+    const json = renderAgentOpenClawJson(fleet, "forge") as {
+      tools: { agentToAgent: { allow: Array<{ from: string; to: string }> } };
+    };
+
+    for (const entry of json.tools.agentToAgent.allow) {
+      assert.equal(
+        entry.from,
+        "forge",
+        `a2a allow must only have from:forge; got from:${entry.from}`
+      );
+    }
+  });
+
+  // ── unknown agentId throws ─────────────────────────────────────────────────
+
+  test("renderAgentOpenClawJson throws for unknown agentId", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent()];
+
+    assert.throws(
+      () => renderAgentOpenClawJson(fleet, "nonexistent"),
+      /nonexistent/,
+      "should throw with the unknown agent id in the message"
+    );
+  });
+});
+
+// ── writeOutputs — per-agent file layout ──────────────────────────────────────
+
+describe("writeOutputs — per-agent file layout", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleetmind-write-outputs-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("writes per-agent openclaw.json under <ocBase>/<agent_id>/", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+
+    writeOutputs(fleet, tmpDir);
+
+    // Default openclaw_json is ./rendered/openclaw.json
+    // resolveOpenClawBaseDir strips .json → ./rendered/openclaw/
+    for (const agentId of ["conductor", "forge"]) {
+      const expected = path.join(tmpDir, "rendered", "openclaw", agentId, "openclaw.json");
+      assert.ok(fs.existsSync(expected), `${expected} must exist`);
+    }
+  });
+
+  test("each per-agent file contains only that agent's data", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+
+    writeOutputs(fleet, tmpDir);
+
+    const conductorJson = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "rendered", "openclaw", "conductor", "openclaw.json"), "utf8")
+    ) as { agents: { list: Array<{ id: string }> } };
+
+    assert.equal(conductorJson.agents.list.length, 1);
+    assert.equal(conductorJson.agents.list[0]!.id, "conductor");
+
+    const forgeJson = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "rendered", "openclaw", "forge", "openclaw.json"), "utf8")
+    ) as { agents: { list: Array<{ id: string }> } };
+
+    assert.equal(forgeJson.agents.list.length, 1);
+    assert.equal(forgeJson.agents.list[0]!.id, "forge");
+  });
+
+  test("writeOutputs result keys include openclaw_json:<agent_id> for each agent", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+
+    const written = writeOutputs(fleet, tmpDir);
+
+    assert.ok("openclaw_json:conductor" in written, "written must have openclaw_json:conductor key");
+    assert.ok("openclaw_json:forge" in written, "written must have openclaw_json:forge key");
   });
 });

@@ -21,6 +21,7 @@ export function registerDeploy(program: Command): void {
         if (opts.render !== false && !opts.dryRun) {
           const written = writeOutputs(fleet);
           for (const [name, p] of Object.entries(written)) {
+            // Keys are "openclaw_json:<agent_id>" (one per agent) and "terraform_vars"
             log.ok(`Rendered ${name} → ${p}`);
           }
           // Show where workspace directories were written so operators know
