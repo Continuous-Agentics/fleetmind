@@ -127,12 +127,19 @@ def parse(s):
     except Exception:
         return {}
 
+agent_upper = "$AGENT".upper()
 combined = {**parse('''$ANTHROPIC'''), **parse('''$AGENT_SECRET''')}
 for k, v in combined.items():
     # Basic sanitisation: skip values with newlines/quotes that would break env syntax
     v_str = str(v)
     if "\n" not in v_str and "'" not in v_str:
+        # Canonical name (e.g. SLACK_BOT_TOKEN, ANTHROPIC_API_KEY)
         print(f"{k}={v_str}")
+        # Per-agent alias for fleet.yaml refs like <AGENT>_BOT_TOKEN, <AGENT>_APP_TOKEN, etc.
+        # Strip a leading SLACK_ so SLACK_BOT_TOKEN -> <AGENT>_BOT_TOKEN to match the convention
+        # used in fleet.yaml. Non-SLACK keys are aliased verbatim (harmless extras).
+        alias_key = k[6:] if k.startswith("SLACK_") else k
+        print(f"{agent_upper}_{alias_key}={v_str}")
 PYEOF
 
 echo "[secrets] Loaded $(wc -l < "$OUT") vars for agent: $AGENT"
@@ -158,13 +165,15 @@ RestartSec=10
 StartLimitBurst=5
 StartLimitIntervalSec=60
 
-Environment=HOME=/home/ec2-user
+Environment=HOME=$WORKSPACE_DIR
 Environment=PATH=$NODE_BIN:/usr/local/bin:/usr/bin:/bin
 
 # Fetch fresh secrets before each start (idempotent)
-ExecStartPre=/usr/local/bin/fetch-agent-secrets $FLEET_NAME $AGENT_ID $ENV_FILE $AWS_REGION
+# '+' prefix runs ExecStartPre as root so it can write to /run (root:root 755)
+ExecStartPre=+/usr/local/bin/fetch-agent-secrets $FLEET_NAME $AGENT_ID $ENV_FILE $AWS_REGION
 
-EnvironmentFile=$ENV_FILE
+# '-' prefix means: don't fail if file missing at unit-load time (it's created by ExecStartPre)
+EnvironmentFile=-$ENV_FILE
 
 ExecStart=$OPENCLAW_BIN gateway
 

@@ -39,6 +39,18 @@ This runbook covers the full end-to-end deployment: Terraform infra → secrets 
 
 ---
 
+## What We Learned From the First Deploy (PR #47)
+
+Five bootstrap/renderer bugs surfaced during the first live deploy attempt. All fixed in one PR (`fix/gg-sandbox-deploy-followups`, PR #47 against `test/gg-sandbox`):
+
+1. **`EnvironmentFile=` needs `-` prefix** — without it, systemd fails at unit-load time if `/run/openclaw-<agent>.env` doesn't yet exist (fresh tmpfs). Added `-` so a missing file is silently tolerated until `ExecStartPre` creates it.
+2. **`ExecStartPre=` needs `+` prefix** — the unit runs as `ec2-user`, but `/run` is `root:root 755`. `fetch-agent-secrets` uses `install -m 600` which requires root. Added `+` so `ExecStartPre` runs as root regardless of `User=`.
+3. **`HOME=` must point at the per-agent workspace** — OpenClaw reads `$HOME/.openclaw/openclaw.json`. Pointing `HOME` at `/home/ec2-user` caused a "config not found" failure; changed to `$WORKSPACE_DIR`.
+4. **`fetch-agent-secrets` must emit per-agent alias keys** — `fleet.yaml` references tokens as `${CONDUCTOR_BOT_TOKEN}` etc., but the script was only emitting bare keys (`SLACK_BOT_TOKEN`). The Python emit loop now also writes `<AGENT>_<KEY>=<value>` aliases for every secret, so both naming conventions resolve.
+5. **Renderer emitted `a2aAllow` as objects; OpenClaw expects string array** — `tools.agentToAgent.allow` must be `["forge"]`, not `[{from:"conductor",to:"forge"}]`. Fixed in `renderAgentOpenClawJson` (and the deprecated `renderOpenClawJson` for symmetry).
+
+---
+
 ## Prerequisites
 
 ### Operator machine

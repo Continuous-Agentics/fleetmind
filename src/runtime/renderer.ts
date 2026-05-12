@@ -69,11 +69,10 @@ export function renderAgentOpenClawJson(
     },
   };
 
-  // agentToAgent allow list — only entries where this agent is the sender
-  const a2aAllow: Array<{ from: string; to: string }> = [];
-  for (const targetId of agent.agent_to_agent.can_send_to) {
-    a2aAllow.push({ from: agent.id, to: targetId });
-  }
+  // agentToAgent allow list — array of target agent-id strings (per OpenClaw config schema).
+  // The per-agent slice already contains only THIS agent's send targets from fleet.yaml,
+  // so no from-filtering is needed here.
+  const a2aAllow = [...new Set(agent.agent_to_agent.can_send_to)].sort();
 
   // Plugins — this agent's list (fall back to fleet defaults)
   const agentPlugins = agent.plugins ?? defaults.plugins;
@@ -197,15 +196,15 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
     };
   }
 
-  // agentToAgent allow list (deduplicated)
-  const a2aAllow: Array<{ from: string; to: string }> = [];
+  // agentToAgent allow list — array of target agent-id strings (per OpenClaw config schema).
+  // Deduplicated and sorted for stable output.
+  const a2aAllowSet = new Set<string>();
   for (const agent of agents.list) {
     for (const targetId of agent.agent_to_agent.can_send_to) {
-      if (!a2aAllow.some((e) => e.from === agent.id && e.to === targetId)) {
-        a2aAllow.push({ from: agent.id, to: targetId });
-      }
+      a2aAllowSet.add(targetId);
     }
   }
+  const a2aAllow = [...a2aAllowSet].sort();
 
   // Collect all plugins across agents
   const allPlugins = new Set<string>();
