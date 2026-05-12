@@ -684,62 +684,11 @@ If the service fails:
 
 ---
 
-## Step 6b: Fleet Introduction Handshake (manual, one-time)
+## Step 6b: Fleet Roster (automated)
 
-Each gateway only knows its own Slack identity. For the PM to delegate, it needs each worker's Slack `user_id` and `delegation_channel`; for workers to reply correctly, they need the PM's. fleet.yaml carries the agent IDs but not the runtime Slack identities (those don't exist until the Slack apps are created and installed).
+The renderer automatically derives a `## Fleet Members` section in each agent's AGENTS.md from fleet.yaml (after `fleetmind slack discover` populates the `bot_user_id` values). The manual Slack handshake is no longer needed — bots boot with the roster baked into their workspace.
 
-For now this is a manual handshake. Future work: automate via `fleetmind fleet introduce` (tracked as issue #20).
-
-### 6b.1. Capture each bot's Slack `user_id` and home channel
-
-> **If you ran Step 4c (`fleetmind slack discover`)**, `bot_user_id` values are already in `fleet.yaml` and the renderer has already baked them into each agent's `openclaw.json` — the Slack-side `users` allowlists for inter-bot message delivery are configured automatically. You can skip the manual `auth.test` curl below.
-
-If you need to capture `user_id` manually (e.g. for a newly added agent before running discover), from your laptop:
-
-```bash
-# Use the agent's BOT token (xoxb-...) — same one in Secrets Manager
-TOKEN="<the bot's xoxb token>"
-curl -sH "Authorization: Bearer $TOKEN" https://slack.com/api/auth.test | jq '{bot_user_id:.user_id, team:.team_id}'
-```
-
-Also capture the channel IDs for the bot's home channels (right-click channel → Copy link → the trailing ID).
-
-For this fleet that's:
-- Conductor (PM): `user_id=U…`, home channel `#fleetmind-project-management` (`C0B2NNJEFKR`)
-- Forge (backend worker): `user_id=U…`, delegation channel `#fleetmind-dev-land` (`C0B324RF1QW`)
-
-### 6b.2. Brief the PM
-
-> **Note:** The handshake below is now narrative-only. Slack-side `users` allowlists are derived from `bot_user_id` values in `fleet.yaml` (populated by Step 4c) and baked into `openclaw.json` at render time — the bots don't need to exchange IDs at runtime for message delivery to work. The purpose of this handshake is for the PM to record the roster in its `MEMORY.md` (task coordination, not Slack config).
-
-DM Conductor in `#fleetmind-project-management` with the roster. Something like:
-
-> Your fleet is `gg-sandbox`. Team:
-> - Forge (backend worker) — `slack_user_id=U0YYYY`, `delegation_channel=C0B324RF1QW`
->
-> Please:
-> 1. Record this in your `MEMORY.md` under a "Fleet Members" section.
-> 2. Post a roster message in `#fleetmind-dev-land` mentioning `<@U0YYYY>` so Forge knows you're the PM and where to reply.
-> 3. Confirm back here when both are done.
-
-### 6b.3. Have each worker record the same roster
-
-When the PM's intro message lands in `#fleetmind-dev-land`, DM Forge (or thread-reply) asking it to record the roster in its own `MEMORY.md` under "Fleet Members":
-- Conductor (PM) — `slack_user_id=U0XXXX`, home channel `C0B2NNJEFKR`
-- Self confirmation: "I'm Forge, backend worker"
-
-Do the same for any additional workers as the fleet grows.
-
-### 6b.4. Verify
-
-SSM into each instance and confirm `MEMORY.md` has the new "Fleet Members" section:
-
-```bash
-grep -A 4 "Fleet Members" /opt/openclaw/workspace/conductor/MEMORY.md
-grep -A 4 "Fleet Members" /opt/openclaw/workspace/forge/MEMORY.md
-```
-
-If both bots restart from cold, the roster persists (it's on the root EBS volume, not in `/run` or memory).
+If you add a new agent to the fleet later, re-run `fleetmind slack discover` to populate the new agent's `bot_user_id`, then `fleetmind push fleet` to redeploy with updated rosters.
 
 ---
 

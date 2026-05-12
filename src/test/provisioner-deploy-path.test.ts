@@ -27,7 +27,7 @@ import os from "node:os";
 import path from "node:path";
 import { test, describe, beforeEach, afterEach } from "node:test";
 
-import { provisionAgent, provisionFleet } from "../runtime/provisioner.js";
+import { provisionAgent, provisionFleet, buildFleetRoster } from "../runtime/provisioner.js";
 import { renderOpenClawJson, renderAgentOpenClawJson, writeOutputs } from "../runtime/renderer.js";
 import type { Fleet, AgentConfig } from "../config/schema.js";
 
@@ -759,5 +759,222 @@ describe("role-template rendering", () => {
       identityContent.includes("Specialist"),
       "fallback IDENTITY.md must include 'Specialist' from the inline identityMd() stub"
     );
+  });
+});
+
+// =============================================================================
+// Fleet roster section tests
+// =============================================================================
+
+describe("fleet roster — buildFleetRoster", () => {
+  function makeFleetWithAgents(agents: AgentConfig[]): Fleet {
+    const fleet = makeFleet();
+    fleet.agents.list = agents;
+    return fleet;
+  }
+
+  function makePmAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
+    return {
+      id: "conductor",
+      name: "Conductor",
+      emoji: "🎼",
+      description: "PM bot that orchestrates",
+      orchestrator: true,
+      role: "pm",
+      persona: { soul: "You are Conductor." },
+      slack: {
+        account_id: "conductor",
+        bot_token: "xoxb-conductor",
+        app_token: "xapp-conductor",
+        bot_user_id: "U0CONDUCTOR",
+        channels: ["C0PMCHANNEL"],
+      },
+      skills: [],
+      plugins: ["anthropic"],
+      agent_to_agent: { can_send_to: [] },
+      ...overrides,
+    } as unknown as AgentConfig;
+  }
+
+  function makeWorkerAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
+    return {
+      id: "forge",
+      name: "Forge",
+      emoji: "⚙️",
+      description: "Backend worker",
+      orchestrator: false,
+      role: "backend-worker",
+      persona: { soul: "You are Forge." },
+      slack: {
+        account_id: "forge",
+        bot_token: "xoxb-forge",
+        app_token: "xapp-forge",
+        bot_user_id: "U0FORGE",
+        channels: ["C0DEVCHANNEL", "C0SECONDCHAN"],
+      },
+      skills: [],
+      plugins: ["anthropic"],
+      agent_to_agent: { can_send_to: [] },
+      ...overrides,
+    } as unknown as AgentConfig;
+  }
+
+  function makeFrontendAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
+    return {
+      id: "pixel",
+      name: "Pixel",
+      emoji: "🎨",
+      description: "Frontend worker",
+      orchestrator: false,
+      role: "frontend-worker",
+      persona: { soul: "You are Pixel." },
+      slack: {
+        account_id: "pixel",
+        bot_token: "xoxb-pixel",
+        app_token: "xapp-pixel",
+        bot_user_id: "U0PIXEL",
+        channels: ["C0DEVCHANNEL"],
+      },
+      skills: [],
+      plugins: ["anthropic"],
+      agent_to_agent: { can_send_to: [] },
+      ...overrides,
+    } as unknown as AgentConfig;
+  }
+
+  test("two-agent fleet: PM roster lists worker (not self)", () => {
+    const pm = makePmAgent();
+    const worker = makeWorkerAgent();
+    const fleet = makeFleetWithAgents([pm, worker]);
+
+    const roster = buildFleetRoster(fleet, pm);
+
+    // Must include fleet name
+    assert.ok(roster.includes("gg-sandbox"), "roster must include fleet name");
+    // Must list the worker
+    assert.ok(roster.includes("Forge"), "PM roster must list worker Forge");
+    assert.ok(roster.includes("U0FORGE"), "PM roster must include worker's bot_user_id");
+    assert.ok(roster.includes("<@U0FORGE>"), "PM roster must include worker's mention");
+    assert.ok(roster.includes("C0DEVCHANNEL"), "PM roster must include worker's channels");
+    assert.ok(roster.includes("Backend worker"), "PM roster must include worker's role label");
+    // Must NOT include self
+    assert.ok(!roster.includes("Conductor"), "PM roster must not list self");
+    assert.ok(!roster.includes("U0CONDUCTOR"), "PM roster must not include own user_id");
+  });
+
+  test("two-agent fleet: worker roster lists PM (not self)", () => {
+    const pm = makePmAgent();
+    const worker = makeWorkerAgent();
+    const fleet = makeFleetWithAgents([pm, worker]);
+
+    const roster = buildFleetRoster(fleet, worker);
+
+    assert.ok(roster.includes("Conductor"), "worker roster must list PM");
+    assert.ok(roster.includes("U0CONDUCTOR"), "worker roster must include PM's bot_user_id");
+    assert.ok(roster.includes("<@U0CONDUCTOR>"), "worker roster must include PM mention");
+    assert.ok(roster.includes("PM (orchestrator)"), "worker roster must include PM role label");
+    // Must NOT include self
+    assert.ok(!roster.includes("Forge"), "worker roster must not list self");
+  });
+
+  test("three-agent fleet: each agent's roster lists exactly 2 others", () => {
+    const pm = makePmAgent();
+    const worker = makeWorkerAgent();
+    const frontend = makeFrontendAgent();
+    const fleet = makeFleetWithAgents([pm, worker, frontend]);
+
+    const pmRoster = buildFleetRoster(fleet, pm);
+    assert.ok(pmRoster.includes("Forge"), "PM roster must list Forge");
+    assert.ok(pmRoster.includes("Pixel"), "PM roster must list Pixel");
+    assert.ok(!pmRoster.includes("Conductor"), "PM roster must not list self");
+
+    const workerRoster = buildFleetRoster(fleet, worker);
+    assert.ok(workerRoster.includes("Conductor"), "worker roster must list PM");
+    assert.ok(workerRoster.includes("Pixel"), "worker roster must list frontend peer");
+    assert.ok(!workerRoster.includes("Forge"), "worker roster must not list self");
+
+    const frontendRoster = buildFleetRoster(fleet, frontend);
+    assert.ok(frontendRoster.includes("Conductor"), "frontend roster must list PM");
+    assert.ok(frontendRoster.includes("Forge"), "frontend roster must list backend worker");
+    assert.ok(!frontendRoster.includes("Pixel"), "frontend roster must not list self");
+  });
+
+  test("solo fleet: roster says no peers configured", () => {
+    const pm = makePmAgent();
+    const fleet = makeFleetWithAgents([pm]);
+
+    const roster = buildFleetRoster(fleet, pm);
+
+    assert.ok(roster.includes("solo bot"), "solo roster must say 'solo bot'");
+    assert.ok(roster.includes("No peer bots configured"), "solo roster must say no peers");
+    assert.ok(roster.includes("gg-sandbox"), "solo roster must include fleet name");
+    // Must not have any peer listing lines
+    assert.ok(!roster.includes("Slack user:"), "solo roster must not have any peer Slack user lines");
+  });
+
+  test("missing bot_user_id shown as TODO marker", () => {
+    const pm = makePmAgent();
+    // Worker has no bot_user_id
+    const worker = makeWorkerAgent({
+      slack: {
+        account_id: "forge",
+        bot_token: "xoxb-forge",
+        app_token: "xapp-forge",
+        channels: ["C0DEVCHANNEL"],
+      } as unknown as AgentConfig["slack"],
+    });
+    const fleet = makeFleetWithAgents([pm, worker]);
+
+    const roster = buildFleetRoster(fleet, pm);
+
+    assert.ok(roster.includes("TODO (run fleetmind slack discover)"), "missing user_id must show TODO marker");
+    // Still lists the peer
+    assert.ok(roster.includes("Forge"), "peer without user_id must still be listed");
+  });
+
+  test("{{FLEET_ROSTER}} placeholder is replaced in rendered AGENTS.md (no {{ remains)", async () => {
+    const pm = makePmAgent();
+    const worker = makeWorkerAgent();
+    const fleet = makeFleetWithAgents([pm, worker]);
+    fleet.agents.list = [pm, worker];
+
+    const tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), "fleetmind-roster-placeholder-"));
+    try {
+      await provisionAgent(fleet, pm, false, tmpDir2);
+      const agentsMdPath = path.join(tmpDir2, "rendered", "workspaces", "conductor", "AGENTS.md");
+      const content = fs.readFileSync(agentsMdPath, "utf8");
+      assert.ok(!content.includes("{{"), "no {{ should remain in rendered AGENTS.md");
+      assert.ok(content.includes("## Fleet Members"), "Fleet Members section must be present");
+    } finally {
+      fs.rmSync(tmpDir2, { recursive: true, force: true });
+    }
+  });
+
+  test("role label mapping is correct for all roles", () => {
+    const pm = makePmAgent();
+    const backendWorker = makeWorkerAgent({ role: "backend-worker" } as Partial<AgentConfig>);
+    const frontendWorker = makeFrontendAgent({ role: "frontend-worker" } as Partial<AgentConfig>);
+    const genericWorker = makeWorkerAgent({ id: "plain", name: "Plain", role: "worker" } as Partial<AgentConfig>);
+
+    const fleet = makeFleetWithAgents([pm, backendWorker, frontendWorker, genericWorker]);
+
+    // From PM's perspective, all workers should have correct role labels
+    const roster = buildFleetRoster(fleet, pm);
+    assert.ok(roster.includes("Backend worker"), "backend-worker must map to 'Backend worker'");
+    assert.ok(roster.includes("Frontend worker"), "frontend-worker must map to 'Frontend worker'");
+    assert.ok(roster.includes("Worker"), "worker must map to 'Worker'");
+    // PM's own label from any peer's perspective:
+    const workerRoster = buildFleetRoster(fleet, backendWorker);
+    assert.ok(workerRoster.includes("PM (orchestrator)"), "pm must map to 'PM (orchestrator)'");
+  });
+
+  test("channels list is formatted as comma-separated channel IDs", () => {
+    const pm = makePmAgent();
+    const worker = makeWorkerAgent(); // has ["C0DEVCHANNEL", "C0SECONDCHAN"]
+    const fleet = makeFleetWithAgents([pm, worker]);
+
+    const roster = buildFleetRoster(fleet, pm);
+    // Both channel IDs must appear and be joined with a comma
+    assert.ok(roster.includes("C0DEVCHANNEL, C0SECONDCHAN"), "channels must be comma-separated");
   });
 });
