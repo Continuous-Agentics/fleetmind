@@ -93,6 +93,8 @@ openclaw:
     profile: coding
     web_search:
       enabled: false
+      # brave plugin is buggy; using duckduckgo (key-free, bundled)
+      provider: duckduckgo
   slack:
     mode: socket
     typing_reaction: thinking_face
