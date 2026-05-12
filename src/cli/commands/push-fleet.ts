@@ -14,8 +14,23 @@ import { execSync, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
 import type { Command } from "commander";
+
+// Resolve the running fleetmind version from package.json so the manifest's
+// `fleetmind_version` field reflects what was actually installed. Mirrors
+// the pattern used for `fleetmind --version` (PR #60).
+function resolveFleetmindVersion(): string {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const pkgPath = path.resolve(here, "..", "..", "..", "package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as { version: string };
+    return pkg.version;
+  } catch {
+    return "unknown";
+  }
+}
 
 import {
   S3Client,
@@ -289,7 +304,7 @@ export async function runPushFleet(
   const localBase = opts.localBase ?? process.cwd();
   const region = opts.region;
   const bucket = `${fleetName}-ledger`;
-  const version = opts.fleetmindVersion ?? "0.4.1";
+  const version = opts.fleetmindVersion ?? resolveFleetmindVersion();
   const tmpBase = os.tmpdir();
 
   // Determine target agents
