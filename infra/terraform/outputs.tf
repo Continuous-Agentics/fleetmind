@@ -5,10 +5,8 @@ output "instance_ids" {
   value       = { for k, v in aws_instance.agent : k => v.id }
 }
 
-output "public_ips" {
-  description = "Public IP per agent instance."
-  value       = { for k, v in aws_instance.agent : k => v.public_ip }
-}
+# public_ips output removed — agents are now in private subnets with
+# associate_public_ip_address = false. Use private_ips or ssm_connect instead.
 
 output "private_ips" {
   description = "Private IP per agent instance."
@@ -18,11 +16,6 @@ output "private_ips" {
 output "ssm_connect" {
   description = "SSM Session Manager connect commands, one per agent."
   value       = { for k, v in aws_instance.agent : k => "aws ssm start-session --target ${v.id} --region ${var.aws_region}" }
-}
-
-output "workspace_volume_ids" {
-  description = "EBS workspace volume ID per agent. Each holds that agent's memory — never delete."
-  value       = { for k, v in aws_ebs_volume.agent_workspace : k => v.id }
 }
 
 output "agent_workspace_paths" {

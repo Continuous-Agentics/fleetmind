@@ -15,6 +15,32 @@ import { installSkill } from "./resolver.js";
 import { log } from "../utils/log.js";
 
 // =============================================================================
+// Role-template resolution
+// =============================================================================
+
+const ROLE_TEMPLATE_DIR: Record<string, string> = {
+  "pm": "openclaw/pm-bot/workspace",
+  "backend-worker": "openclaw/backend-worker-bot/workspace",
+  "frontend-worker": "openclaw/frontend-worker-bot/workspace",
+  "worker": "openclaw/worker-bot/workspace",
+};
+
+function applyPlaceholders(text: string, agent: AgentConfig): string {
+  return text
+    .replaceAll("{{NAME}}", agent.name)
+    .replaceAll("{{EMOJI}}", agent.emoji ?? "")
+    .replaceAll("{{DESCRIPTION}}", agent.description ?? "")
+    .replaceAll("{{SOUL_BODY}}", agent.persona?.soul ?? "");
+}
+
+function readRoleTemplate(role: string, filename: string): string | null {
+  const dir = ROLE_TEMPLATE_DIR[role] ?? ROLE_TEMPLATE_DIR["worker"]!;
+  const filePath = path.resolve(process.cwd(), dir, filename);
+  if (!fs.existsSync(filePath)) return null;
+  return fs.readFileSync(filePath, "utf8");
+}
+
+// =============================================================================
 // Workspace file generators
 // =============================================================================
 
@@ -136,13 +162,18 @@ function buildSweepJob(
 async function seedCronSweeps(
   fleet: Fleet,
   agent: AgentConfig,
-  dryRun: boolean
+  dryRun: boolean,
+  /** Same localBase as provisionAgent — cron output goes to <localBase>/rendered/cron/. */
+  localBase: string
 ): Promise<void> {
   if (!agent.orchestrator) return;
   const sweeps = agent.delegation?.sweeps;
   if (!sweeps?.length) return;
 
-  const cronDir = path.join(fleet.agents.defaults.workspace_base, "cron");
+  // Cron sweeps are written locally to ./rendered/cron/jobs.json so the
+  // rendered output can be SCP'd to workspace_base/cron/ on the EC2.
+  // We do NOT use workspace_base as a local mkdir target.
+  const cronDir = path.join(localBase, "rendered", "cron");
   const jobsPath = path.join(cronDir, "jobs.json");
   const tmpPath = `${jobsPath}.tmp`;
 
@@ -193,15 +224,40 @@ async function seedCronSweeps(
 export async function provisionAgent(
   fleet: Fleet,
   agent: AgentConfig,
-  dryRun: boolean
+  dryRun: boolean,
+  /** Local base directory for rendered output. Defaults to process.cwd().
+   *  Workspace files are written to <localBase>/rendered/workspaces/<agent_id>/.
+   *  workspace_base from fleet config is the EC2-side path; it is NOT used as a
+   *  local mkdir target. */
+  localBase: string = process.cwd()
 ): Promise<void> {
-  const workspace = path.join(fleet.agents.defaults.workspace_base, `workspace-${agent.id}`);
+  // Local render target: ./rendered/workspaces/<agent_id>/ — consistent with
+  // openclaw_json and terraform_vars which both go to ./rendered/.
+  // workspace_base remains the EC2-side path (consumed by user-data and the
+  // future deploy transport); it must NOT be used as a local mkdir target.
+  const workspace = path.join(localBase, "rendered", "workspaces", agent.id);
 
   if (!dryRun) fs.mkdirSync(workspace, { recursive: true });
 
-  writeFile(path.join(workspace, "SOUL.md"), soulMd(agent), dryRun);
-  writeFile(path.join(workspace, "AGENTS.md"), agentsMd(agent), dryRun);
-  writeFile(path.join(workspace, "IDENTITY.md"), identityMd(agent), dryRun);
+  const role = agent.role ?? "worker";
+
+  const soulTemplate = readRoleTemplate(role, "SOUL.md");
+  const soulContent = soulTemplate !== null
+    ? applyPlaceholders(soulTemplate, agent)
+    : soulMd(agent);
+  writeFile(path.join(workspace, "SOUL.md"), soulContent, dryRun);
+
+  const agentsTemplate = readRoleTemplate(role, "AGENTS.md");
+  const agentsContent = agentsTemplate !== null
+    ? applyPlaceholders(agentsTemplate, agent)
+    : agentsMd(agent);
+  writeFile(path.join(workspace, "AGENTS.md"), agentsContent, dryRun);
+
+  const identityTemplate = readRoleTemplate(role, "IDENTITY.md");
+  const identityContent = identityTemplate !== null
+    ? applyPlaceholders(identityTemplate, agent)
+    : identityMd(agent);
+  writeFile(path.join(workspace, "IDENTITY.md"), identityContent, dryRun);
 
   // USER.md — only create if missing (don't overwrite customized versions)
   const userMdPath = path.join(workspace, "USER.md");
@@ -219,11 +275,18 @@ export async function provisionAgent(
     }
   }
 
+  log.dim(`  workspace → ${workspace}`);
+
   // Seed WORKER_SWEEP cron jobs into jobs.json for PM bots.
-  await seedCronSweeps(fleet, agent, dryRun);
+  await seedCronSweeps(fleet, agent, dryRun, localBase);
 }
 
-export async function provisionFleet(fleet: Fleet, dryRun = false): Promise<void> {
+export async function provisionFleet(
+  fleet: Fleet,
+  dryRun = false,
+  /** Local base directory for rendered output. Defaults to process.cwd(). */
+  localBase: string = process.cwd()
+): Promise<void> {
   log.info(`\nFleetMind — provisioning fleet ${fleet.fleet.name}`);
   if (fleet.fleet.client) log.info(`  Client: ${fleet.fleet.client}`);
   log.info(`  Agents: ${fleet.agents.list.length}`);
@@ -231,22 +294,24 @@ export async function provisionFleet(fleet: Fleet, dryRun = false): Promise<void
 
   for (const agent of fleet.agents.list) {
     log.step(`${agent.emoji} ${agent.name}...`);
-    await provisionAgent(fleet, agent, dryRun);
+    await provisionAgent(fleet, agent, dryRun, localBase);
     log.ok(`${agent.emoji} ${agent.name}`);
   }
 
   log.success("\nFleet provisioned.");
+  log.info(`  Workspaces written to ${path.join(localBase, "rendered", "workspaces")}/`);
   log.info("  Next: run `fleetmind render` to generate openclaw.json");
 }
 
-export function diffFleet(fleet: Fleet): string[] {
+export function diffFleet(
+  fleet: Fleet,
+  /** Local base directory for rendered output. Defaults to process.cwd(). */
+  localBase: string = process.cwd()
+): string[] {
   const changes: string[] = [];
 
   for (const agent of fleet.agents.list) {
-    const workspace = path.join(
-      fleet.agents.defaults.workspace_base,
-      `workspace-${agent.id}`
-    );
+    const workspace = path.join(localBase, "rendered", "workspaces", agent.id);
 
     if (!fs.existsSync(workspace)) {
       changes.push(`[+] Create workspace for ${agent.emoji} ${agent.name} at ${workspace}`);
@@ -274,7 +339,7 @@ export function diffFleet(fleet: Fleet): string[] {
 
     // Cron sweeps diff — report any new sweeps that haven't been seeded yet.
     if (agent.orchestrator && agent.delegation?.sweeps?.length) {
-      const cronDir = path.join(fleet.agents.defaults.workspace_base, "cron");
+      const cronDir = path.join(localBase, "rendered", "cron");
       const jobsPath = path.join(cronDir, "jobs.json");
       let existingNames = new Set<string>();
       if (fs.existsSync(jobsPath)) {

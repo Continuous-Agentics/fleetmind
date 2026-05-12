@@ -6,11 +6,15 @@
 import { z } from "zod";
 
 /** Where a skill comes from:
- *  - clawhub: public skill published on ClaWHub (e.g. by continuous-agentics)
- *  - private: Continuous Agentics proprietary skill library (requires CA_REGISTRY_TOKEN)
- *  - client:  skill in the client's own skills_repo (default)
+ *  - clawhub:   public skill published on ClaWHub (e.g. by continuous-agentics)
+ *  - private:   Continuous Agentics proprietary skill library (requires CA_REGISTRY_TOKEN)
+ *  - client:    skill in the client's own skills_repo (default)
+ *  - fleetmind: bundled first-party skill shipped with the fleetmind package
+ *               (e.g. bot-delegation, bot-reception). Resolves relative to the
+ *               fleetmind package root at openclaw/skills/<name>/, regardless of
+ *               where the operator's fleet.yaml or skills_repo lives.
  */
-export const SkillSourceSchema = z.enum(["clawhub", "private", "client"]).default("client");
+export const SkillSourceSchema = z.enum(["clawhub", "private", "client", "fleetmind"]).default("client");
 
 export const SkillRefSchema = z.union([
   // shorthand string → defaults to client source
@@ -124,15 +128,31 @@ export const DelegationAgentSchema = z.object({
   sweeps: z.array(CronSweepSchema).optional(),
 });
 
+/**
+ * Optional per-agent Anthropic config.
+ *
+ * api_key may be a ${VAR} placeholder or a literal value.
+ * Resolution order for `fleetmind secrets populate`:
+ *   1. ${<AGENT_ID_UPPER>_ANTHROPIC_API_KEY} env var
+ *   2. This field (resolved from env if it's a placeholder)
+ *   3. Fleet-wide ${ANTHROPIC_API_KEY} env var
+ */
+export const AnthropicAgentSchema = z.object({
+  api_key: z.string().optional(),
+});
+
 export const AgentSchema = z.object({
   id: z.string(),
   name: z.string(),
   emoji: z.string().default("🤖"),
   description: z.string().default(""),
   orchestrator: z.boolean().default(false),
+  role: z.enum(["pm", "backend-worker", "frontend-worker", "worker"]).default("worker"),
   model: z.string().optional(),
   persona: PersonaSchema.default({}),
   slack: SlackAccountSchema,
+  /** Optional per-agent Anthropic configuration. */
+  anthropic: AnthropicAgentSchema.optional(),
   skills: z.array(SkillRefSchema).default([]),
   plugins: z.array(z.string()).optional(),
   agent_to_agent: AgentToAgentSchema.default({}),
@@ -192,7 +212,7 @@ export const OpenClawConfigSchema = z.object({
     profile: z.string().default("coding"),
     web_search: z.object({
       enabled: z.boolean().default(true),
-      provider: z.string().default("brave"),
+      provider: z.string().default("duckduckgo"),
     }).default({}),
   }).default({}),
   slack: z.object({
@@ -244,6 +264,7 @@ export type DelegationAgentConfig = z.infer<typeof DelegationAgentSchema>;
 export type SkillSource = z.infer<typeof SkillSourceSchema>;
 export type SkillRef = { name: string; source: SkillSource; author?: string; version?: string };
 export type SlackAccount = z.infer<typeof SlackAccountSchema>;
+export type AnthropicAgentConfig = z.infer<typeof AnthropicAgentSchema>;
 export type AgentConfig = z.infer<typeof AgentSchema>;
 export type AgentDefaults = z.infer<typeof AgentDefaultsSchema>;
 export type SkillsRepo = z.infer<typeof SkillsRepoSchema>;

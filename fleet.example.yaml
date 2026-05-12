@@ -6,16 +6,16 @@
 #
 # Deploy with: fleetmind deploy fleet.yaml
 #
-# Infrastructure note: each agent in this fleet gets its OWN EC2 instance and
-# EBS workspace volume ("one EC2 per agent, one gateway per EC2"). To override
-# sizing for specific agents, pass per-agent maps in fleet.auto.tfvars or a
-# custom .tfvars file:
+# Infrastructure note: each agent in this fleet gets its OWN EC2 instance
+# ("one EC2 per agent, one gateway per EC2"). Workspace files live on the EC2
+# root volume at /opt/openclaw/workspace/<agent_id>/. Persistent state belongs
+# in the shared substrates (task-ledger DDB, context-store DDB, narratives S3).
+# To override instance sizing for specific agents, pass per-agent maps in
+# fleet.auto.tfvars or a custom .tfvars file:
 #
 #   agent_instance_types = { conductor = "t3.large", forge = "t3.medium" }
-#   agent_volume_sizes_gb = { conductor = 60 }
 #
-# Defaults (var.instance_type = t3.medium, var.workspace_volume_size_gb = 40)
-# apply for any agent not listed in those maps.
+# Defaults (var.instance_type = t3.medium) apply for any agent not listed.
 
 # ── Metadata ──────────────────────────────────────────────────────────────────
 fleet:
@@ -102,6 +102,13 @@ agents:
         - name: ca-fleet-ops
           source: private
           version: "1.0.0"
+        # Tier 4: FleetMind bundled first-party skills
+        # These ship inside the fleetmind package at openclaw/skills/<name>/ and
+        # do NOT require a skills_repo entry. Use source: fleetmind for the
+        # PM-side bot-delegation skill and the worker-side bot-reception skill.
+        # If the name is wrong, fleetmind deploy errors explicitly (no silent skip).
+        - name: bot-delegation
+          source: fleetmind
       plugins:
         - anthropic
         - brave
@@ -162,6 +169,9 @@ agents:
           source: client
         - name: acme-design-tokens
           source: client
+        # Tier 4: FleetMind bundled skill for worker-side task reception
+        - name: bot-reception
+          source: fleetmind
       plugins:
         - anthropic
       agent_to_agent:

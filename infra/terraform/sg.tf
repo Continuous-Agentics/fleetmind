@@ -4,17 +4,12 @@ resource "aws_security_group" "fleet" {
   description = "FleetMind agent instance"
   vpc_id      = local.vpc_id
 
-  # OpenClaw ports — one per agent
-  dynamic "ingress" {
-    for_each = var.agent_ports
-    content {
-      description = "OpenClaw port for ${ingress.key}"
-      from_port   = ingress.value
-      to_port     = ingress.value
-      protocol    = "tcp"
-      cidr_blocks = ["0.0.0.0/0"]
-    }
-  }
+  # OpenClaw gateway ports: ingress intentionally removed.
+  # Agents use Slack Socket Mode (outbound WebSocket to slack.com) and AWS API
+  # via NAT gateway — no inbound traffic is needed on the agent port. Instances
+  # now live in private subnets with no public IPs, so internet ingress would be
+  # unreachable anyway. If HTTP webhook support is added in future, restrict to
+  # the VPC CIDR only (cidr_blocks = [aws_vpc.main[0].cidr_block]).
 
   # Optional SSH (use SSM instead — this is off by default)
   dynamic "ingress" {
@@ -42,7 +37,7 @@ resource "aws_security_group" "fleet" {
 # ── RDS security group ────────────────────────────────────────────────────────
 resource "aws_security_group" "rds" {
   name        = "${var.fleet_name}-rds"
-  description = "RDS Postgres — fleet instance access only"
+  description = "RDS Postgres - fleet instance access only"
   vpc_id      = local.vpc_id
 
   ingress {

@@ -229,16 +229,16 @@ resource "aws_s3_bucket_policy" "ledger" {
 
 data "aws_iam_policy_document" "pm" {
   statement {
-    sid     = "DDBCreateTask"
-    effect  = "Allow"
-    actions = ["dynamodb:PutItem"]
+    sid       = "DDBCreateTask"
+    effect    = "Allow"
+    actions   = ["dynamodb:PutItem"]
     resources = [aws_dynamodb_table.tasks.arn]
   }
 
   statement {
-    sid     = "DDBUpdateTask"
-    effect  = "Allow"
-    actions = ["dynamodb:UpdateItem"]
+    sid       = "DDBUpdateTask"
+    effect    = "Allow"
+    actions   = ["dynamodb:UpdateItem"]
     resources = [aws_dynamodb_table.tasks.arn]
   }
 
@@ -254,23 +254,28 @@ data "aws_iam_policy_document" "pm" {
   }
 
   statement {
-    sid     = "WriteProjectReadme"
-    effect  = "Allow"
-    actions = ["s3:PutObject", "s3:PutObjectTagging"]
+    sid       = "WriteProjectReadme"
+    effect    = "Allow"
+    actions   = ["s3:PutObject", "s3:PutObjectTagging"]
     resources = ["${aws_s3_bucket.ledger.arn}/v0/projects/*/README.md"]
   }
 
   statement {
-    sid     = "ReadAll"
-    effect  = "Allow"
-    actions = ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectTagging"]
-    resources = ["${aws_s3_bucket.ledger.arn}/v0/*"]
+    # Read access across the whole ledger bucket. The bucket is the
+    # canonical artifact store for this fleet: v0/ holds task-ledger
+    # narratives, deploy-staging/ holds rendered workspaces pulled by
+    # agents on boot, and additional prefixes may be added. Versioning
+    # is per-prefix at the schema level, not enforced via IAM.
+    sid       = "ReadAll"
+    effect    = "Allow"
+    actions   = ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectTagging"]
+    resources = ["${aws_s3_bucket.ledger.arn}/*"]
   }
 
   statement {
-    sid     = "ListBucket"
-    effect  = "Allow"
-    actions = ["s3:ListBucket", "s3:GetBucketLocation"]
+    sid       = "ListBucket"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket", "s3:GetBucketLocation"]
     resources = [aws_s3_bucket.ledger.arn]
   }
 }
@@ -293,9 +298,9 @@ resource "aws_iam_role_policy_attachment" "pm" {
 
 data "aws_iam_policy_document" "worker" {
   statement {
-    sid     = "DDBUpdateTask"
-    effect  = "Allow"
-    actions = ["dynamodb:UpdateItem"]
+    sid       = "DDBUpdateTask"
+    effect    = "Allow"
+    actions   = ["dynamodb:UpdateItem"]
     resources = [aws_dynamodb_table.tasks.arn]
   }
 
@@ -311,23 +316,28 @@ data "aws_iam_policy_document" "worker" {
   }
 
   statement {
-    sid     = "WriteTasks"
-    effect  = "Allow"
-    actions = ["s3:PutObject", "s3:PutObjectTagging"]
+    sid       = "WriteTasks"
+    effect    = "Allow"
+    actions   = ["s3:PutObject", "s3:PutObjectTagging"]
     resources = ["${aws_s3_bucket.ledger.arn}/v0/projects/*/tasks/*.md"]
   }
 
   statement {
-    sid     = "ReadAll"
-    effect  = "Allow"
-    actions = ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectTagging"]
-    resources = ["${aws_s3_bucket.ledger.arn}/v0/*"]
+    # Read access across the whole ledger bucket. The bucket is the
+    # canonical artifact store for this fleet: v0/ holds task-ledger
+    # narratives, deploy-staging/ holds rendered workspaces pulled by
+    # agents on boot, and additional prefixes may be added. Versioning
+    # is per-prefix at the schema level, not enforced via IAM.
+    sid       = "ReadAll"
+    effect    = "Allow"
+    actions   = ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectTagging"]
+    resources = ["${aws_s3_bucket.ledger.arn}/*"]
   }
 
   statement {
-    sid     = "ListBucket"
-    effect  = "Allow"
-    actions = ["s3:ListBucket", "s3:GetBucketLocation"]
+    sid       = "ListBucket"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket", "s3:GetBucketLocation"]
     resources = [aws_s3_bucket.ledger.arn]
   }
 }
@@ -361,16 +371,21 @@ data "aws_iam_policy_document" "reader" {
   }
 
   statement {
-    sid     = "ReadAll"
-    effect  = "Allow"
-    actions = ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectTagging"]
-    resources = ["${aws_s3_bucket.ledger.arn}/v0/*"]
+    # Read access across the whole ledger bucket. The bucket is the
+    # canonical artifact store for this fleet: v0/ holds task-ledger
+    # narratives, deploy-staging/ holds rendered workspaces pulled by
+    # agents on boot, and additional prefixes may be added. Versioning
+    # is per-prefix at the schema level, not enforced via IAM.
+    sid       = "ReadAll"
+    effect    = "Allow"
+    actions   = ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectTagging"]
+    resources = ["${aws_s3_bucket.ledger.arn}/*"]
   }
 
   statement {
-    sid     = "ListBucket"
-    effect  = "Allow"
-    actions = ["s3:ListBucket", "s3:GetBucketLocation"]
+    sid       = "ListBucket"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket", "s3:GetBucketLocation"]
     resources = [aws_s3_bucket.ledger.arn]
   }
 }
@@ -508,14 +523,14 @@ resource "aws_sqs_queue" "pipe_dlq" {
 
 resource "aws_cloudwatch_metric_alarm" "pipe_dlq_not_empty" {
   alarm_name        = "${local.prefix}ledger-pipe-dlq-not-empty"
-  alarm_description = "Fires when the EventBridge Pipe DLQ has messages — indicates Pipe-level wake failures (stream errors, throttles, permission drift)."
+  alarm_description = "Fires when the EventBridge Pipe DLQ has messages - indicates Pipe-level wake failures (stream errors, throttles, permission drift)."
 
-  metric_name        = "ApproximateNumberOfMessagesVisible"
-  namespace          = "AWS/SQS"
-  period             = 60
-  statistic          = "Maximum"
-  threshold          = 0
-  treat_missing_data = "notBreaching"
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 60
+  statistic           = "Maximum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 1
 
@@ -557,15 +572,15 @@ resource "aws_sqs_queue_policy" "dlq" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "dlq_not_empty" {
-  alarm_name          = "${local.prefix}ledger-wake-dlq-not-empty"
-  alarm_description   = "EventBridge → SSM wake invocation failed. Check DLQ: ${aws_sqs_queue.dlq.name}"
+  alarm_name        = "${local.prefix}ledger-wake-dlq-not-empty"
+  alarm_description = "EventBridge → SSM wake invocation failed. Check DLQ: ${aws_sqs_queue.dlq.name}"
 
-  metric_name        = "ApproximateNumberOfMessagesVisible"
-  namespace          = "AWS/SQS"
-  period             = 60
-  statistic          = "Maximum"
-  threshold          = 0
-  treat_missing_data = "notBreaching"
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 60
+  statistic           = "Maximum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 1
 
@@ -655,7 +670,7 @@ resource "aws_cloudwatch_event_rule" "ddb_terminal" {
   description = "Fires when fleetmind.task.ledger emits a FleetMindTaskTerminalEvent. Wakes the target OpenClaw instance via SSM."
 
   event_pattern = jsonencode({
-    source      = ["fleetmind.task.ledger"]
+    source        = ["fleetmind.task.ledger"]
     "detail-type" = ["FleetMindTaskTerminalEvent"]
   })
 

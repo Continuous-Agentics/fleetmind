@@ -98,6 +98,33 @@ resource "aws_iam_role_policy" "agent_dynamodb" {
   })
 }
 
+resource "aws_iam_role_policy" "agent_github_app" {
+  for_each = aws_iam_role.agent
+
+  name = "${var.fleet_name}-${each.key}-github-app"
+  role = each.value.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "GitHubAppSSMRead"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter", "ssm:GetParameters"]
+        Resource = [
+          "arn:aws:ssm:${var.aws_region}:*:parameter/fleetmind/${var.fleet_name}/agents/${each.key}/github-app/*",
+        ]
+      },
+      {
+        Sid    = "GitHubAppKMSDecrypt"
+        Effect = "Allow"
+        Action = ["kms:Decrypt"]
+        Resource = ["arn:aws:kms:${var.aws_region}:*:key/aws/ssm"]
+      },
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "agent" {
   for_each = aws_iam_role.agent
 
