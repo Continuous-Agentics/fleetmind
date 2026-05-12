@@ -367,40 +367,62 @@ describe("renderAgentOpenClawJson — per-agent slice", () => {
     assert.ok(!("forge" in accounts), "forge account must NOT be present in conductor slice");
   });
 
-  // ── tools.agentToAgent.allow — only from:this-agent ───────────────────────
+  // ── tools.agentToAgent.allow — string-array of target agent ids ─────────────
 
-  test("conductor slice a2a allow contains only from:conductor entries", () => {
+  test("conductor slice a2a allow is a string array of conductor's send targets", () => {
     const fleet = makeFleet();
     fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
 
     const json = renderAgentOpenClawJson(fleet, "conductor") as {
-      tools: { agentToAgent: { allow: Array<{ from: string; to: string }> } };
+      tools: { agentToAgent: { allow: string[] } };
     };
 
+    // Must be plain strings (not objects), containing conductor's can_send_to targets
     for (const entry of json.tools.agentToAgent.allow) {
       assert.equal(
-        entry.from,
-        "conductor",
-        `a2a allow must only have from:conductor; got from:${entry.from}`
+        typeof entry,
+        "string",
+        `a2a allow entries must be strings, got ${typeof entry}`
       );
     }
+    assert.deepEqual(json.tools.agentToAgent.allow, ["forge"]);
   });
 
-  test("forge slice a2a allow contains only from:forge entries", () => {
+  test("forge slice a2a allow is a string array of forge's send targets", () => {
     const fleet = makeFleet();
     fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
 
     const json = renderAgentOpenClawJson(fleet, "forge") as {
-      tools: { agentToAgent: { allow: Array<{ from: string; to: string }> } };
+      tools: { agentToAgent: { allow: string[] } };
     };
 
+    // Must be plain strings (not objects), containing forge's can_send_to targets
     for (const entry of json.tools.agentToAgent.allow) {
       assert.equal(
-        entry.from,
-        "forge",
-        `a2a allow must only have from:forge; got from:${entry.from}`
+        typeof entry,
+        "string",
+        `a2a allow entries must be strings, got ${typeof entry}`
       );
     }
+    assert.deepEqual(json.tools.agentToAgent.allow, ["conductor"]);
+  });
+
+  test("a2a allow list is sorted and deduplicated", () => {
+    const fleet = makeFleet();
+    const conductor = makeConductorAgent();
+    // Give conductor duplicate + unsorted targets to verify dedup+sort
+    conductor.agent_to_agent.can_send_to = ["forge", "forge", "alpha"];
+    fleet.agents.list = [conductor, makeForgeAgent()];
+
+    const json = renderAgentOpenClawJson(fleet, "conductor") as {
+      tools: { agentToAgent: { allow: string[] } };
+    };
+
+    assert.deepEqual(
+      json.tools.agentToAgent.allow,
+      ["alpha", "forge"],
+      "allow list must be sorted alphabetically and deduplicated"
+    );
   });
 
   // ── unknown agentId throws ─────────────────────────────────────────────────
