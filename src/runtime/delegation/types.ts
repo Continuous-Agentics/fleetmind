@@ -60,6 +60,8 @@ export const TaskRecordSchema = z.object({
   merged_at: z.string().optional(),
   blocked_at: z.string().optional(),
   abandoned_at: z.string().optional(),
+  /** ISO 8601 timestamp of the last nag sent by the PM bot for this task */
+  last_nag_at: z.string().optional(),
   lifecycle: LifecycleSchema,
   definition_of_done: z.string(),
   /** Slack permalink or equivalent coordination-channel URL */
