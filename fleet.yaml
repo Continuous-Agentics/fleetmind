@@ -41,6 +41,8 @@ agents:
           the loop on every assignment.
       slack:
         account_id: conductor
+        bot_user_id: "U0B34DGUL1G"          # Conductor's Slack bot user_id (captured via auth.test)
+        channels: ["C0B2NNJEFKR", "C0B324RF1QW"]  # PM home + delegation channel
         bot_token: "${CONDUCTOR_BOT_TOKEN}"
         app_token: "${CONDUCTOR_APP_TOKEN}"
         signing_secret: "${CONDUCTOR_SIGNING_SECRET}"
@@ -69,6 +71,10 @@ agents:
           from Conductor (the PM bot) and ship them.
       slack:
         account_id: forge
+        # TODO: run `fleetmind secrets auth-test --agent forge` (or equivalent) to capture
+        # Forge's bot user_id from Slack auth.test, then fill in bot_user_id below.
+        # bot_user_id: "U_FORGE"
+        channels: ["C0B324RF1QW"]          # delegation channel only
         bot_token: "${FORGE_BOT_TOKEN}"
         app_token: "${FORGE_APP_TOKEN}"
         signing_secret: "${FORGE_SIGNING_SECRET}"

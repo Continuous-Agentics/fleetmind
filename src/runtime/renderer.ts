@@ -58,16 +58,48 @@ export function renderAgentOpenClawJson(
     },
   ];
 
-  // Slack accounts — only this agent's account
+  // Slack accounts — only this agent's account (no groupPolicy here; it lives at top level)
   const slackAccounts: Record<string, unknown> = {
     [agent.slack.account_id]: {
       enabled: true,
       botToken: agent.slack.bot_token,
       appToken: agent.slack.app_token,
       webhookPath: `/slack/${agent.slack.account_id}`,
-      groupPolicy: "open",
     },
   };
+
+  // Per-channel config — derive inter-bot users allowlists
+  // For each channel this agent operates in, find all OTHER agents that share it
+  // and collect their bot_user_id values for the users allowlist.
+  const perChannelEntries: Record<string, unknown> = {};
+  const agentChannels = agent.slack.channels ?? [];
+  for (let i = 0; i < agentChannels.length; i++) {
+    const channelId = agentChannels[i]!;
+    const requireMention = i > 0; // first channel = home, always responsive
+    const botUserIds: string[] = [];
+    for (const other of agents.list) {
+      if (other.id === agentId) continue;
+      const otherChannels = other.slack.channels ?? [];
+      if (!otherChannels.includes(channelId)) continue;
+      if (!other.slack.bot_user_id) {
+        process.stderr.write(
+          `[fleetmind renderer] WARNING: agent "${other.id}" shares channel ${channelId} with "${agentId}" but has no bot_user_id — skipping bot-specific users allowlist entry for that agent.\n`
+        );
+        continue;
+      }
+      botUserIds.push(other.slack.bot_user_id);
+    }
+    // Always include "*" wildcard so human users are never blocked by the per-channel
+    // users allowlist. OpenClaw's authorizeSlackBotRoomMessage filters out "*" from the
+    // bot-identity check, so only bot messages gate on the specific user_ids listed.
+    const usersList = [...botUserIds, "*"];
+    perChannelEntries[channelId] = {
+      allowBots: true,
+      enabled: true,
+      requireMention,
+      users: usersList,
+    };
+  }
 
   // agentToAgent allow list — array of target agent-id strings (per OpenClaw config schema).
   // The per-agent slice already contains only THIS agent's send targets from fleet.yaml,
@@ -103,10 +135,15 @@ export function renderAgentOpenClawJson(
     session: {
       dmScope: oc.session.dm_scope,
     },
+    messages: {
+      visibleReplies: "automatic",
+      groupChat: { visibleReplies: "automatic" },
+    },
     channels: {
       slack: {
         mode: oc.slack.mode,
         enabled: true,
+        groupPolicy: "allowlist",
         typingReaction: oc.slack.typing_reaction,
         ackReaction: oc.slack.ack_reaction,
         allowBots: oc.slack.allow_bots,
@@ -119,6 +156,7 @@ export function renderAgentOpenClawJson(
           channel: oc.slack.reply_to_mode_by_chat_type.channel,
         },
         accounts: slackAccounts,
+        ...(Object.keys(perChannelEntries).length > 0 ? { channels: perChannelEntries } : {}),
       },
     },
     gateway: {
@@ -184,7 +222,7 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
     },
   }));
 
-  // Slack accounts
+  // Slack accounts (no per-account groupPolicy; lives at top level as "allowlist")
   const slackAccounts: Record<string, unknown> = {};
   for (const agent of agents.list) {
     slackAccounts[agent.slack.account_id] = {
@@ -192,7 +230,6 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
       botToken: agent.slack.bot_token,
       appToken: agent.slack.app_token,
       webhookPath: `/slack/${agent.slack.account_id}`,
-      groupPolicy: "open",
     };
   }
 
@@ -239,10 +276,15 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
     session: {
       dmScope: oc.session.dm_scope,
     },
+    messages: {
+      visibleReplies: "automatic",
+      groupChat: { visibleReplies: "automatic" },
+    },
     channels: {
       slack: {
         mode: oc.slack.mode,
         enabled: true,
+        groupPolicy: "allowlist",
         typingReaction: oc.slack.typing_reaction,
         ackReaction: oc.slack.ack_reaction,
         allowBots: oc.slack.allow_bots,
