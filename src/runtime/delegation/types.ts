@@ -70,10 +70,29 @@ export const TaskRecordSchema = z.object({
   delegation_thread: z.string(),
   delegation_envelope_ts: z.string(),
   tracker_link: z.string().nullable().optional(),
+  /** Optional free-text title for the task (updatable via task update --title) */
+  title: z.string().optional(),
+  /** Optional extended description (updatable via task update --description) */
+  description: z.string().optional(),
   /** S3 key for the narrative .md — e.g. "v0/projects/my-proj/tasks/2026-01-01-a1b2c3d4.md" */
   task_s3_key: z.string(),
   /** TTL epoch seconds */
   expires_at: z.number(),
+  /** ISO 8601 timestamp of the last metadata update */
+  updated_at: z.string().optional(),
+  /** Agent/user ID who last updated metadata */
+  updated_by: z.string().optional(),
+  /** Bounded history of metadata updates (last 20) */
+  update_history: z
+    .array(
+      z.object({
+        at: z.string(),
+        by: z.string(),
+        reason: z.string().optional(),
+        fields_changed: z.array(z.string()),
+      })
+    )
+    .optional(),
 });
 
 export type TaskRecord = z.infer<typeof TaskRecordSchema>;

@@ -86,6 +86,25 @@ If it fails with a network/permissions error: proceed with posting the envelope
 anyway, log the failure in `memory/active-delegations.md` (field:
 `ledger_write_failed: <reason>`), and retry on the next heartbeat.
 
+**Amending task metadata after delegation:**
+If the scope changes after a task is delegated (worker pushback, PM clarification, reassignment),
+use `fleetmind task update` instead of abandoning and recreating. Update history is preserved.
+
+```bash
+# Narrow the DoD after worker review
+fleetmind task update --task-id <hex> --dod "..." --reason "scope cut after worker review"
+
+# Reassign to a specialist
+fleetmind task update --task-id <hex> --worker <new-worker-id> --reason "specialist now available"
+
+# Fix a wrong thread URL
+fleetmind task update --task-id <hex> --thread "https://slack.com/archives/..."
+```
+
+Immutable fields (rejected by `task update`): `task_id`, `status`, `created_at`, `created_by`,
+and all transition timestamps (`accepted_at`, `shipped_at`, etc.). Terminal tasks (`merged`,
+`abandoned`) are frozen — update will exit 2 with `TaskConditionError`.
+
 **Picking the project slug:**
 - A project is a durable initiative, not a single task. "website-rewrite" is a
   project; "add-date-filter" is a delegation inside it.

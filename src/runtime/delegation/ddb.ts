@@ -367,6 +367,189 @@ export class TaskLedger {
   }
 
   /**
+   * Update mutable task metadata fields in-place.
+   *
+   * Only updates the fields present in `updates`. Always sets `updated_at` and
+   * `updated_by`. If `reason` is provided, appends an entry to `update_history`
+   * (bounded to 20 entries via a post-trim pass).
+   *
+   * If `updates.project` is present, also re-derives GSI1PK from the new
+   * project slug + current task status (fetched via GetItem).
+   *
+   * Conditions:
+   *   - Task must exist: attribute_exists(PK)
+   *   - Status must NOT be merged or abandoned (terminal tasks are frozen)
+   */
+  async updateTaskMetadata(
+    taskId: string,
+    updates: {
+      title?: string;
+      description?: string;
+      definition_of_done?: string;
+      worker_id?: string;
+      thread_url?: string;
+      envelope_ts?: string;
+      project?: string;
+    },
+    options?: {
+      by?: string;
+      reason?: string;
+    }
+  ): Promise<TaskRecord> {
+    const now = nowISO();
+    const by = options?.by ?? this._resolveUpdatedBy();
+
+    // Fetch current record (needed for GSI1PK if project changes, and for validation)
+    const current = await this.getTask(taskId);
+    if (!current) {
+      throw new TaskConditionError(
+        `Task not found: ${taskId}. Cannot update metadata of a non-existent task.`
+      );
+    }
+    if (current.status === "merged" || current.status === "abandoned") {
+      throw new TaskConditionError(
+        `Task ${taskId} is in terminal status '${current.status}'. Terminal tasks are frozen — metadata cannot be updated.`
+      );
+    }
+
+    // Build SET expression dynamically
+    const setParts: string[] = [];
+    const exprNames: Record<string, string> = {};
+    const exprValues: Record<string, unknown> = {};
+    const fieldsChanged: string[] = [];
+
+    if (updates.title !== undefined) {
+      setParts.push("title = :title");
+      exprValues[":title"] = updates.title;
+      fieldsChanged.push("title");
+    }
+    if (updates.description !== undefined) {
+      setParts.push("description = :description");
+      exprValues[":description"] = updates.description;
+      fieldsChanged.push("description");
+    }
+    if (updates.definition_of_done !== undefined) {
+      setParts.push("definition_of_done = :dod");
+      exprValues[":dod"] = updates.definition_of_done;
+      fieldsChanged.push("definition_of_done");
+    }
+    if (updates.worker_id !== undefined) {
+      setParts.push("#worker = :worker_id");
+      exprNames["#worker"] = "worker";
+      exprValues[":worker_id"] = updates.worker_id;
+      fieldsChanged.push("worker");
+    }
+    if (updates.thread_url !== undefined) {
+      setParts.push("delegation_thread = :thread_url");
+      exprValues[":thread_url"] = updates.thread_url;
+      fieldsChanged.push("delegation_thread");
+    }
+    if (updates.envelope_ts !== undefined) {
+      setParts.push("delegation_envelope_ts = :envelope_ts");
+      exprValues[":envelope_ts"] = updates.envelope_ts;
+      fieldsChanged.push("delegation_envelope_ts");
+    }
+    if (updates.project !== undefined) {
+      const newGsi1 = gsi1pk(updates.project, current.status);
+      setParts.push("#proj = :project");
+      setParts.push("GSI1PK = :gsi1pk");
+      exprNames["#proj"] = "project";
+      exprValues[":project"] = updates.project;
+      exprValues[":gsi1pk"] = newGsi1;
+      fieldsChanged.push("project");
+    }
+
+    // Always update metadata fields
+    setParts.push("updated_at = :updated_at");
+    setParts.push("updated_by = :updated_by");
+    exprValues[":updated_at"] = now;
+    exprValues[":updated_by"] = by;
+
+    // Append to update_history if reason provided
+    if (options?.reason !== undefined) {
+      setParts.push(
+        "update_history = list_append(if_not_exists(update_history, :empty), :new_entry)"
+      );
+      exprValues[":empty"] = [];
+      exprValues[":new_entry"] = [
+        {
+          at: now,
+          by,
+          reason: options.reason,
+          fields_changed: fieldsChanged,
+        },
+      ];
+    }
+
+    const updateExpression = `SET ${setParts.join(", ")}`;
+
+    // Condition: task exists AND status is not terminal
+    const conditionExpression =
+      "attribute_exists(PK) AND #st <> :merged AND #st <> :abandoned";
+    exprNames["#st"] = "status";
+    exprValues[":merged"] = "merged";
+    exprValues[":abandoned"] = "abandoned";
+
+    try {
+      const nameCount = Object.keys(exprNames).length;
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.table,
+          Key: { PK: taskPK(taskId) },
+          UpdateExpression: updateExpression,
+          ConditionExpression: conditionExpression,
+          ...(nameCount > 0 && { ExpressionAttributeNames: exprNames }),
+          ExpressionAttributeValues: exprValues,
+        })
+      );
+    } catch (err) {
+      if (isConditionFailed(err)) {
+        throw new TaskConditionError(
+          `Condition check failed for updateTaskMetadata on task ${taskId}. ` +
+            `Task may be terminal or not exist — check with 'fleetmind task get ${taskId}'.`
+        );
+      }
+      throw err;
+    }
+
+    // Post-trim: if update_history is growing, trim to last 20 entries.
+    // We do a best-effort re-read and conditional trim — acceptable for v1.
+    if (options?.reason !== undefined) {
+      const after = await this.getTask(taskId);
+      if (after?.update_history && after.update_history.length > 20) {
+        const trimmed = after.update_history.slice(-20);
+        await this.doc.send(
+          new UpdateCommand({
+            TableName: this.table,
+            Key: { PK: taskPK(taskId) },
+            UpdateExpression: "SET update_history = :trimmed",
+            ExpressionAttributeValues: { ":trimmed": trimmed },
+          })
+        );
+      }
+    }
+
+    // Return the updated record
+    const result = await this.getTask(taskId);
+    if (!result) throw new Error(`Task ${taskId} disappeared after update — DDB error?`);
+    return result;
+  }
+
+  /** Resolve the `updated_by` identity from the environment. */
+  private _resolveUpdatedBy(): string {
+    // Try agent.env (fleetmind bot convention)
+    try {
+      const { readFileSync } = require("fs") as typeof import("fs");
+      const env = readFileSync("/etc/fleetmind/agent.env", "utf8");
+      const match = /^AGENT_ID=(.+)$/m.exec(env);
+      if (match?.[1]) return match[1].trim();
+    } catch {
+      // file not present — not on a bot host
+    }
+    return process.env["USER"] ?? "unknown";
+  }
+
+  /**
    * Set `last_nag_at` to now. Idempotent — used by PM heartbeat to track
    * when it last pinged about a stale shipped task.
    */

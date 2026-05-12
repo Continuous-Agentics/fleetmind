@@ -11,6 +11,7 @@
  *   fleetmind task merge   --task-id <hex>
  *   fleetmind task get     --task-id <hex>
  *   fleetmind task set-nag --task-id <hex>
+ *   fleetmind task update  --task-id <hex> [field flags...]
  *
  * Reads the delegation config from fleet.yaml (or --fleet).
  * Output: human-friendly text by default; --json for JSON.
@@ -18,10 +19,28 @@
 
 import { Command, Option } from "commander";
 import { randomBytes } from "crypto";
+import { readFileSync } from "fs";
 import { resolveAndLoadFleet } from "../../config/loader.js";
 import { TaskLedger, TaskConditionError } from "../../runtime/delegation/ddb.js";
 import type { TaskRecord } from "../../runtime/delegation/types.js";
 import { log } from "../../utils/log.js";
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Resolve the caller identity for `updated_by`.
+ * Priority: /etc/fleetmind/agent.env AGENT_ID → process.env.USER → "unknown"
+ */
+function resolveUpdatedBy(): string {
+  try {
+    const env = readFileSync("/etc/fleetmind/agent.env", "utf8");
+    const match = /^AGENT_ID=(.+)$/m.exec(env);
+    if (match?.[1]) return match[1].trim();
+  } catch {
+    // not on a bot host
+  }
+  return process.env["USER"] ?? "unknown";
+}
 
 // ── Dependency injection interface ────────────────────────────────────────────
 
@@ -51,6 +70,22 @@ export interface TaskLedgerLike {
   abandonTask(taskId: string, project?: string): Promise<void>;
   mergeTask(taskId: string, project?: string): Promise<void>;
   setNag(taskId: string): Promise<void>;
+  updateTaskMetadata(
+    taskId: string,
+    updates: {
+      title?: string;
+      description?: string;
+      definition_of_done?: string;
+      worker_id?: string;
+      thread_url?: string;
+      envelope_ts?: string;
+      project?: string;
+    },
+    options?: {
+      by?: string;
+      reason?: string;
+    }
+  ): Promise<TaskRecord>;
 }
 
 // ── Subcommand option shapes ──────────────────────────────────────────────────
@@ -106,6 +141,23 @@ export interface SetNagOptions {
   json?: boolean;
 }
 
+export interface UpdateTaskOptions {
+  taskId: string;
+  title?: string;
+  description?: string;
+  descriptionFile?: string;
+  dod?: string;
+  worker?: string;
+  thread?: string;
+  envelopeTs?: string;
+  project?: string;
+  by?: string;
+  reason?: string;
+  fleet?: string;
+  region?: string;
+  json?: boolean;
+}
+
 // ── Result shapes ─────────────────────────────────────────────────────────────
 
 export interface TaskCommandResult {
@@ -114,7 +166,7 @@ export interface TaskCommandResult {
   message?: string;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Ledger helper ─────────────────────────────────────────────────────────────
 
 function makeLedger(fleet: ReturnType<typeof resolveAndLoadFleet>): TaskLedger {
   const d = fleet.delegation;
@@ -252,6 +304,48 @@ export async function setNagTask(
   ledger: TaskLedgerLike
 ): Promise<void> {
   return ledger.setNag(opts.taskId);
+}
+
+/**
+ * Update mutable task metadata fields.
+ *
+ * Reads description from stdin if `--description -` is passed.
+ * Reads description from file if `--description-file <path>` is passed.
+ * At least one field flag must be present.
+ */
+export async function updateTask(
+  opts: UpdateTaskOptions,
+  ledger: TaskLedgerLike
+): Promise<TaskRecord> {
+  // Resolve description from file or stdin
+  let description: string | undefined = opts.description;
+  if (opts.descriptionFile) {
+    if (opts.descriptionFile === "-") {
+      // Read from stdin
+      description = readFileSync("/dev/stdin", "utf8").trim();
+    } else {
+      description = readFileSync(opts.descriptionFile, "utf8").trim();
+    }
+  }
+
+  // Build the updates map — only include keys that were passed
+  const updates: Parameters<TaskLedgerLike["updateTaskMetadata"]>[1] = {};
+  if (opts.title !== undefined) updates.title = opts.title;
+  if (description !== undefined) updates.description = description;
+  if (opts.dod !== undefined) updates.definition_of_done = opts.dod;
+  if (opts.worker !== undefined) updates.worker_id = opts.worker;
+  if (opts.thread !== undefined) updates.thread_url = opts.thread;
+  if (opts.envelopeTs !== undefined) updates.envelope_ts = opts.envelopeTs;
+  if (opts.project !== undefined) updates.project = opts.project;
+
+  if (Object.keys(updates).length === 0) {
+    log.error("no fields to update — pass at least one field flag (--title, --description, --dod, --worker, --thread, --envelope-ts, --project)");
+    process.exit(1);
+  }
+
+  const by = opts.by ?? resolveUpdatedBy();
+
+  return ledger.updateTaskMetadata(opts.taskId, updates, { by, reason: opts.reason });
 }
 
 // ── Register ──────────────────────────────────────────────────────────────────
@@ -499,6 +593,38 @@ export function registerTask(program: Command): void {
             `\n(use --json for full record)`,
         );
       }
+    });
+
+  // ── update ────────────────────────────────────────────────────────────
+
+  task
+    .command("update")
+    .description("Update mutable task metadata in flight (title, description, DoD, worker, thread, project)")
+    .requiredOption("--task-id <hex>", "Task ID (8-char hex)")
+    .option("--title <text>", "Update task title")
+    .option("--description <text>", "Update description (use - to read from stdin)")
+    .option("--description-file <path>", "Read description from file (use - for stdin)")
+    .option("--dod <text>", "Update definition of done")
+    .option("--worker <id>", "Reassign to a different worker bot")
+    .option("--thread <url>", "Update delegation thread URL (Slack permalink)")
+    .option("--envelope-ts <ts>", "Update envelope message timestamp")
+    .option("--project <slug>", "Move to a different project (also updates GSI1PK)")
+    .option("--by <id>", "Override the updated_by identity (default: agent env discovery)")
+    .option("--reason <text>", "Reason for update (appended to update_history)")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
+    .option("--region <region>", "AWS region (default us-west-2)")
+    .option("--json", "Output JSON")
+    .action(async (opts: UpdateTaskOptions) => {
+      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
+      try {
+        const record = await updateTask(opts, ledger);
+        output(
+          opts.json
+            ? record
+            : `Task ${record.task_id} updated (project: ${record.project}, status: ${record.status})`,
+          opts.json ?? false
+        );
+      } catch (err) { handleError(err); }
     });
 
   // ── set-nag ──────────────────────────────────────────────────────────────

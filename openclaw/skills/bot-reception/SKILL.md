@@ -226,6 +226,16 @@ fleetmind task unblock --task-id <hex> --worker <your-id> --reason "auth restore
 
 Then proceed with the normal ship pattern (`narrative put` → `task ship`).
 
+If the DoD as written is ambiguous or impossible, you can request the PM update it via `task update`
+rather than blocking. Propose the revised wording in the delegation thread so the PM can run:
+
+```bash
+fleetmind task update --task-id <hex> --dod "..." --reason "clarified after worker review"
+```
+
+This avoids the overhead of abandoning and recreating the task when only the definition of done
+needs refinement.
+
 ---
 
 ## On Completion: Slack Reply
