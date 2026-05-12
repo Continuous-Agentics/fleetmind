@@ -427,7 +427,7 @@ describe("renderAgentOpenClawJson — per-agent slice", () => {
     );
   });
 
-  // ── unknown agentId throws ─────────────────────────────────────────────────
+  // ── unknown agentId throws ─────────────────────────────────────────────────────
 
   test("renderAgentOpenClawJson throws for unknown agentId", () => {
     const fleet = makeFleet();
@@ -437,6 +437,156 @@ describe("renderAgentOpenClawJson — per-agent slice", () => {
       () => renderAgentOpenClawJson(fleet, "nonexistent"),
       /nonexistent/,
       "should throw with the unknown agent id in the message"
+    );
+  });
+
+  // ── Fix 1: messages.visibleReplies defaults ───────────────────────────────────
+
+  test("renderer emits messages.visibleReplies=automatic for every agent slice", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+
+    for (const agentId of ["conductor", "forge"]) {
+      const json = renderAgentOpenClawJson(fleet, agentId) as {
+        messages: { visibleReplies: string; groupChat: { visibleReplies: string } };
+      };
+      assert.equal(
+        json.messages.visibleReplies,
+        "automatic",
+        `${agentId} slice must have messages.visibleReplies = "automatic"`
+      );
+      assert.equal(
+        json.messages.groupChat.visibleReplies,
+        "automatic",
+        `${agentId} slice must have messages.groupChat.visibleReplies = "automatic"`
+      );
+    }
+  });
+
+  // ── Fix 3: top-level groupPolicy = "allowlist" ─────────────────────────────
+
+  test("renderer emits channels.slack.groupPolicy=allowlist at top level", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+
+    const json = renderAgentOpenClawJson(fleet, "conductor") as {
+      channels: { slack: { groupPolicy: string; accounts: Record<string, unknown> } };
+    };
+
+    assert.equal(
+      json.channels.slack.groupPolicy,
+      "allowlist",
+      "groupPolicy must be 'allowlist' at channels.slack level"
+    );
+
+    // Must NOT appear on individual accounts
+    const conductorAccount = json.channels.slack.accounts["conductor"] as Record<string, unknown> | undefined;
+    assert.ok(
+      conductorAccount !== undefined,
+      "conductor account must exist"
+    );
+    assert.ok(
+      !("groupPolicy" in conductorAccount!),
+      "groupPolicy must NOT appear under channels.slack.accounts.<id>"
+    );
+  });
+
+  // ── Fix 2: per-channel users allowlist for inter-bot delivery ─────────────
+
+  test("each agent's slice has the other's bot_user_id in shared channel users", () => {
+    // Two agents both operating in channel C1, both with bot_user_ids set
+    const fleet = makeFleet();
+    const alpha = makeConductorAgent();
+    alpha.slack = {
+      ...alpha.slack,
+      bot_user_id: "UALPHA",
+      channels: ["C1"],
+    } as typeof alpha.slack;
+    const beta = makeForgeAgent();
+    beta.slack = {
+      ...beta.slack,
+      bot_user_id: "UBETA",
+      channels: ["C1"],
+    } as typeof beta.slack;
+    fleet.agents.list = [alpha, beta];
+
+    const alphaJson = renderAgentOpenClawJson(fleet, "conductor") as {
+      channels: { slack: { channels: Record<string, { users?: string[] }> } };
+    };
+    const betaJson = renderAgentOpenClawJson(fleet, "forge") as {
+      channels: { slack: { channels: Record<string, { users?: string[] }> } };
+    };
+
+    assert.deepEqual(
+      alphaJson.channels.slack.channels["C1"]!.users,
+      ["UBETA", "*"],
+      "alpha's C1 users allowlist must contain beta's bot_user_id and the wildcard"
+    );
+    assert.deepEqual(
+      betaJson.channels.slack.channels["C1"]!.users,
+      ["UALPHA", "*"],
+      "beta's C1 users allowlist must contain alpha's bot_user_id and the wildcard"
+    );
+  });
+
+  test("no users field when shared-channel peer has no bot_user_id", () => {
+    // Agent B has no bot_user_id; agent A's slice for the shared channel must have no users field
+    const fleet = makeFleet();
+    const alpha = makeConductorAgent();
+    alpha.slack = {
+      ...alpha.slack,
+      bot_user_id: "UALPHA",
+      channels: ["C1"],
+    } as typeof alpha.slack;
+    const beta = makeForgeAgent();
+    beta.slack = {
+      ...beta.slack,
+      // bot_user_id intentionally omitted
+      channels: ["C1"],
+    } as typeof beta.slack;
+    fleet.agents.list = [alpha, beta];
+
+    const alphaJson = renderAgentOpenClawJson(fleet, "conductor") as {
+      channels: { slack: { channels: Record<string, { users?: string[] }> } };
+    };
+
+    const c1Entry = alphaJson.channels.slack.channels["C1"]!;
+    // When peers have no bot_user_id, users must still include "*" so humans are not blocked
+    assert.deepEqual(
+      c1Entry.users,
+      ["*"],
+      "C1 entry must have users: ['*'] even when peer has no bot_user_id"
+    );
+  });
+
+  test("first channel has requireMention=false, subsequent channels requireMention=true", () => {
+    const fleet = makeFleet();
+    const alpha = makeConductorAgent();
+    alpha.slack = {
+      ...alpha.slack,
+      bot_user_id: "UALPHA",
+      channels: ["CHOME", "CSECOND", "CTHIRD"],
+    } as typeof alpha.slack;
+    fleet.agents.list = [alpha];
+
+    const json = renderAgentOpenClawJson(fleet, "conductor") as {
+      channels: { slack: { channels: Record<string, { requireMention: boolean }> } };
+    };
+
+    assert.equal(
+      json.channels.slack.channels["CHOME"]!.requireMention,
+      false,
+      "first (home) channel must have requireMention: false"
+    );
+    assert.equal(
+      json.channels.slack.channels["CSECOND"]!.requireMention,
+      true,
+      "second channel must have requireMention: true"
+    );
+    assert.equal(
+      json.channels.slack.channels["CTHIRD"]!.requireMention,
+      true,
+      "third channel must have requireMention: true"
     );
   });
 });

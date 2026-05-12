@@ -38,6 +38,13 @@ export const SlackAccountSchema = z.object({
   account_id: z.string(),
   bot_token: z.string(),
   app_token: z.string(),
+  /** Slack bot user_id (U…) for this agent — captured via `auth.test`. Used by the
+   * renderer to build per-channel `users` allowlists for inter-bot delivery.
+   * Optional: if unset the renderer emits a warning but does not fail. */
+  bot_user_id: z.string().optional(),
+  /** Slack channel IDs (C…) this agent operates in. The renderer uses this list
+   * to emit `channels.slack.channels.<id>` entries with inter-bot users allowlists. */
+  channels: z.array(z.string()).default([]),
 });
 
 export const AgentToAgentSchema = z.object({
