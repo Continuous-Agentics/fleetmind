@@ -98,7 +98,10 @@ agents:
 
 outputs:
   openclaw_json: ./rendered/openclaw.json
-  terraform_vars: ./rendered/fleet.auto.tfvars
+  # Write directly into the Terraform directory so `*.auto.tfvars` is picked up
+  # by `terraform apply` automatically. This file is auto-loaded; operators
+  # don't need to pass it explicitly via -var-file.
+  terraform_vars: ./infra/terraform/fleet.auto.tfvars
 
 openclaw:
   gateway:
