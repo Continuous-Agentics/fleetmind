@@ -292,6 +292,33 @@ The gateway process will have `ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_APP
 
 ---
 
+## Step 4b: Populate GitHub App Credentials (Optional)
+
+Each agent can optionally get a GitHub App for read+write access to its project repo. This step is only needed if you want the agent to push code, open PRs, or manage issues — the gateway starts fine without GitHub credentials.
+
+For each agent that needs GitHub access:
+
+1. Create the GitHub App and generate a private key (see [`docs/GITHUB-APPS.md`](../../GITHUB-APPS.md) for the full creation flow)
+2. Install the app on the agent's project repo and note the Installation ID
+3. Run the store script:
+
+```bash
+infra/scripts/store-bot-github-app.sh \
+  --fleet gg-sandbox \
+  --agent <agent_id> \
+  --app-id <app-id> \
+  --installation-id <installation-id> \
+  --pem-file /path/to/private-key.pem
+```
+
+The agent's IAM role (provisioned by Terraform) already has SSM read permissions scoped to its own `/fleetmind/gg-sandbox/agents/<agent_id>/github-app/*` path. No IAM changes are needed.
+
+To verify after storing, SSH into the agent EC2 and run `gh-app-token` — it should print a short-lived token.
+
+> **Skip this step** if your agents don't need to push to GitHub yet. You can always add credentials later without redeploying.
+
+---
+
 ## Step 5: Render & Deploy Workspaces
 
 ### 5a. Render locally
