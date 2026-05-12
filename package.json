@@ -56,11 +56,12 @@
     "commander": "^12.1.0",
     "js-yaml": "^4.1.0",
     "simple-git": "^3.25.0",
+    "yaml": "^2.9.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
-    "@types/node": "^20.0.0",
+    "@types/node": "^20.19.41",
     "tsx": "^4.11.0",
     "typescript": "^5.4.0"
   }
