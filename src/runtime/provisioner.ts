@@ -15,6 +15,32 @@ import { installSkill } from "./resolver.js";
 import { log } from "../utils/log.js";
 
 // =============================================================================
+// Role-template resolution
+// =============================================================================
+
+const ROLE_TEMPLATE_DIR: Record<string, string> = {
+  "pm": "openclaw/pm-bot/workspace",
+  "backend-worker": "openclaw/backend-worker-bot/workspace",
+  "frontend-worker": "openclaw/frontend-worker-bot/workspace",
+  "worker": "openclaw/worker-bot/workspace",
+};
+
+function applyPlaceholders(text: string, agent: AgentConfig): string {
+  return text
+    .replaceAll("{{NAME}}", agent.name)
+    .replaceAll("{{EMOJI}}", agent.emoji ?? "")
+    .replaceAll("{{DESCRIPTION}}", agent.description ?? "")
+    .replaceAll("{{SOUL_BODY}}", agent.persona?.soul ?? "");
+}
+
+function readRoleTemplate(role: string, filename: string): string | null {
+  const dir = ROLE_TEMPLATE_DIR[role] ?? ROLE_TEMPLATE_DIR["worker"]!;
+  const filePath = path.resolve(process.cwd(), dir, filename);
+  if (!fs.existsSync(filePath)) return null;
+  return fs.readFileSync(filePath, "utf8");
+}
+
+// =============================================================================
 // Workspace file generators
 // =============================================================================
 
@@ -213,9 +239,25 @@ export async function provisionAgent(
 
   if (!dryRun) fs.mkdirSync(workspace, { recursive: true });
 
-  writeFile(path.join(workspace, "SOUL.md"), soulMd(agent), dryRun);
-  writeFile(path.join(workspace, "AGENTS.md"), agentsMd(agent), dryRun);
-  writeFile(path.join(workspace, "IDENTITY.md"), identityMd(agent), dryRun);
+  const role = agent.role ?? "worker";
+
+  const soulTemplate = readRoleTemplate(role, "SOUL.md");
+  const soulContent = soulTemplate !== null
+    ? applyPlaceholders(soulTemplate, agent)
+    : soulMd(agent);
+  writeFile(path.join(workspace, "SOUL.md"), soulContent, dryRun);
+
+  const agentsTemplate = readRoleTemplate(role, "AGENTS.md");
+  const agentsContent = agentsTemplate !== null
+    ? applyPlaceholders(agentsTemplate, agent)
+    : agentsMd(agent);
+  writeFile(path.join(workspace, "AGENTS.md"), agentsContent, dryRun);
+
+  const identityTemplate = readRoleTemplate(role, "IDENTITY.md");
+  const identityContent = identityTemplate !== null
+    ? applyPlaceholders(identityTemplate, agent)
+    : identityMd(agent);
+  writeFile(path.join(workspace, "IDENTITY.md"), identityContent, dryRun);
 
   // USER.md — only create if missing (don't overwrite customized versions)
   const userMdPath = path.join(workspace, "USER.md");

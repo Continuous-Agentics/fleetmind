@@ -85,6 +85,7 @@ function makeConductorAgent(): AgentConfig {
     emoji: "🎼",
     description: "PM bot",
     orchestrator: true,
+    role: "pm",
     persona: { soul: "You are Conductor." },
     slack: {
       account_id: "conductor",
@@ -108,6 +109,7 @@ function makeForgeAgent(): AgentConfig {
     emoji: "⚙️",
     description: "Worker bot",
     orchestrator: false,
+    role: "backend-worker",
     persona: { soul: "You are Forge." },
     slack: {
       account_id: "forge",
@@ -495,5 +497,117 @@ describe("writeOutputs — per-agent file layout", () => {
 
     assert.ok("openclaw_json:conductor" in written, "written must have openclaw_json:conductor key");
     assert.ok("openclaw_json:forge" in written, "written must have openclaw_json:forge key");
+  });
+});
+
+// ── Role-template rendering tests ─────────────────────────────────────────────
+
+describe("role-template rendering", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleetmind-role-template-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("provisionAgent with role:pm reads from openclaw/pm-bot/workspace/AGENTS.md and substitutes placeholders", async () => {
+    const fleet = makeFleet();
+    const agent = makeConductorAgent(); // role: "pm"
+
+    await provisionAgent(fleet, agent, false, tmpDir);
+
+    const agentsMdPath = path.join(tmpDir, "rendered", "workspaces", "conductor", "AGENTS.md");
+    const content = fs.readFileSync(agentsMdPath, "utf8");
+
+    // Must contain a phrase from the pm-bot template (not the inline stub)
+    assert.ok(
+      content.includes("bot-delegation"),
+      "AGENTS.md should reference 'bot-delegation' from the pm-bot template"
+    );
+
+    // Must NOT contain the inline-stub phrase
+    assert.ok(
+      !content.includes("Specialist: handles delegated tasks from the orchestrator"),
+      "AGENTS.md must NOT contain the inline stub phrase when role template is used"
+    );
+  });
+
+  test("provisionAgent substitutes {{NAME}} {{EMOJI}} {{DESCRIPTION}} {{SOUL_BODY}}", async () => {
+    const fleet = makeFleet();
+    const agent: AgentConfig = {
+      id: "testbot",
+      name: "TestBot",
+      emoji: "🧪",
+      description: "a test agent",
+      orchestrator: false,
+      role: "backend-worker",
+      persona: { soul: "test soul body" },
+      slack: { account_id: "testbot", bot_token: "xoxb-test", app_token: "xapp-test" },
+      skills: [],
+      plugins: ["anthropic"],
+      agent_to_agent: { can_send_to: [] },
+    } as unknown as AgentConfig;
+
+    await provisionAgent(fleet, agent, false, tmpDir);
+
+    const ws = path.join(tmpDir, "rendered", "workspaces", "testbot");
+
+    for (const filename of ["SOUL.md", "AGENTS.md", "IDENTITY.md"]) {
+      const content = fs.readFileSync(path.join(ws, filename), "utf8");
+      assert.ok(
+        !content.includes("{{"),
+        `${filename} must not contain any unresolved {{ placeholders after substitution`
+      );
+    }
+
+    const soulContent = fs.readFileSync(path.join(ws, "SOUL.md"), "utf8");
+    assert.ok(soulContent.includes("TestBot"), "SOUL.md must include the agent name");
+    assert.ok(soulContent.includes("🧪"), "SOUL.md must include the emoji");
+    assert.ok(soulContent.includes("test soul body"), "SOUL.md must include SOUL_BODY from persona.soul");
+
+    const identityContent = fs.readFileSync(path.join(ws, "IDENTITY.md"), "utf8");
+    assert.ok(identityContent.includes("TestBot"), "IDENTITY.md must include the agent name");
+    assert.ok(identityContent.includes("🧪"), "IDENTITY.md must include the emoji");
+    assert.ok(identityContent.includes("a test agent"), "IDENTITY.md must include the description");
+  });
+
+  test("provisionAgent falls back to inline stub when role-template file is missing", async () => {
+    // worker-bot/workspace/ has no IDENTITY.md — verifies the fallback path
+    const fleet = makeFleet();
+    const agent: AgentConfig = {
+      id: "genericbot",
+      name: "GenericBot",
+      emoji: "🤖",
+      description: "a generic worker",
+      orchestrator: false,
+      role: "worker",
+      persona: { soul: "You are a generic worker." },
+      slack: { account_id: "genericbot", bot_token: "xoxb-test", app_token: "xapp-test" },
+      skills: [],
+      plugins: ["anthropic"],
+      agent_to_agent: { can_send_to: [] },
+    } as unknown as AgentConfig;
+
+    // Must not throw even though worker-bot/workspace/IDENTITY.md doesn't exist
+    await assert.doesNotReject(
+      () => provisionAgent(fleet, agent, false, tmpDir),
+      "provisionAgent must not throw when role-template file is missing"
+    );
+
+    const ws = path.join(tmpDir, "rendered", "workspaces", "genericbot");
+    const identityContent = fs.readFileSync(path.join(ws, "IDENTITY.md"), "utf8");
+
+    // Inline fallback produces the identityMd() stub with Name/Emoji/Role/Description
+    assert.ok(
+      identityContent.includes("GenericBot"),
+      "fallback IDENTITY.md must include the agent name from inline stub"
+    );
+    assert.ok(
+      identityContent.includes("Specialist"),
+      "fallback IDENTITY.md must include 'Specialist' from the inline identityMd() stub"
+    );
   });
 });

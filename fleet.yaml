@@ -30,6 +30,7 @@ agents:
     - id: conductor
       name: Conductor
       emoji: 🎼
+      role: pm
       description: "PM bot — gg-sandbox test fleet"
       orchestrator: true
       model: anthropic/claude-sonnet-4-6   # PM gets a bit more horsepower
@@ -59,6 +60,7 @@ agents:
     - id: forge
       name: Forge
       emoji: ⚙️
+      role: backend-worker
       description: "Backend worker — gg-sandbox test fleet"
       orchestrator: false
       persona:
