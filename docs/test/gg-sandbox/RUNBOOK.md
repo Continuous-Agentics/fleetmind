@@ -39,9 +39,9 @@ This runbook covers the full end-to-end deployment: Terraform infra → secrets 
 
 ---
 
-## What We Learned From the First Deploy (PR #TODO)
+## What We Learned From the First Deploy (PR #47)
 
-Five bootstrap/renderer bugs surfaced during the first live deploy attempt. All fixed in one PR (`fix/gg-sandbox-deploy-followups`, PR #TODO against `test/gg-sandbox`):
+Five bootstrap/renderer bugs surfaced during the first live deploy attempt. All fixed in one PR (`fix/gg-sandbox-deploy-followups`, PR #47 against `test/gg-sandbox`):
 
 1. **`EnvironmentFile=` needs `-` prefix** — without it, systemd fails at unit-load time if `/run/openclaw-<agent>.env` doesn't yet exist (fresh tmpfs). Added `-` so a missing file is silently tolerated until `ExecStartPre` creates it.
 2. **`ExecStartPre=` needs `+` prefix** — the unit runs as `ec2-user`, but `/run` is `root:root 755`. `fetch-agent-secrets` uses `install -m 600` which requires root. Added `+` so `ExecStartPre` runs as root regardless of `User=`.
