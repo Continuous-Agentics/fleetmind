@@ -609,6 +609,61 @@ If the service fails:
 
 ---
 
+## Step 6b: Fleet Introduction Handshake (manual, one-time)
+
+Each gateway only knows its own Slack identity. For the PM to delegate, it needs each worker's Slack `user_id` and `delegation_channel`; for workers to reply correctly, they need the PM's. fleet.yaml carries the agent IDs but not the runtime Slack identities (those don't exist until the Slack apps are created and installed).
+
+For now this is a manual handshake. Future work: automate via `fleetmind fleet introduce` (tracked as issue #20).
+
+### 6b.1. Capture each bot's Slack `user_id` and home channel
+
+For each bot, from your laptop:
+
+```bash
+# Use the agent's BOT token (xoxb-...) — same one in Secrets Manager
+TOKEN="<the bot's xoxb token>"
+curl -sH "Authorization: Bearer $TOKEN" https://slack.com/api/auth.test | jq '{bot_user_id:.user_id, team:.team_id}'
+```
+
+Also capture the channel IDs for the bot's home channels (right-click channel → Copy link → the trailing ID).
+
+For this fleet that's:
+- Conductor (PM): `user_id=U…`, home channel `#fleetmind-project-management` (`C0B2NNJEFKR`)
+- Forge (backend worker): `user_id=U…`, delegation channel `#fleetmind-dev-land` (`C0B324RF1QW`)
+
+### 6b.2. Brief the PM
+
+DM Conductor in `#fleetmind-project-management` with the roster. Something like:
+
+> Your fleet is `gg-sandbox`. Team:
+> - Forge (backend worker) — `slack_user_id=U0YYYY`, `delegation_channel=C0B324RF1QW`
+>
+> Please:
+> 1. Record this in your `MEMORY.md` under a "Fleet Members" section.
+> 2. Post a roster message in `#fleetmind-dev-land` mentioning `<@U0YYYY>` so Forge knows you're the PM and where to reply.
+> 3. Confirm back here when both are done.
+
+### 6b.3. Have each worker record the same roster
+
+When the PM's intro message lands in `#fleetmind-dev-land`, DM Forge (or thread-reply) asking it to record the roster in its own `MEMORY.md` under "Fleet Members":
+- Conductor (PM) — `slack_user_id=U0XXXX`, home channel `C0B2NNJEFKR`
+- Self confirmation: "I'm Forge, backend worker"
+
+Do the same for any additional workers as the fleet grows.
+
+### 6b.4. Verify
+
+SSM into each instance and confirm `MEMORY.md` has the new "Fleet Members" section:
+
+```bash
+grep -A 4 "Fleet Members" /opt/openclaw/workspace/conductor/MEMORY.md
+grep -A 4 "Fleet Members" /opt/openclaw/workspace/forge/MEMORY.md
+```
+
+If both bots restart from cold, the roster persists (it's on the root EBS volume, not in `/run` or memory).
+
+---
+
 ## Step 7: Smoke Tests
 
 ### 7a. Conductor responds in Slack
