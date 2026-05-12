@@ -18,6 +18,7 @@ import { registerTask } from "./commands/task.js";
 import { registerNarrative } from "./commands/narrative.js";
 import { registerQuery } from "./commands/query.js";
 import { registerGithubApp } from "./commands/github-app.js";
+import { registerSlackDiscover } from "./commands/slack.js";
 
 // Inject stored secrets into env before any command runs
 injectSecrets();
@@ -53,5 +54,6 @@ registerTask(program);
 registerNarrative(program);
 registerQuery(program);
 registerGithubApp(program);
+registerSlackDiscover(program);
 
 program.parse();
