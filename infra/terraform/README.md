@@ -95,7 +95,47 @@ silent `us-east-1` default). Set `delegation.aws_region` and
 `context.region` in `fleet.yaml`, or export `AWS_REGION` /
 `AWS_DEFAULT_REGION` when running CLI commands.
 
+## VPC Endpoints
+
+Fleetmind provisions VPC endpoints in two tiers when managing its own VPC
+(`var.vpc_id == ""`):
+
+### Gateway endpoints (always on, free)
+
+| Endpoint | Service |
+|----------|---------|
+| S3 | `com.amazonaws.<region>.s3` |
+| DynamoDB | `com.amazonaws.<region>.dynamodb` |
+
+Both gateway endpoints are associated with the private route table so agent
+processes reach S3 (narratives bucket) and DynamoDB (task-ledger, context-store)
+through the AWS backbone instead of via NAT, improving reliability and
+eliminating per-GB NAT transfer costs for those services.
+
+### Interface endpoints (opt-in, ~$80/mo)
+
+Gated by `enable_interface_endpoints = true` in your tfvars:
+
+| Endpoint | Service |
+|----------|---------|
+| SSM | `com.amazonaws.<region>.ssm` |
+| SSM Messages | `com.amazonaws.<region>.ssmmessages` |
+| EC2 Messages | `com.amazonaws.<region>.ec2messages` |
+| Secrets Manager | `com.amazonaws.<region>.secretsmanager` |
+
+When enabled, `private_dns_enabled = true` ensures the standard AWS SDK
+hostnames resolve to the endpoint ENIs — no application changes required.
+A dedicated security group (`<fleet_name>-vpc-endpoints-sg`) allows port 443
+inbound from the VPC CIDR.
+
+Interface endpoints are **not required** when a NAT gateway is present (the
+default). Enable them for:
+- Fleets in fully-private subnets without NAT
+- Production fleets where SSM access should be independent of NAT health
+- Debug/diagnostic environments where you want to rule out NAT as a failure mode
+
 ## State management
+
 
 Use S3 + DynamoDB locking for shared state (`backend "s3"`). `task-ledger`
 state is critical — losing it means losing the connection between Terraform

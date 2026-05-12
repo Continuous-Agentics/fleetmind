@@ -41,6 +41,15 @@ dnf update -y
 echo "[bootstrap] STAGE 2: dnf install starting at $(date)"
 dnf install -y git tar unzip jq
 
+# ── Ensure amazon-ssm-agent is installed + running ────────────────────────────
+# Defensive: the standard AL2023 AMI includes ssm-agent, but the minimal AMI
+# doesn't. Installing here is idempotent and makes the bootstrap resilient
+# regardless of which AL2023 variant most_recent selects.
+echo "[bootstrap] STAGE 2c: amazon-ssm-agent install/start at $(date)"
+dnf install -y amazon-ssm-agent
+systemctl enable --now amazon-ssm-agent
+echo "[bootstrap] amazon-ssm-agent: $(systemctl is-active amazon-ssm-agent)"
+
 # ── GitHub CLI (matches Carpe bootstrap pattern) ──────────────────────────────
 echo "[bootstrap] STAGE 2b: gh CLI install starting at $(date)"
 dnf install -y 'dnf-command(config-manager)' 2>/dev/null || true
