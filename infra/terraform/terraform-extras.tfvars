@@ -28,3 +28,6 @@ wake_target_session_key = "agent:main:slack:channel:C0B2NNJEFKR"
 # independently of NAT health. Can be removed for cost savings after debugging.
 # ~$80/mo (4 endpoints x ~$20/mo each).
 enable_interface_endpoints = true
+
+# ── fleetmind package version (installed on each agent EC2 in STAGE 6b) ─────
+fleetmind_version = "0.4.0"

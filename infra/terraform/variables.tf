@@ -137,3 +137,9 @@ variable "wake_target_session_key" {
   type        = string
   default     = ""
 }
+
+variable "fleetmind_version" {
+  description = "Version of @continuous-agentics/fleetmind to install on each agent EC2."
+  type        = string
+  default     = "0.4.0"
+}

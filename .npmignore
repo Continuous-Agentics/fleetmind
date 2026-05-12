@@ -1,0 +1,51 @@
+# Belt-and-suspenders ignore file (belt = "files" in package.json, suspenders = this)
+
+# Source code — not needed at runtime
+src/
+
+# Build tooling
+tsconfig*.json
+eslint.config.*
+eslint.config.js
+eslint.config.mjs
+eslint.config.cjs
+
+# Infrastructure code — repo-local only
+infra/
+openclaw/
+rendered/
+
+# Docs — too heavy for npm tarball
+docs/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Node
+node_modules/
+
+# Test fixtures
+*.test.ts
+src/test/
+dist/test/
+
+# GitHub Actions / CI
+.github/
+
+# Dev files
+.env
+.env.*
+*.local
+
+# Fleet config (project-specific, not library)
+fleet.yaml
+fleet.example.yaml
+
+# Changelog — optional, keep if desired; excluding to keep tarball lean
+CHANGELOG.md
+
+# Runbook — repo-local docs
+RUNBOOK.md
+RELEASING.md
