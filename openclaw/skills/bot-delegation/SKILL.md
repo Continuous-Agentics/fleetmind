@@ -261,6 +261,28 @@ log for a task, retry `fleetmind task create` on this heartbeat.
 
 Quiet otherwise. No "everything's fine" pings.
 
+### 6.5. When a worker is blocked but the cause can be resolved
+
+`blocked` is NOT terminal-final — it's a pause state that can resume. When a
+worker reports blocked (envelope thread reply, or DDB heartbeat sees `status=
+blocked`), assess whether the cause is something you (or a human in the planning
+thread) can resolve:
+
+- *Auth gap, missing credential, missing dependency, infra glitch:* often
+  fixable in minutes. Resolve it, then either:
+  - **Prompt the worker to unblock themselves**: post in the delegation thread
+    "resolved — you can `fleetmind task unblock --task-id <hex> --worker <id>
+    --reason "..."` and resume", OR
+  - **Unblock on behalf of the worker** (operator decision): run
+    `fleetmind task unblock --task-id <hex> --worker <worker_id> --reason
+    "resolved by PM"` yourself. The worker's `task ack`/`ship` path continues to
+    work from `accepted`.
+- *Scope cut, missing requirement, design ambiguity:* not a transient blocker.
+  Treat as terminal blocked; close the loop normally (Step 7).
+
+If you unblock, leave a note in the planning thread audit log explaining what
+changed, so the trail remains for human review.
+
 ### 7. Close the loop
 
 On terminal status (shipped or blocked):
