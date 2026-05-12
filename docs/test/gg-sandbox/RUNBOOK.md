@@ -1,7 +1,7 @@
 # FleetMind Test Deploy Runbook
 **Branch:** `test/gg-sandbox` · **Target account:** `251714435910` (gg-sandbox) · **Region:** `us-west-2`  
 **Fleet:** 1 PM (Conductor 🎼) + 1 worker (Forge ⚙️)  
-**Last updated:** 2026-05-12
+**Last updated:** 2026-05-12 (Step 3 actualized: task-ledger is a root child module, no separate apply. Step 4: `fleetmind secrets populate --interactive` is the only path.)
 
 ---
 
@@ -131,7 +131,7 @@ Resources created (~25 total):
 - VPC endpoints: S3 (gateway), DynamoDB (gateway), SSM, ssmmessages, ec2messages, SecretsManager (interface)
 - 2 EC2 instances (conductor + forge) in private subnets — **no public IPs**
 - Per-agent IAM roles + instance profiles
-- Per-agent Secrets Manager placeholders (6 total: 2 slack + 2 anthropic... wait — 1 slack + 1 anthropic per agent = 4 total)
+- Per-agent Secrets Manager placeholders (1 slack + 1 anthropic per agent = 4 total for conductor + forge)
 - DynamoDB context-store table (`gg-sandbox-context-store`)
 - Module: task-ledger DynamoDB table, S3 narratives bucket, EventBridge Pipe, SQS DLQ, CloudWatch alarm
 
@@ -188,86 +188,51 @@ If instances don't appear after 10 minutes, check:
 
 ---
 
-## Step 3: Terraform — Task-Ledger Module
+## Step 3: Verify the task-ledger module came up with the root apply
 
-The task-ledger module is **not** auto-applied by the root module (it's a separate Terraform root at `infra/terraform/modules/task-ledger/`). Apply it separately, passing the agent role names from the root apply:
+The task-ledger module is already wired into the root as a `count`-gated child module (`module.task_ledger` in `infra/terraform/main.tf`). It runs automatically whenever `delegation_enabled = true` — which `terraform-extras.tfvars` sets — so Step 2c's apply already created the DynamoDB tasks table, S3 narratives bucket, EventBridge Pipe, SQS DLQ, CloudWatch alarm, and IAM policy attachments for the PM and worker roles.
+
+Do **not** apply `modules/task-ledger/` standalone — you'll either double-create or hit name collisions.
+
+Quick verification after Step 2c:
 
 ```bash
-# Capture role names from root outputs
-CONDUCTOR_ROLE=$(terraform output -json | jq -r '.agent_role_names.value.conductor')
-FORGE_ROLE=$(terraform output -json | jq -r '.agent_role_names.value.forge')
-
-cd ../modules/task-ledger
-terraform init
-
-terraform apply \
-  -var="fleet_name=gg-sandbox" \
-  -var="aws_region=us-west-2" \
-  -var="table_name=gg-sandbox-tasks" \
-  -var="s3_bucket=gg-sandbox-narratives-251714435910" \
-  -var="pm_role_names=[\"$CONDUCTOR_ROLE\"]" \
-  -var="worker_role_names=[\"$FORGE_ROLE\"]"
-
-cd ../../   # back to infra/terraform root
+terraform state list | grep task_ledger
 ```
 
-> **Why separate?** The task-ledger module needs the agent role names as inputs, which are outputs of the root apply. Wiring it as a child module creates a chicken-and-egg dependency. The current design applies it as a second root with explicit role name inputs.
+You should see resources like:
+```
+module.task_ledger[0].aws_dynamodb_table.tasks
+module.task_ledger[0].aws_s3_bucket.narratives
+module.task_ledger[0].aws_pipes_pipe.task_events
+module.task_ledger[0].aws_iam_role_policy_attachment.pm[0]
+module.task_ledger[0].aws_iam_role_policy_attachment.worker[0]
+...
+```
 
-> **Deprecation warnings during init:** `hash_key` is deprecated in AWS provider 6.x. These warnings only fire when the module is initialized standalone (picks up provider 6.x). During actual apply, the root module's locked provider 5.100.0 is used — no warnings, no impact.
+> **History (why an older runbook step said "apply separately"):** the task-ledger module originally used `data` sources to look up the agent IAM roles, which resolve at plan time — they couldn't exist before the root apply created the roles. PR #27 removed the data sources and accepts `pm_role_names` / `worker_role_names` as variables. PR #23 then wired the module into the root with a `count = var.delegation_enabled ? 1 : 0` guard. As of this branch head, there is no separate apply.
 
 ---
 
 ## Step 4: Populate Secrets
 
-**Ensure your shell has all six token env vars set** (from the Prerequisites section) before running these commands.
+All per-agent secrets — Slack credentials *and* the Anthropic API key — are pushed via `fleetmind secrets populate`. Do not run raw `aws secretsmanager put-secret-value` for these; the CLI knows the secret naming convention (`${fleet_name}/agents/${agent_id}/{slack,anthropic}`) and matches what the `ExecStartPre=/usr/local/bin/fetch-agent-secrets` hook expects.
 
-### 4a. Via `fleetmind secrets populate` (recommended)
+### Run it
 
 ```bash
 cd /path/to/fleetmind   # repo root
-
-# Push all agent secrets interactively, resolving from your shell env
 fleetmind secrets populate --interactive --region us-west-2
 ```
 
-The `populate` command reads `fleet.yaml`, identifies the `${VAR}` placeholders in each agent's `slack.bot_token` / `app_token` / `signing_secret` fields, resolves them from your environment, and pushes them to Secrets Manager using the standard key names (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_SIGNING_SECRET`).
+`--interactive` is what we used for the gg-sandbox deploy. It prompts (with hidden input) for each missing token rather than failing when an env var isn't set, which avoids the trap of leaving real tokens in shell history or `.env` files. The CLI:
 
-For the Anthropic key (one per agent in this fleet):
-```bash
-aws secretsmanager put-secret-value \
-  --region us-west-2 \
-  --secret-id "gg-sandbox/agents/conductor/anthropic" \
-  --secret-string "{\"ANTHROPIC_API_KEY\":\"$ANTHROPIC_API_KEY\"}"
+1. Reads `fleet.yaml` and walks every agent's `slack.bot_token` / `app_token` / `signing_secret` and `anthropic.api_key` fields.
+2. For each `${VAR}` placeholder, resolves from process env first, then prompts interactively if missing.
+3. Anthropic key resolution: `<AGENT_ID_UPPER>_ANTHROPIC_API_KEY` → `ANTHROPIC_API_KEY` → interactive prompt.
+4. Pushes one Slack secret + one Anthropic secret per agent to AWS Secrets Manager using the standard key names (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_SIGNING_SECRET`, `ANTHROPIC_API_KEY`).
 
-aws secretsmanager put-secret-value \
-  --region us-west-2 \
-  --secret-id "gg-sandbox/agents/forge/anthropic" \
-  --secret-string "{\"ANTHROPIC_API_KEY\":\"$ANTHROPIC_API_KEY\"}"
-```
-
-### 4b. Via AWS CLI directly (alternative)
-
-```bash
-# Conductor Slack tokens
-aws secretsmanager put-secret-value \
-  --region us-west-2 \
-  --secret-id "gg-sandbox/agents/conductor/slack" \
-  --secret-string "{
-    \"SLACK_BOT_TOKEN\":\"$CONDUCTOR_BOT_TOKEN\",
-    \"SLACK_APP_TOKEN\":\"$CONDUCTOR_APP_TOKEN\",
-    \"SLACK_SIGNING_SECRET\":\"$CONDUCTOR_SIGNING_SECRET\"
-  }"
-
-# Forge Slack tokens
-aws secretsmanager put-secret-value \
-  --region us-west-2 \
-  --secret-id "gg-sandbox/agents/forge/slack" \
-  --secret-string "{
-    \"SLACK_BOT_TOKEN\":\"$FORGE_BOT_TOKEN\",
-    \"SLACK_APP_TOKEN\":\"$FORGE_APP_TOKEN\",
-    \"SLACK_SIGNING_SECRET\":\"$FORGE_SIGNING_SECRET\"
-  }"
-```
+Prefer `--interactive` for a real deploy. For CI/automation, set the env vars up front and drop the flag (or pass `--from <env-file>`).
 
 ### What the runtime does with these secrets
 
