@@ -2,11 +2,14 @@ import { Command } from "commander";
 import { loadFleet } from "../../config/loader.js";
 import { SkillsWatcher } from "../../runtime/watcher.js";
 import { log } from "../../utils/log.js";
+import { registerPushFleet } from "./push-fleet.js";
 
 export function registerPush(program: Command): void {
   const push = program
     .command("push")
-    .description("Push skills or plugins to agents");
+    .description("Push skills, plugins, or fleet updates to agents");
+
+  registerPushFleet(push);
 
   push
     .command("skill <name>")

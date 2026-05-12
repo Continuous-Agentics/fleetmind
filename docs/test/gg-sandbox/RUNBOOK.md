@@ -29,7 +29,7 @@ This runbook covers the full end-to-end deployment: Terraform infra → secrets 
 | EBS workspace volumes (unnecessary) | PR #34 removed: workspaces live on root EBS | ✅ Fixed |
 | VPC endpoints for SSM/SecretsManager | PR #40 added: interface endpoints opt-in via `enable_interface_endpoints` | ✅ Added |
 | `fleetmind deploy` EACCES on local render | PR #32 fixed: renders to `./rendered/workspaces/<id>/` | ✅ Fixed |
-| No automated deploy transport (S3/SSM push) | Issues #7–#15 — **still open** | 🟡 Manual SCP workaround |
+| No automated deploy transport (S3/SSM push) | `fleetmind push fleet` + `pull-self` (this PR) | ✅ Shipped |
 | Fleet Members table in AGENTS.md | Issue #20 — quality gap, not blocking | 🟡 Open |
 | `wake_target_session_key` no validation block | TF smell, not blocking | 🟡 Open |
 | DynamoDB context-store name `fleetmind-fleetmind` | TF smell with default fleet_name | 🟡 Open |
@@ -503,79 +503,90 @@ For the test deploy, skip this entirely. The gateway will start fine without aut
 
 ### 5d. Transport workspaces to EC2
 
-> **Current state:** `fleetmind deploy` renders locally but does not push to EC2 (issues #7–#15 — deploy transport not yet shipped). The workaround is SCP over a bastion, or SSM file transfer.
+Use `fleetmind push fleet` to package and deploy workspaces in one command. This
+replaces the manual tar / S3 copy / SSM flow.
 
-The local rendered workspace path is `./rendered/workspaces/<agent_id>/`. The EC2 target path is `<workspace_base>/<agent_id>/` (no `workspace-` prefix) — for this fleet: `/opt/openclaw/workspace/<agent_id>/`.
+**Prerequisites:**
+- Create the deploy-staging S3 bucket (one-time):
+  ```bash
+  aws s3 mb s3://gg-sandbox-ledger --region us-west-2
+  ```
+- Your AWS identity needs `ssm:SendCommand`, `ssm:DescribeInstanceInformation`, and
+  `s3:PutObject` on `gg-sandbox-ledger/deploy-staging/*`. See `docs/OPERATING.md` for
+  the full IAM policy.
 
-**Option A: SCP via bastion (if you have SSH access)**
-
-```bash
-# Get private IPs from Terraform output
-CONDUCTOR_IP=$(terraform -chdir=infra/terraform output -json private_ips | jq -r '.conductor')
-FORGE_IP=$(terraform -chdir=infra/terraform output -json private_ips | jq -r '.forge')
-
-# SCP workspaces (adjust bastion host/key path)
-scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
-  -r ./rendered/workspaces/conductor \
-  ec2-user@$CONDUCTOR_IP:/opt/openclaw/workspace/
-
-scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
-  -r ./rendered/workspaces/forge \
-  ec2-user@$FORGE_IP:/opt/openclaw/workspace/
-
-# SCP per-agent openclaw.json to each instance (each has its own slice)
-scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
-  ./rendered/openclaw/conductor/openclaw.json \
-  ec2-user@$CONDUCTOR_IP:/opt/openclaw/workspace/conductor/.openclaw/openclaw.json
-
-scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
-  ./rendered/openclaw/forge/openclaw.json \
-  ec2-user@$FORGE_IP:/opt/openclaw/workspace/forge/.openclaw/openclaw.json
-
-# SCP cron jobs (conductor only — it's the PM bot)
-scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
-  -r ./rendered/cron \
-  ec2-user@$CONDUCTOR_IP:/opt/openclaw/workspace/conductor/
-```
-
-**Option B: SSM file push (no bastion required)**
+**Dry-run first (always recommended):**
 
 ```bash
-CONDUCTOR_ID=$(terraform -chdir=infra/terraform output -json instance_ids | jq -r '.conductor')
-FORGE_ID=$(terraform -chdir=infra/terraform output -json instance_ids | jq -r '.forge')
-
-# Package and push via SSM (base64 encode, send as command, decode on EC2)
-for AGENT in conductor forge; do
-  INSTANCE_ID=$(terraform -chdir=infra/terraform output -json instance_ids | jq -r ".$AGENT")
-  tar czf /tmp/${AGENT}-workspace.tar.gz -C ./rendered/workspaces ${AGENT}
-  B64=$(base64 -w0 /tmp/${AGENT}-workspace.tar.gz)
-  aws ssm send-command \
-    --region us-west-2 \
-    --instance-ids $INSTANCE_ID \
-    --document-name AWS-RunShellScript \
-    --parameters "commands=[
-      \"mkdir -p /opt/openclaw/workspace\",
-      \"echo '$B64' | base64 -d > /tmp/${AGENT}-workspace.tar.gz\",
-      \"tar xzf /tmp/${AGENT}-workspace.tar.gz -C /opt/openclaw/workspace/\",
-      \"chown -R ec2-user:ec2-user /opt/openclaw/workspace/${AGENT}\"
-    ]"
-done
-
-# Push per-agent openclaw.json to each instance (each has its own slice)
-for AGENT in conductor forge; do
-  INSTANCE_ID=$(terraform -chdir=infra/terraform output -json instance_ids | jq -r ".$AGENT")
-  B64=$(base64 -w0 ./rendered/openclaw/${AGENT}/openclaw.json)
-  aws ssm send-command \
-    --region us-west-2 \
-    --instance-ids $INSTANCE_ID \
-    --document-name AWS-RunShellScript \
-    --parameters "commands=[
-      \"mkdir -p /opt/openclaw/workspace/${AGENT}/.openclaw\",
-      \"echo '$B64' | base64 -d > /opt/openclaw/workspace/${AGENT}/.openclaw/openclaw.json\",
-      \"chown -R ec2-user:ec2-user /opt/openclaw/workspace/${AGENT}\"
-    ]"
-done
+fleetmind push fleet --dry-run
 ```
+
+This renders, packages, and prints a per-agent file manifest (count + total size) but
+does **not** upload anything or trigger any bots.
+
+**Full push:**
+
+```bash
+fleetmind push fleet
+```
+
+This:
+1. Renders workspaces + per-agent `openclaw.json` (same as `fleetmind deploy`)
+2. Packages each agent's workspace into a signed tarball
+3. Uploads tarball + manifest to `s3://gg-sandbox-ledger/deploy-staging/`
+4. Sends an SSM command to each agent to run `fleetmind pull-self --apply`
+5. Prints the SSM command ID per agent for follow-up
+
+Check that each agent applied successfully:
+```bash
+aws ssm get-command-invocation \
+  --command-id <cmd-id-from-push-summary> \
+  --instance-id <instance-id> \
+  --region us-west-2 \
+  --query 'StandardOutputContent' --output text
+```
+
+**Push and restart gateways in one step:**
+
+```bash
+fleetmind push fleet --restart
+```
+
+---
+
+> **Fallback: manual SCP / SSM (if `push fleet` isn't available)**
+>
+> The original manual steps are preserved below for reference if you need to bootstrap
+> an instance that doesn't yet have `fleetmind` installed, or in case of emergency.
+>
+> ```bash
+> CONDUCTOR_IP=$(terraform -chdir=infra/terraform output -json private_ips | jq -r '.conductor')
+> FORGE_IP=$(terraform -chdir=infra/terraform output -json private_ips | jq -r '.forge')
+>
+> # SCP workspaces (requires bastion or VPN)
+> scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
+>   -r ./rendered/workspaces/conductor ec2-user@$CONDUCTOR_IP:/opt/openclaw/workspace/
+> scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
+>   -r ./rendered/workspaces/forge ec2-user@$FORGE_IP:/opt/openclaw/workspace/
+>
+> # SCP per-agent openclaw.json
+> scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
+>   ./rendered/openclaw/conductor/openclaw.json \
+>   ec2-user@$CONDUCTOR_IP:/opt/openclaw/workspace/conductor/.openclaw/openclaw.json
+> scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
+>   ./rendered/openclaw/forge/openclaw.json \
+>   ec2-user@$FORGE_IP:/opt/openclaw/workspace/forge/.openclaw/openclaw.json
+>
+> # SSM file push (no bastion — for post-launch updates)
+> for AGENT in conductor forge; do
+>   INSTANCE_ID=$(terraform -chdir=infra/terraform output -json instance_ids | jq -r ".$AGENT")
+>   tar czf /tmp/${AGENT}-workspace.tar.gz -C ./rendered/workspaces ${AGENT}
+>   B64=$(base64 -w0 /tmp/${AGENT}-workspace.tar.gz)
+>   aws ssm send-command --region us-west-2 --instance-ids $INSTANCE_ID \
+>     --document-name AWS-RunShellScript \
+>     --parameters "commands=[\"echo '$B64' | base64 -d > /tmp/${AGENT}-workspace.tar.gz\",\"tar xzf /tmp/${AGENT}-workspace.tar.gz -C /opt/openclaw/workspace/\",\"chown -R ec2-user:ec2-user /opt/openclaw/workspace/${AGENT}\"]"
+> done
+> ```
 
 ### 5e. Verify workspace layout on EC2
 
