@@ -83,12 +83,15 @@ See `RELEASING.md` for the full release process and SSM token setup for EC2 inst
 Use `AdministratorAccess` on the deploying identity for a test run. Enumerate least-privilege post-validation. The principal needs EC2, VPC, IAM, Secrets Manager, DynamoDB, S3, EventBridge, SQS, SNS, SSM, and CloudWatch permissions. See the Pre-Flight Assessment for the full permission list.
 
 ### Slack apps
-Two Slack apps are required — one per agent. Install them in your test workspace before proceeding. Manifests are in `test/gg-sandbox/slack-manifests/`. Each app needs:
-- Socket Mode enabled
-- Bot Token Scopes: `channels:history`, `channels:read`, `chat:write`, `groups:history`, `groups:read`, `im:history`, `im:read`, `users:read`
-- `app_mentions:read` scope
-- Event subscriptions: `message.channels`, `message.groups`, `message.im`, `app_mention`
-- An App-Level Token (`xapp-...`) with `connections:write` scope
+Two Slack apps are required — one per agent. Create them in your test workspace before proceeding.
+
+**Generate the manifests** (run from the repo root after `npm install`):
+```bash
+fleetmind slack manifests --out docs/test/gg-sandbox/slack-manifests/
+```
+This writes one `<agent_id>.yaml` per agent (e.g. `conductor.yaml`, `forge.yaml`). Upload each YAML into the Slack app-create wizard (`https://api.slack.com/apps → Create New App → From a manifest`).
+
+The generated manifests include the full scope + event set verified to work with the live gg-sandbox bots. Committed reference copies live in `docs/test/gg-sandbox/slack-manifests/` and can be re-generated at any time from `fleet.yaml`.
 
 After creating each app, collect and export to your shell:
 ```bash

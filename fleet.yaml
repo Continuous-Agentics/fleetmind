@@ -46,6 +46,12 @@ agents:
         bot_token: "${CONDUCTOR_BOT_TOKEN}"
         app_token: "${CONDUCTOR_APP_TOKEN}"
         signing_secret: "${CONDUCTOR_SIGNING_SECRET}"
+        background_color: "#2C3E50"        # Slack App manifest display colour
+        long_description: >
+          Conductor is the project-manager bot for Grace's gg-sandbox test fleet (Continuous-Agentics/fleetmind).
+          It receives tasks from humans, delegates work to specialty worker bots (Forge), tracks tasks in a
+          DynamoDB ledger, and closes the loop on every delegation. Runs on dedicated EC2 in AWS account
+          251714435910 (us-west-2).
       skills:
         - name: bot-delegation
           source: fleetmind
@@ -78,6 +84,12 @@ agents:
         bot_token: "${FORGE_BOT_TOKEN}"
         app_token: "${FORGE_APP_TOKEN}"
         signing_secret: "${FORGE_SIGNING_SECRET}"
+        background_color: "#8B4513"        # Slack App manifest display colour (role default)
+        long_description: >
+          Forge is the backend specialty worker bot for Grace's gg-sandbox test fleet
+          (Continuous-Agentics/fleetmind). It receives task envelopes from Conductor (the PM bot),
+          acknowledges with :eyes:, ships work back through a DynamoDB task ledger, and posts completion
+          summaries. Runs on dedicated EC2 in AWS account 251714435910 (us-west-2).
       skills:
         - name: bot-reception
           source: fleetmind
