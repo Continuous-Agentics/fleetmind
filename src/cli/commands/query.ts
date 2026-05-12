@@ -2,22 +2,24 @@
  * fleetmind query — enumerate tasks from the ledger
  *
  * Usage:
- *   fleetmind query pending  [--project <slug>] [--limit <n>] [--threshold <minutes>]
- *   fleetmind query merged   [--project <slug>] [--limit <n>]
- *   fleetmind query stale    [--project <slug>] [--delegated-threshold <min>] [--accepted-threshold <min>]
+ *   fleetmind query pending  [--worker <id>] [--project <slug>] [--limit <n>] [--json]
+ *   fleetmind query shipped  [--project <slug>] [--limit <n>] [--json]
+ *   fleetmind query merged   [--project <slug>] [--limit <n>] [--json]
+ *   fleetmind query stale    [--older-than <duration>] [--limit <n>] [--json]
+ *   fleetmind query all      [--project <slug>] [--status <status>] [--limit <n>] [--json]
  *
- * All output is JSON (machine-friendly for skill use; human-readable via jq).
+ * Durations for --older-than: Go-style (e.g. 1h, 30m, 24h, 1d).
  */
 
 import { Command } from "commander";
-import { loadFleet } from "../../config/loader.js";
+import { resolveAndLoadFleet } from "../../config/loader.js";
 import { TaskLedger } from "../../runtime/delegation/ddb.js";
 import { TaskStatus } from "../../runtime/delegation/types.js";
 import { log } from "../../utils/log.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function makeLedger(fleet: ReturnType<typeof loadFleet>): TaskLedger {
+function makeLedger(fleet: ReturnType<typeof resolveAndLoadFleet>): TaskLedger {
   const d = fleet.delegation;
   if (!d?.enabled || !d.table_name) {
     log.error("Delegation is not enabled. Set delegation.enabled = true and delegation.table_name in fleet.yaml.");
@@ -26,30 +28,30 @@ function makeLedger(fleet: ReturnType<typeof loadFleet>): TaskLedger {
   return new TaskLedger({ tableName: d.table_name, region: d.aws_region });
 }
 
-function minutesAgo(minutes: number): string {
-  return new Date(Date.now() - minutes * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+/**
+ * Parse a Go-style duration string into milliseconds.
+ * Supports: m (minutes), h (hours), d (days). e.g. "30m", "1h", "24h", "1d".
+ */
+export function parseDuration(s: string): number {
+  const match = s.match(/^(\d+(?:\.\d+)?)(m|h|d)$/);
+  if (!match) {
+    throw new Error(
+      `Invalid duration '${s}'. Use Go-style durations like 30m, 1h, 24h, 1d.`
+    );
+  }
+  const value = parseFloat(match[1]);
+  const unit = match[2];
+  switch (unit) {
+    case "m": return value * 60 * 1000;
+    case "h": return value * 60 * 60 * 1000;
+    case "d": return value * 24 * 60 * 60 * 1000;
+    default:  throw new Error(`Unknown duration unit '${unit}'`);
+  }
 }
 
-async function queryStatus(
-  ledger: TaskLedger,
-  status: TaskStatus,
-  opts: { project?: string; olderThan?: string; limit?: number }
-) {
-  if (opts.project) {
-    return ledger.queryByProjectStatus({
-      project: opts.project,
-      status,
-      olderThan: opts.olderThan,
-      limit: opts.limit,
-      ascending: true,
-    });
-  }
-  return ledger.queryByStatus({
-    status,
-    olderThan: opts.olderThan,
-    limit: opts.limit,
-    ascending: false,
-  });
+/** Return an ISO timestamp that is `ms` milliseconds before now */
+function msAgo(ms: number): string {
+  return new Date(Date.now() - ms).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 // ── Register ──────────────────────────────────────────────────────────────────
@@ -57,96 +59,250 @@ async function queryStatus(
 export function registerQuery(program: Command): void {
   const query = program
     .command("query")
-    .description("Query the task ledger (pending, merged, stale)");
+    .description("Query the task ledger (pending, shipped, merged, stale, all)");
 
   // ── pending ──────────────────────────────────────────────────────────────
 
   query
     .command("pending")
-    .description("List tasks in delegated or accepted state")
+    .description("List delegated (pending) tasks")
+    .option("--worker <id>", "Filter by worker agent ID (post-filter)")
     .option("--project <slug>", "Filter by project slug")
     .option("--limit <n>", "Maximum results", "50")
-    .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
-    .action(async (opts: { project?: string; limit: string; fleet: string }) => {
-      const fleet = loadFleet(opts.fleet);
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
+    .option("--region <region>", "AWS region override")
+    .option("--json", "Output JSON")
+    .action(async (opts: {
+      worker?: string;
+      project?: string;
+      limit: string;
+      fleet?: string;
+      region?: string;
+      json?: boolean;
+    }) => {
+      if (opts.region) process.env["AWS_REGION"] = opts.region;
+      const fleet = resolveAndLoadFleet(opts.fleet);
       const ledger = makeLedger(fleet);
       const limit = parseInt(opts.limit, 10);
 
-      const [delegated, accepted] = await Promise.all([
-        queryStatus(ledger, "delegated", { project: opts.project, limit }),
-        queryStatus(ledger, "accepted", { project: opts.project, limit }),
-      ]);
+      let items = opts.project
+        ? await ledger.queryByProjectStatus({ project: opts.project, status: "delegated", limit, ascending: false })
+        : await ledger.queryByStatus({ status: "delegated", limit, ascending: false });
 
-      console.log(JSON.stringify({ delegated, accepted }, null, 2));
+      if (opts.worker) {
+        items = items.filter((t) => t.worker === opts.worker);
+      }
+
+      const output = { pending: items };
+      console.log(opts.json ? JSON.stringify(output, null, 2) : formatTable(items));
+    });
+
+  // ── shipped ───────────────────────────────────────────────────────────────
+
+  query
+    .command("shipped")
+    .description("List shipped tasks")
+    .option("--project <slug>", "Filter by project slug")
+    .option("--limit <n>", "Maximum results", "20")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
+    .option("--region <region>", "AWS region override")
+    .option("--json", "Output JSON")
+    .action(async (opts: {
+      project?: string;
+      limit: string;
+      fleet?: string;
+      region?: string;
+      json?: boolean;
+    }) => {
+      if (opts.region) process.env["AWS_REGION"] = opts.region;
+      const fleet = resolveAndLoadFleet(opts.fleet);
+      const ledger = makeLedger(fleet);
+      const limit = parseInt(opts.limit, 10);
+
+      const items = opts.project
+        ? await ledger.queryByProjectStatus({ project: opts.project, status: "shipped", limit, ascending: false })
+        : await ledger.queryByStatus({ status: "shipped", limit, ascending: false });
+
+      const output = { shipped: items };
+      console.log(opts.json ? JSON.stringify(output, null, 2) : formatTable(items));
     });
 
   // ── merged ───────────────────────────────────────────────────────────────
 
   query
     .command("merged")
-    .description("List recently merged tasks (for planning context)")
+    .description("List merged tasks")
     .option("--project <slug>", "Filter by project slug")
     .option("--limit <n>", "Maximum results", "20")
-    .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
-    .action(async (opts: { project?: string; limit: string; fleet: string }) => {
-      const fleet = loadFleet(opts.fleet);
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
+    .option("--region <region>", "AWS region override")
+    .option("--json", "Output JSON")
+    .action(async (opts: {
+      project?: string;
+      limit: string;
+      fleet?: string;
+      region?: string;
+      json?: boolean;
+    }) => {
+      if (opts.region) process.env["AWS_REGION"] = opts.region;
+      const fleet = resolveAndLoadFleet(opts.fleet);
       const ledger = makeLedger(fleet);
       const limit = parseInt(opts.limit, 10);
 
-      const merged = await queryStatus(ledger, "merged", {
-        project: opts.project,
-        limit,
-      });
+      const items = opts.project
+        ? await ledger.queryByProjectStatus({ project: opts.project, status: "merged", limit, ascending: false })
+        : await ledger.queryByStatus({ status: "merged", limit, ascending: false });
 
-      console.log(JSON.stringify({ merged }, null, 2));
+      const output = { merged: items };
+      console.log(opts.json ? JSON.stringify(output, null, 2) : formatTable(items));
     });
 
   // ── stale ─────────────────────────────────────────────────────────────────
 
   query
     .command("stale")
-    .description("List tasks past their deadline (for heartbeat escalation)")
-    .option("--project <slug>", "Filter by project slug")
-    .option("--delegated-threshold <minutes>", "Minutes after which a delegated task is stale", "10")
-    .option("--accepted-threshold <minutes>", "Minutes after which an accepted task is stale", "60")
+    .description("List tasks that have not progressed past the given age threshold")
+    .option("--older-than <duration>", "Tasks older than this duration are stale (e.g. 1h, 30m, 1d)", "24h")
     .option("--limit <n>", "Maximum results per status", "50")
-    .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
+    .option("--region <region>", "AWS region override")
+    .option("--json", "Output JSON")
     .action(async (opts: {
-      project?: string;
-      delegatedThreshold: string;
-      acceptedThreshold: string;
+      olderThan: string;
       limit: string;
-      fleet: string;
+      fleet?: string;
+      region?: string;
+      json?: boolean;
     }) => {
-      const fleet = loadFleet(opts.fleet);
+      let olderThanMs: number;
+      try {
+        olderThanMs = parseDuration(opts.olderThan);
+      } catch (err) {
+        log.error(String(err));
+        process.exit(1);
+      }
+
+      if (opts.region) process.env["AWS_REGION"] = opts.region;
+      const fleet = resolveAndLoadFleet(opts.fleet);
       const ledger = makeLedger(fleet);
       const limit = parseInt(opts.limit, 10);
-      const delegatedCutoff = minutesAgo(parseInt(opts.delegatedThreshold, 10));
-      const acceptedCutoff = minutesAgo(parseInt(opts.acceptedThreshold, 10));
+      const cutoff = msAgo(olderThanMs);
 
-      const [staleDelegated, staleAccepted] = await Promise.all([
-        queryStatus(ledger, "delegated", {
-          project: opts.project,
-          olderThan: delegatedCutoff,
-          limit,
-        }),
-        queryStatus(ledger, "accepted", {
-          project: opts.project,
-          olderThan: acceptedCutoff,
-          limit,
-        }),
+      const [staleDelegated, staleShipped] = await Promise.all([
+        ledger.queryByStatus({ status: "delegated", olderThan: cutoff, limit, ascending: true }),
+        ledger.queryByStatus({ status: "shipped",   olderThan: cutoff, limit, ascending: true }),
       ]);
 
-      const result = {
+      const output = {
         stale_delegated: staleDelegated,
-        stale_accepted: staleAccepted,
-        thresholds: {
-          delegated_minutes: parseInt(opts.delegatedThreshold, 10),
-          accepted_minutes: parseInt(opts.acceptedThreshold, 10),
-          queried_at: new Date().toISOString(),
-        },
+        stale_shipped: staleShipped,
+        threshold: opts.olderThan,
+        cutoff_at: cutoff,
+        queried_at: new Date().toISOString(),
       };
-
-      console.log(JSON.stringify(result, null, 2));
+      console.log(opts.json ? JSON.stringify(output, null, 2) : formatStale(output));
     });
+
+  // ── all ───────────────────────────────────────────────────────────────────
+
+  query
+    .command("all")
+    .description("Query all tasks, optionally filtered by project and/or status")
+    .option("--project <slug>", "Filter by project slug")
+    .option("--status <status>", "Filter by status (delegated|accepted|shipped|merged|blocked|abandoned|signed_off)")
+    .option("--limit <n>", "Maximum results", "50")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
+    .option("--region <region>", "AWS region override")
+    .option("--json", "Output JSON")
+    .action(async (opts: {
+      project?: string;
+      status?: string;
+      limit: string;
+      fleet?: string;
+      region?: string;
+      json?: boolean;
+    }) => {
+      if (opts.region) process.env["AWS_REGION"] = opts.region;
+      const fleet = resolveAndLoadFleet(opts.fleet);
+      const ledger = makeLedger(fleet);
+      const limit = parseInt(opts.limit, 10);
+
+      let items;
+
+      if (opts.project && opts.status) {
+        // GSI1: ProjectStatusIndex — most efficient
+        items = await ledger.queryByProjectStatus({
+          project: opts.project,
+          status: opts.status as TaskStatus,
+          limit,
+          ascending: false,
+        });
+      } else if (opts.status) {
+        // GSI2: StatusIndex — cross-project
+        items = await ledger.queryByStatus({
+          status: opts.status as TaskStatus,
+          limit,
+          ascending: false,
+        });
+      } else if (opts.project) {
+        // All statuses for a project — query each known status and merge
+        log.warn("Querying all statuses for a project requires multiple GSI1 queries (no table scan).");
+        const statuses: TaskStatus[] = ["delegated", "accepted", "shipped", "signed_off", "merged", "blocked", "abandoned"];
+        const results = await Promise.all(
+          statuses.map((s) =>
+            ledger.queryByProjectStatus({ project: opts.project!, status: s, limit, ascending: false })
+          )
+        );
+        items = results.flat();
+      } else {
+        // No filters — warn about cost
+        log.warn("No --project or --status given. This queries each status index separately (potentially expensive).");
+        const statuses: TaskStatus[] = ["delegated", "accepted", "shipped", "signed_off", "merged", "blocked", "abandoned"];
+        const results = await Promise.all(
+          statuses.map((s) => ledger.queryByStatus({ status: s, limit, ascending: false }))
+        );
+        items = results.flat();
+      }
+
+      const output = { items };
+      console.log(opts.json ? JSON.stringify(output, null, 2) : formatTable(items));
+    });
+}
+
+// ── Formatters ────────────────────────────────────────────────────────────────
+
+interface TaskRow {
+  task_id: string;
+  project: string;
+  status: string;
+  delegated_at: string;
+  worker: string;
+}
+
+function formatTable(rows: TaskRow[]): string {
+  if (rows.length === 0) return "(no results)";
+  return rows
+    .map((r) => `${r.task_id}  ${r.status.padEnd(12)}  ${r.project.padEnd(20)}  ${r.worker.padEnd(20)}  ${r.delegated_at}`)
+    .join("\n");
+}
+
+function formatStale(output: {
+  stale_delegated: TaskRow[];
+  stale_shipped: TaskRow[];
+  threshold: string;
+  cutoff_at: string;
+}): string {
+  const lines: string[] = [`Stale tasks (older than ${output.threshold}, cutoff: ${output.cutoff_at})`];
+  if (output.stale_delegated.length > 0) {
+    lines.push("\nDelegated (not yet accepted):");
+    lines.push(formatTable(output.stale_delegated));
+  }
+  if (output.stale_shipped.length > 0) {
+    lines.push("\nShipped (awaiting signoff/merge):");
+    lines.push(formatTable(output.stale_shipped));
+  }
+  if (output.stale_delegated.length === 0 && output.stale_shipped.length === 0) {
+    lines.push("(no stale tasks)");
+  }
+  return lines.join("\n");
 }
