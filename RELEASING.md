@@ -64,11 +64,11 @@ After this, `npm install -g @continuous-agentics/fleetmind` works locally.
 3. **Publish the package** (one-time; run from a machine with `write:packages`):
    ```bash
    # Ensure ~/.npmrc is configured (see Prerequisites above)
-   npm version 0.4.0   # or skip if package.json already has 0.4.0
+   npm version 0.4.1   # or skip if package.json already has 0.4.1
    npm publish
    ```
 4. **Apply Terraform** — instances are replaced; STAGE 6b fetches the PAT from SSM,
-   installs `@continuous-agentics/fleetmind@0.4.0`, verifies `fleetmind --version`,
+   installs `@continuous-agentics/fleetmind@0.4.1`, verifies `fleetmind --version`,
    and cleans up the `.npmrc`.
 
 ## SSM parameter path
