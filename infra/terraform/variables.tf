@@ -123,7 +123,7 @@ variable "agent_orchestrators" {
 variable "delegation_enabled" {
   description = "When true, instantiates the task-ledger module which provisions the DynamoDB task table, S3 narratives bucket, EventBridge Pipe, and DLQ infrastructure needed for the bot-delegation flow. Set false if delegation infra was applied separately or is not needed."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "enable_interface_endpoints" {
@@ -141,5 +141,5 @@ variable "wake_target_session_key" {
 variable "fleetmind_version" {
   description = "Version of @continuous-agentics/fleetmind to install on each agent EC2."
   type        = string
-  default     = "0.4.1"
+  default     = "latest"
 }
