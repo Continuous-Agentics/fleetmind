@@ -326,6 +326,21 @@ export class TaskLedger {
     });
   }
 
+  /**
+   * Set `last_nag_at` to now. Idempotent — used by PM heartbeat to track
+   * when it last pinged about a stale shipped task.
+   */
+  async setNag(taskId: string): Promise<void> {
+    const now = nowISO();
+    await this._updateStatus(taskId, {
+      updateExpression: "SET last_nag_at = :now",
+      conditionExpression: "attribute_exists(PK)",
+      expressionAttributeNames: {},
+      expressionAttributeValues: { ":now": now },
+      errorContext: "set-nag",
+    });
+  }
+
   // ── GSI queries ───────────────────────────────────────────────────────────
 
   /**
@@ -403,13 +418,14 @@ export class TaskLedger {
     }
   ): Promise<void> {
     try {
+      const nameCount = Object.keys(opts.expressionAttributeNames).length;
       await this.doc.send(
         new UpdateCommand({
           TableName: this.table,
           Key: { PK: taskPK(taskId) },
           UpdateExpression: opts.updateExpression,
           ConditionExpression: opts.conditionExpression,
-          ExpressionAttributeNames: opts.expressionAttributeNames,
+          ...(nameCount > 0 && { ExpressionAttributeNames: opts.expressionAttributeNames }),
           ExpressionAttributeValues: opts.expressionAttributeValues,
         })
       );
