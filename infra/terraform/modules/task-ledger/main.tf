@@ -119,10 +119,10 @@ resource "aws_dynamodb_table" "tasks" {
   # ── Deletion guards ──────────────────────────────────────────────────────────
   # Two layers: DDB-native API rejection + Terraform plan rejection.
   # Disabling either requires an explicit code change (git audit trail).
-  deletion_protection_enabled = true
+  deletion_protection_enabled = false
 
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = false
   }
 
   tags = local.base_tags
