@@ -396,7 +396,7 @@ export function renderTerraformVars(fleet: Fleet): string {
  * `./rendered/openclaw.json` will silently produce the new per-agent layout
  * at `./rendered/openclaw/<agent_id>/openclaw.json` without any config change.
  */
-function resolveOpenClawBaseDir(ocJsonPath: string, baseDir: string): string {
+export function resolveOpenClawBaseDir(ocJsonPath: string, baseDir: string): string {
   const resolved = path.resolve(baseDir, ocJsonPath);
   if (resolved.endsWith(".json")) {
     return resolved.slice(0, -".json".length);
