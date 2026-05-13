@@ -8,6 +8,7 @@ import { log } from "../../utils/log.js";
 export function registerStatus(program: Command): void {
   program
     .command("status [fleet]")
+    .option("-f, --fleet <path>", "fleet.yaml path (overrides positional arg and FLEET_YAML env var)")
     .description("Show fleet configuration and workspace status")
     .addHelpText('after', `
 Examples:
@@ -17,8 +18,8 @@ Examples:
   # Show status for a specific fleet file
   $ fleetmind status acme-fleet.yaml
 `)
-    .action((fleetArg: string | undefined) => {
-      const fleetFile = fleetArg ?? "fleet.yaml";
+    .action((fleetArg: string | undefined, opts) => {
+      const fleetFile = opts.fleet ?? fleetArg ?? "fleet.yaml";
       try {
         const fleet = loadFleet(fleetFile);
         const { fleet: meta, agents } = fleet;

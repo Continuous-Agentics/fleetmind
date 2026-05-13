@@ -6,6 +6,7 @@ import { log } from "../../utils/log.js";
 export function registerWatch(program: Command): void {
   program
     .command("watch [fleet]")
+    .option("-f, --fleet <path>", "fleet.yaml path (overrides positional arg and FLEET_YAML env var)")
     .description("GitOps watcher — auto-push skill updates from the skills repo")
     .option("--interval <interval>", "Poll interval (e.g. 30s, 5m)")
     .addHelpText('after', `
@@ -20,7 +21,7 @@ Examples:
   $ fleetmind watch --interval 2m
 `)
     .action(async (fleetArg: string | undefined, opts) => {
-      const fleetFile = fleetArg ?? "fleet.yaml";
+      const fleetFile = opts.fleet ?? fleetArg ?? "fleet.yaml";
       try {
         const fleet = loadFleet(fleetFile);
         if (opts.interval) fleet.skills_repo.poll_interval = opts.interval;

@@ -8,6 +8,7 @@ import { log } from "../../utils/log.js";
 export function registerDeploy(program: Command): void {
   program
     .command("deploy [fleet]")
+    .option("-f, --fleet <path>", "fleet.yaml path (overrides positional arg and FLEET_YAML env var)")
     .description("Render per-agent workspaces + openclaw.json locally to ./rendered/ (does not push to EC2 — use `push fleet` for that)")
     .option("--dry-run", "Show what would happen without doing it")
     .option("--no-render", "Skip rendering openclaw.json")
@@ -26,7 +27,7 @@ Note: deploy writes files locally. To push rendered workspaces to EC2 instances,
   $ fleetmind push fleet
 `)
     .action((fleetArg: string | undefined, opts) => {
-      const fleetFile = fleetArg ?? "fleet.yaml";
+      const fleetFile = opts.fleet ?? fleetArg ?? "fleet.yaml";
       try {
         const localBase = process.cwd();
         const fleet = loadFleet(fleetFile);
