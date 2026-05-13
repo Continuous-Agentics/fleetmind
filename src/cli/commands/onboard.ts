@@ -28,13 +28,57 @@ import { log } from "../../utils/log.js";
 import { generateManifests } from "./slack.js";
 import { discoverSlackBotUserIds } from "./slack.js";
 import { populateSecrets } from "./populate.js";
-import { promptHidden } from "./populate.js";
 import { storeGithubApp } from "./github-app.js";
 import { runPushFleet } from "./push-fleet.js";
 import { writeOutputs, renderTerraformVars } from "../../runtime/renderer.js";
 import { provisionFleet } from "../../runtime/provisioner.js";
 
 // ── Terminal helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Hidden input that works with an existing readline interface.
+ * Pauses rl, sets stdin raw mode, reads chars manually (no echo), then resumes rl.
+ */
+function hiddenPrompt(rl: readline.Interface, question: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(question);
+    rl.pause();
+
+    const chunks: string[] = [];
+    const onData = (char: string): void => {
+      if (char === "\r" || char === "\n") {
+        process.stdin.setRawMode?.(false);
+        process.stdin.removeListener("data", onData);
+        process.stdin.pause();
+        rl.resume();
+        process.stdout.write("\n");
+        resolve(chunks.join(""));
+      } else if (char === "\u0003") {
+        // Ctrl-C
+        process.stdin.setRawMode?.(false);
+        process.stdin.removeListener("data", onData);
+        rl.resume();
+        reject(new Error("Aborted"));
+      } else if (char === "\u007F" || char === "\u0008") {
+        // Backspace
+        chunks.pop();
+      } else {
+        chunks.push(char);
+      }
+    };
+
+    try {
+      process.stdin.setRawMode?.(true);
+      process.stdin.setEncoding("utf8");
+      process.stdin.resume();
+      process.stdin.on("data", onData);
+    } catch (err) {
+      // TTY not available (e.g. piped input) — fall back to visible prompt
+      rl.resume();
+      prompt(rl, question).then(resolve).catch(reject);
+    }
+  });
+}
 
 function prompt(rl: readline.Interface, question: string): Promise<string> {
   return new Promise((resolve) => rl.question(question, resolve));
@@ -153,9 +197,9 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
 
     for (const agent of agents) {
       console.log(`\x1b[1m  Agent: ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
-      const botToken = await promptHidden(`    Bot Token (xoxb-...): `);
-      const signingSecret = await promptHidden(`    Signing Secret:       `);
-      const appToken = await promptHidden(`    App Token (xapp-...): `);
+      const botToken = await hiddenPrompt(rl, `    Bot Token (xoxb-...): `);
+      const signingSecret = await hiddenPrompt(rl, `    Signing Secret:       `);
+      const appToken = await hiddenPrompt(rl, `    App Token (xapp-...): `);
       slackCreds[agent.id] = { botToken, signingSecret, appToken };
       console.log();
     }
@@ -193,9 +237,9 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
     // Still need to collect for secrets populate later
     for (const agent of agents) {
       console.log(`\x1b[1m  Agent: ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
-      const botToken = await promptHidden(`    Bot Token (xoxb-...): `);
-      const signingSecret = await promptHidden(`    Signing Secret:       `);
-      const appToken = await promptHidden(`    App Token (xapp-...): `);
+      const botToken = await hiddenPrompt(rl, `    Bot Token (xoxb-...): `);
+      const signingSecret = await hiddenPrompt(rl, `    Signing Secret:       `);
+      const appToken = await hiddenPrompt(rl, `    App Token (xapp-...): `);
       slackCreds[agent.id] = { botToken, signingSecret, appToken };
     }
   }
@@ -257,7 +301,7 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
   if (patExists) {
     log.ok("  PAT already set in SSM — skipping");
   } else {
-    const pat = await promptHidden("  GitHub Packages PAT (ghp_...): ");
+    const pat = await hiddenPrompt(rl, "  GitHub Packages PAT (ghp_...): ");
     if (pat.trim()) {
       const { SSMClient, PutParameterCommand } = await import("@aws-sdk/client-ssm");
       const ssm = new SSMClient({ region });
@@ -317,7 +361,7 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
       agent: [],
       region,
       interactive: true, // prompt for Anthropic keys (not collected above)
-      promptFn: promptHidden,
+      promptFn: (q) => hiddenPrompt(rl, q),
       confirmFn: (q: string) => confirm(rl, q),
     });
   }
