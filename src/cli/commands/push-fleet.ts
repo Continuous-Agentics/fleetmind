@@ -37,6 +37,9 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  CopyObjectCommand,
+  ListObjectsV2Command,
+  DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import {
   SSMClient,
@@ -104,6 +107,11 @@ export interface PushFleetDeps {
    * Send an SSM run-shell-script command. Returns the command ID.
    */
   sendSsmCommand?: (instanceId: string, commands: string[], region: string) => Promise<string>;
+  /** Override the lock acquire/release for testing. */
+  acquireLock?: (bucket: string, region: string) => Promise<void>;
+  releaseLock?: (bucket: string, region: string) => Promise<void>;
+  /** Override history archiving for testing. */
+  archiveToHistory?: (bucket: string, agentId: string, sha256: string, region: string) => Promise<void>;
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────
@@ -285,6 +293,151 @@ async function defaultSendSsmCommand(
   return resp.Command?.CommandId ?? "";
 }
 
+// ── Fleet-wide S3 lock ───────────────────────────────────────────────────────
+
+const LOCK_KEY = "deploy-staging/lock.json";
+const LOCK_TTL_SECONDS = 300;
+
+interface LockInfo {
+  acquired_at: string;
+  holder: string;
+  ttl_seconds: number;
+}
+
+/** Try to acquire the fleet deploy lock. Throws if locked by another operator. */
+async function acquireLock(bucket: string, region: string): Promise<void> {
+  const s3 = new S3Client({ region });
+  const holder = `${process.env.USER ?? 'unknown'}@${os.hostname()}`;
+
+  // Check if a lock exists and whether it has expired.
+  try {
+    const existing = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: LOCK_KEY }));
+    const raw = await existing.Body?.transformToString();
+    if (raw) {
+      const info = JSON.parse(raw) as LockInfo;
+      const ageSeconds = (Date.now() - new Date(info.acquired_at).getTime()) / 1000;
+      if (ageSeconds < info.ttl_seconds) {
+        throw new Error(
+          `Fleet is locked by ${info.holder} (acquired ${Math.round(ageSeconds)}s ago, TTL ${info.ttl_seconds}s). ` +
+          `Wait for the other push to finish, or delete s3://${bucket}/${LOCK_KEY} to force-release.`
+        );
+      }
+      log.dim(`  (stale lock from ${info.holder} expired after ${Math.round(ageSeconds)}s — overriding)`);
+    }
+  } catch (err) {
+    const code = (err as { name?: string }).name;
+    if (code !== 'NoSuchKey' && !(err instanceof Error && err.message.includes('locked by'))) {
+      // Ignore missing key; rethrow lock-held error; ignore other S3 errors (bucket may be new)
+    } else if (err instanceof Error && err.message.includes('locked by')) {
+      throw err;
+    }
+  }
+
+  const lock: LockInfo = {
+    acquired_at: new Date().toISOString(),
+    holder,
+    ttl_seconds: LOCK_TTL_SECONDS,
+  };
+  await s3.send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: LOCK_KEY,
+    Body: JSON.stringify(lock, null, 2),
+    ContentType: "application/json",
+  }));
+  log.dim(`  🔒 lock acquired by ${holder}`);
+}
+
+/** Release the fleet deploy lock. */
+async function releaseLock(bucket: string, region: string): Promise<void> {
+  const s3 = new S3Client({ region });
+  try {
+    await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: LOCK_KEY }));
+    log.dim(`  🔓 lock released`);
+  } catch {
+    // Best-effort release — TTL will expire it if delete fails
+  }
+}
+
+// ── History management ────────────────────────────────────────────────────────
+
+const HISTORY_MAX = 5;
+
+/**
+ * Before uploading a new tarball, copy the current one to history.
+ * History key: deploy-staging/history/<agent>/<iso-timestamp>-<sha256prefix>.tar.gz
+ */
+async function archiveToHistory(
+  bucket: string,
+  agentId: string,
+  currentSha256: string,
+  region: string
+): Promise<void> {
+  const s3 = new S3Client({ region });
+  const src = `deploy-staging/${agentId}.tar.gz`;
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const dst = `deploy-staging/history/${agentId}/${ts}-${currentSha256.slice(0, 8)}.tar.gz`;
+
+  try {
+    // Copy existing tarball to history
+    await s3.send(new CopyObjectCommand({
+      Bucket: bucket,
+      CopySource: `${bucket}/${src}`,
+      Key: dst,
+    }));
+
+    // Also copy the manifest
+    const manifestSrc = `deploy-staging/${agentId}.manifest.json`;
+    const manifestDst = dst.replace('.tar.gz', '.manifest.json');
+    await s3.send(new CopyObjectCommand({
+      Bucket: bucket,
+      CopySource: `${bucket}/${manifestSrc}`,
+      Key: manifestDst,
+    }));
+
+    // Prune old history entries (keep last HISTORY_MAX)
+    const list = await s3.send(new ListObjectsV2Command({
+      Bucket: bucket,
+      Prefix: `deploy-staging/history/${agentId}/`,
+    }));
+    const tarballs = (list.Contents ?? [])
+      .filter(o => o.Key?.endsWith('.tar.gz'))
+      .sort((a, b) => (a.Key ?? '').localeCompare(b.Key ?? ''));
+    const toDelete = tarballs.slice(0, Math.max(0, tarballs.length - HISTORY_MAX));
+    for (const obj of toDelete) {
+      if (obj.Key) {
+        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.Key }));
+        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.Key.replace('.tar.gz', '.manifest.json') }));
+      }
+    }
+  } catch {
+    // History is best-effort — don't fail the push if archiving fails
+    log.dim(`  (history archive skipped — no previous tarball)`);
+  }
+}
+
+/**
+ * List available history entries for an agent, newest first.
+ */
+export async function listHistory(
+  bucket: string,
+  agentId: string,
+  region: string
+): Promise<{ key: string; manifest?: string; timestamp: string }[]> {
+  const s3 = new S3Client({ region });
+  const list = await s3.send(new ListObjectsV2Command({
+    Bucket: bucket,
+    Prefix: `deploy-staging/history/${agentId}/`,
+  }));
+  return (list.Contents ?? [])
+    .filter(o => o.Key?.endsWith('.tar.gz'))
+    .sort((a, b) => (b.Key ?? '').localeCompare(a.Key ?? ''))  // newest first
+    .map(o => ({
+      key: o.Key!,
+      manifest: o.Key!.replace('.tar.gz', '.manifest.json'),
+      timestamp: o.Key!.split('/').pop()!.split('-').slice(0, 3).join('T').replace('T', ' ').replace(/-/g, ':').substring(0, 19),
+    }));
+}
+
 // ── Core logic ────────────────────────────────────────────────────────────────
 
 export interface PushFleetOptions {
@@ -300,6 +453,14 @@ export interface PushFleetOptions {
    * the newest published version; a semver string pins to that version.
    */
   upgradeCli?: string;
+  /**
+   * When set, roll back to a previous deployment instead of pushing a new one.
+   * Value is the history index to roll back to: 1 = most recent, 2 = second-most-recent, etc.
+   * Defaults to 1 when --rollback flag is passed without a value.
+   */
+  rollback?: number;
+  /** Skip the concurrency lock (use only for debugging or when lock is stale). */
+  noLock?: boolean;
   localBase?: string;
   fleetmindVersion?: string;
 }
@@ -316,6 +477,9 @@ export async function runPushFleet(
   const uploadToS3 = deps.uploadToS3 ?? defaultUploadToS3;
   const lookupInstance = deps.lookupInstance ?? defaultLookupInstance;
   const sendSsmCommand = deps.sendSsmCommand ?? defaultSendSsmCommand;
+  const acquireLockFn = deps.acquireLock ?? acquireLock;
+  const releaseLockFn = deps.releaseLock ?? releaseLock;
+  const archiveToHistoryFn = deps.archiveToHistory ?? archiveToHistory;
 
   const fleetFile = opts.fleet ?? "fleet.yaml";
   const fleet = loadFleet(fleetFile);
@@ -331,12 +495,64 @@ export async function runPushFleet(
     ? opts.agents
     : fleet.agents.list.map((a) => a.id);
 
+  // Acquire fleet-wide lock (prevents concurrent pushes racing on S3)
+  if (!opts.noLock && !opts.dryRun) {
+    await acquireLockFn(bucket, region);
+  }
+
+  const results: PushFleetResult[] = [];
+
+  try {
+
+  // Handle --rollback mode: promote a history entry to current instead of building new
+  if (opts.rollback !== undefined) {
+    const n = opts.rollback < 1 ? 1 : opts.rollback;
+    for (const agentId of targetIds) {
+      log.step(`Rolling back ${agentId} to history entry ${n}...`);
+      const history = await listHistory(bucket, agentId, region);
+      if (history.length === 0) {
+        log.warn(`  ${agentId}: no history entries found — skipping`);
+        results.push({ agent_id: agentId, status: "skipped", reason: "no history" });
+        continue;
+      }
+      const entry = history[n - 1];
+      if (!entry) {
+        log.warn(`  ${agentId}: history entry ${n} not found (only ${history.length} available) — skipping`);
+        results.push({ agent_id: agentId, status: "skipped", reason: `history entry ${n} not found` });
+        continue;
+      }
+      log.dim(`  ← restoring ${entry.key.split('/').pop()}`);
+      const s3 = new S3Client({ region });
+      // Promote history tarball to current
+      await s3.send(new CopyObjectCommand({ Bucket: bucket, CopySource: `${bucket}/${entry.key}`, Key: `deploy-staging/${agentId}.tar.gz` }));
+      if (entry.manifest) {
+        await s3.send(new CopyObjectCommand({ Bucket: bucket, CopySource: `${bucket}/${entry.manifest}`, Key: `deploy-staging/${agentId}.manifest.json` }));
+      }
+      log.ok(`  ${agentId}: history entry ${n} promoted to current`);
+
+      if (!opts.noApply) {
+        const instanceId = await lookupInstance(fleetName, agentId, region);
+        if (instanceId) {
+          const restartFlag = opts.restart ? " --restart" : "";
+          const cmd = `sudo -u ec2-user fleetmind pull-self --apply${restartFlag} --region ${region}`;
+          const cmdId = await sendSsmCommand(instanceId, [cmd], region);
+          log.ok(`  ${agentId}: rollback SSM command sent → ${cmdId}`);
+          results.push({ agent_id: agentId, status: "pushed", ssm_command_id: cmdId });
+        } else {
+          log.warn(`  ${agentId}: instance not found in SSM`);
+          results.push({ agent_id: agentId, status: "pushed", reason: "instance not in SSM" });
+        }
+      } else {
+        results.push({ agent_id: agentId, status: "pushed", reason: "--no-apply" });
+      }
+    }
+    return results;
+  }
+
   // Step 1: Render fleet workspaces
   log.step("Rendering fleet workspaces...");
   await provisionFleet(fleet, false, localBase);
   writeOutputs(fleet);
-
-  const results: PushFleetResult[] = [];
 
   for (const agentId of targetIds) {
     const agent = fleet.getAgent(agentId);
@@ -402,6 +618,12 @@ export async function runPushFleet(
 
     // Upload tarball + manifest (always, unless dry-run which was handled above)
     const tarballKey = `deploy-staging/${tarballFilename}`;
+
+    // Archive current tarball to history before overwriting
+    if (!opts.dryRun) {
+      await archiveToHistoryFn(bucket, agentId, tarballHash, region);
+    }
+
     log.step(`    uploading s3://${bucket}/${tarballKey}...`);
     const tarballBuf = fs.readFileSync(tarballPath);
     await uploadToS3(bucket, tarballKey, tarballBuf, region);
@@ -459,6 +681,12 @@ export async function runPushFleet(
     }
   }
 
+  } finally {
+    if (!opts.noLock && !opts.dryRun) {
+      await releaseLockFn(bucket, region);
+    }
+  }
+
   return results;
 }
 
@@ -477,32 +705,46 @@ export function registerPushFleet(pushCmd: Command): void {
     .option("--region <region>", "AWS region", "us-west-2")
     .option("--restart", "Restart gateway after apply on each agent", false)
     .option("--upgrade-cli [version]", "Upgrade fleetmind CLI on each instance before applying. Defaults to 'latest' if no version is specified. Use a semver string to pin (e.g. --upgrade-cli 0.4.13).")
+    .option("--rollback [n]", "Roll back to a previous deployment (1 = most recent, 2 = second-most-recent, etc.). Skips render and push; promotes history entry to current and triggers pull-self.")
+    .option("--no-lock", "Skip the S3 concurrency lock (use only for debugging or when the lock is stale)")
     .option("--dry-run", "Package locally and compute manifest, but skip upload and SSM", false)
     .option("--no-apply", "Upload to S3 but skip SSM trigger")  // Commander's --no-* sets opts.apply=true by default; --no-apply flips to false. Do NOT pass a default value here (would shadow Commander's inverse-flag semantics).
     .addHelpText('after', `
+Concurrency:
+  A fleet-wide S3 lock prevents concurrent pushes from racing.
+  If another push is in progress, this command will fail with the holder
+  and elapsed time. To force-release a stale lock:
+    aws s3 rm s3://<fleet>-ledger/deploy-staging/lock.json
+
+History:
+  Before each push, the current tarball is archived to:
+    s3://<fleet>-ledger/deploy-staging/history/<agent>/<timestamp>-<sha>.tar.gz
+  Last 5 deployments are kept per agent.
+
 Upgrade behaviour:
-  pull-self (running on the instance) auto-upgrades the CLI when the deploy
-  manifest specifies a different version than what is installed (Option B).
-  Use --upgrade-cli to force an upgrade to a specific version regardless
-  of the manifest (Option A — useful when bootstrapping new instances).
+  pull-self auto-upgrades the CLI when the manifest version differs.
+  Use --upgrade-cli to force an upgrade to a specific version.
 
 Examples:
   # Standard push with restart
   $ fleetmind push fleet --restart
 
-  # Push AND upgrade CLI to latest on all instances
+  # Roll back all agents to the previous deployment
+  $ fleetmind push fleet --rollback --restart
+
+  # Roll back to 2 deployments ago
+  $ fleetmind push fleet --rollback 2 --restart
+
+  # Push AND upgrade CLI to latest
   $ fleetmind push fleet --restart --upgrade-cli
 
-  # Push AND upgrade CLI to a specific version
-  $ fleetmind push fleet --restart --upgrade-cli 0.4.13
-
-  # Dry-run: package workspaces and compute manifests, but skip upload and SSM
+  # Dry-run: package + manifest, skip upload and SSM
   $ fleetmind push fleet --dry-run
 
-  # Push to one agent only (e.g. after a targeted skill change)
-  $ fleetmind push fleet --agent pm-bot
+  # Push to one agent only
+  $ fleetmind push fleet --agent ariadne
 
-  # Upload artifacts to S3 but skip the SSM trigger (manual pull-self later)
+  # Upload to S3 but skip the SSM trigger
   $ fleetmind push fleet --no-apply
 `)
     .action(async (opts: {
@@ -511,13 +753,17 @@ Examples:
       region: string;
       restart: boolean;
       upgradeCli?: string | boolean;
+      rollback?: string | boolean;
+      lock: boolean;  // commander --no-lock sets opts.lock = false
       dryRun: boolean;
       apply: boolean;  // commander --no-apply sets opts.apply = false
     }) => {
       try {
-        // --upgrade-cli with no value → true (boolean); resolve to 'latest'
         const upgradeCli = opts.upgradeCli === true ? 'latest'
           : typeof opts.upgradeCli === 'string' ? opts.upgradeCli
+          : undefined;
+        const rollback = opts.rollback === true ? 1
+          : typeof opts.rollback === 'string' ? parseInt(opts.rollback, 10) || 1
           : undefined;
         await runPushFleet({
           fleet: opts.fleet,
@@ -525,6 +771,8 @@ Examples:
           region: opts.region,
           restart: opts.restart,
           upgradeCli,
+          rollback,
+          noLock: opts.lock === false,
           dryRun: opts.dryRun,
           noApply: opts.apply === false,
         });
