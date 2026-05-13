@@ -39,7 +39,7 @@ Fleet-wide shared key/value state is available via the **ContextStore** — a Dy
 
 Isolation over efficiency. A misbehaving worker can't crash the orchestrator; a runaway skill on one bot doesn't starve another; each agent can be redeployed, restarted, or rolled back independently. The cost is more EC2 instances per fleet — deemed acceptable for the durability and blast-radius properties.
 
-Bot EC2 hosts come from the [openclaw-terraform](https://github.com/Continuous-Agentics/openclaw-terraform) repo, fed by the `rendered/fleet.derived.tfvars` fleetmind generates.
+Bot EC2 hosts are provisioned by the Terraform code in [`infra/terraform/`](infra/terraform/), driven by `fleet.yaml` via `fleetmind render`. Operators run `terraform apply -var-file=workspaces/<fleet>.tfvars -var-file=workspaces/<fleet>.derived.tfvars` per fleet. See [`docs/MULTI-FLEET.md`](docs/MULTI-FLEET.md) and [`docs/SETUP-A-FLEET.md`](docs/SETUP-A-FLEET.md) for the full workflow.
 
 ## Installation
 
@@ -61,30 +61,35 @@ npm install -g @continuous-agentics/fleetmind
 fleetmind init --name acme-fleet --client "Acme Corp"
 
 # 2. Edit fleet.yaml — add agents, Slack tokens, skills
-# 3. Store secrets (used to resolve ${VAR} references in fleet.yaml)
-fleetmind secrets set CONDUCTOR_BOT_TOKEN xoxb-...
-fleetmind secrets set CONDUCTOR_APP_TOKEN xapp-...
-fleetmind secrets set PIXEL_BOT_TOKEN xoxb-...
-fleetmind secrets set PIXEL_APP_TOKEN xapp-...
-
-# 4. Generate Slack app manifests, create apps in Slack UI, then discover bot_user_ids
+# 3. Generate Slack app manifests, create the apps in the Slack UI
 fleetmind slack manifests --out ./rendered/slack-manifests/
-# ... create each app at https://api.slack.com/apps → From a manifest ...
-fleetmind slack discover
+# ... create each app at https://api.slack.com/apps → "From a manifest" ...
+# ... install each app, grab bot/app tokens, create channels, capture channel IDs ...
 
-# 5. Preview what would be deployed
-fleetmind diff
+# 4. Fill in the channel IDs in fleet.yaml under each agent's slack.channels
 
-# 6. Apply Terraform (provisions EC2 hosts, IAM, networking)
-#    See infra/terraform/ and docs/SETUP-A-FLEET.md for the full first-time sequence
+# 5. Render workspace artifacts + derived tfvars
+fleetmind render acme-fleet.yaml
+
+# 6. Apply Terraform (provisions EC2 hosts, IAM, DDB, S3, networking)
+#    See infra/terraform/ and docs/SETUP-A-FLEET.md for the full first-time sequence,
+#    including one-time backend setup and Terraform workspace creation.
 cd infra/terraform && terraform workspace select acme-fleet
-terraform apply -var-file=workspaces/acme-fleet.derived.tfvars
+terraform apply \
+  -var-file=workspaces/acme-fleet.tfvars \
+  -var-file=workspaces/acme-fleet.derived.tfvars
 
-# 7. Push per-agent credentials into Secrets Manager
-fleetmind secrets populate --interactive
+# 7. Push per-agent Slack + Anthropic tokens into AWS Secrets Manager
+fleetmind secrets populate --fleet acme-fleet.yaml --interactive --region us-west-2
 
-# 8. Render workspaces, upload to S3, trigger pull-self on every bot, restart gateways
-fleetmind push fleet --restart
+# 8. Auto-fill each bot's Slack user_id via auth.test
+fleetmind slack discover --fleet acme-fleet.yaml
+
+# 9. Re-render (now with bot_user_ids so per-channel users allowlists are complete)
+fleetmind render acme-fleet.yaml
+
+# 10. Package workspaces, upload to S3, trigger pull-self + restart on every bot
+fleetmind push fleet --fleet acme-fleet.yaml --restart
 ```
 
 **Day-to-day:** after changing `fleet.yaml` or workspace files, re-push:
@@ -118,23 +123,31 @@ agents:
     - id: conductor
       name: Conductor
       emoji: 🎼
+      role: pm
       orchestrator: true
       slack:
+        account_id: conductor                  # required: Slack account binding key
         bot_token: ${CONDUCTOR_BOT_TOKEN}
         app_token: ${CONDUCTOR_APP_TOKEN}
+        channels: ["C…home", "C…delegation"]    # PM home + delegation channel
       agent_to_agent:
         can_send_to: [pixel, forge]
 
     - id: pixel
       name: Pixel
       emoji: 🎨
+      role: frontend-worker
       skills:
         - name: coding
+          source: client
         - name: github
-          version: "2.1.0"   # pinned
+          source: client
+          version: "2.1.0"                     # pinned
       slack:
+        account_id: pixel
         bot_token: ${PIXEL_BOT_TOKEN}
         app_token: ${PIXEL_APP_TOKEN}
+        channels: ["C…delegation"]
 ```
 
 See `fleet.example.yaml` for the full annotated schema.
@@ -207,7 +220,7 @@ See `fleet.example.yaml` for the full annotated schema.
 | `fleetmind task unblock` | Unblock a task (`blocked→accepted`) |
 | `fleetmind task signoff` | Sign off on shipped work (`shipped→signed_off`) |
 | `fleetmind task merge` | Mark a task merged (`shipped\|signed_off→merged`) |
-| `fleetmind task abandon` | Abandon a task (PM bot only) |
+| `fleetmind task abandon` | Abandon a task (any non-terminal status → abandoned) |
 | `fleetmind task get` | Fetch a task record by ID |
 | `fleetmind task update` | Update mutable task metadata (title, DoD, worker, thread) |
 | `fleetmind task set-nag` | Record last nag timestamp (used by PM heartbeat sweeps) |
@@ -283,9 +296,21 @@ Unpinned skills (`- name: coding`) auto-update. Pinned skills (`version: "2.1.0"
 
 ## Terraform Integration
 
-FleetMind generates `rendered/fleet.derived.tfvars` for the [openclaw-terraform](https://github.com/Continuous-Agentics/openclaw-terraform) repo, which provisions the per-agent EC2 hosts, IAM roles, networking, and any AWS-side glue. Terraform picks the tfvars file up automatically (`.derived.tfvars` files are loaded by default).
+The Terraform code lives in [`infra/terraform/`](infra/terraform/). `fleetmind render` writes derived tfvars to `infra/terraform/workspaces/<fleet>.derived.tfvars` — specifically `fleet_name`, `agent_names`, `agent_models`, `agent_orchestrators`, and `wake_target_session_key` (the latter derived from the PM's first Slack channel). Operators pass this file alongside their hand-edited `workspaces/<fleet>.tfvars` (infrastructure-only knobs like `aws_region`, `instance_type`, `agent_ports`) via `-var-file`:
 
-`fleetmind deploy` also provisions the DynamoDB ContextStore table via the included Terraform module in `infra/terraform/modules/context-store/`. The optional task ledger substrate lives in `infra/terraform/modules/task-ledger/` and is applied separately when delegation is enabled.
+```bash
+cd infra/terraform
+terraform workspace select <fleet-name>
+terraform apply \
+  -var-file=workspaces/<fleet>.tfvars \
+  -var-file=workspaces/<fleet>.derived.tfvars
+```
+
+*Note*: the `.derived.tfvars` suffix is intentional — these files are *not* auto-loaded by Terraform. They must be passed explicitly. This prevents cross-workspace contamination when multiple fleets share an account.
+
+The per-agent EC2 hosts, IAM roles, VPC, NAT, S3 ledger bucket, DynamoDB ContextStore, and (when `delegation_enabled = true`) the task-ledger substrate are all created by `terraform apply`. The task-ledger substrate lives in [`infra/terraform/modules/task-ledger/`](infra/terraform/modules/task-ledger/); the ContextStore DynamoDB table is provisioned by [`infra/terraform/dynamodb.tf`](infra/terraform/dynamodb.tf) directly (no separate module).
+
+Multiple fleets in one AWS account: use Terraform workspaces, one per fleet. See [`docs/MULTI-FLEET.md`](docs/MULTI-FLEET.md).
 
 ## CI
 
