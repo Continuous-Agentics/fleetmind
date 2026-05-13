@@ -1,0 +1,64 @@
+# publish.yml — Release-on-tag skeleton
+#
+# STATUS: MANUAL-ONLY (workflow_dispatch)
+#
+# This workflow is intentionally NOT triggered automatically on tag push.
+# To enable automatic publish-on-tag:
+#   1. Validate the flow once via "Run workflow" in GitHub Actions UI.
+#   2. Change the trigger below from `workflow_dispatch` to:
+#        push:
+#          tags:
+#            - 'v*'
+#   3. Remove or update this comment block.
+#
+# Until then, tagging a release (git push --tags) will NOT auto-publish.
+# Publish manually with `npm publish` per RELEASING.md.
+
+name: Publish to GitHub Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type 'publish' to confirm you want to publish to GitHub Packages"
+        required: true
+        default: ""
+
+jobs:
+  publish-to-github-packages:
+    name: Publish
+    runs-on: ubuntu-latest
+    # Extra guard: only run when the manual confirmation input matches.
+    # When this workflow is eventually switched to push-on-tags, remove this condition.
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'publish' }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout (full history for tag context)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@continuous-agentics"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Publish
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -50,7 +50,7 @@ data "aws_ami" "al2023" {
   owners      = ["amazon"]
 
   filter {
-    name   = "name"
+    name = "name"
     # Excludes the "minimal" AMI variant (al2023-ami-minimal-*) which does NOT
     # include amazon-ssm-agent. The standard AMI name begins with the year:
     # al2023-ami-2023.X.YYYYMMDD.N-kernel-*-x86_64

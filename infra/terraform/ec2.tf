@@ -36,8 +36,8 @@ locals {
 resource "aws_instance" "agent" {
   for_each = local.agents_map
 
-  ami                    = local.ami_id
-  instance_type          = each.value.instance_type
+  ami           = local.ami_id
+  instance_type = each.value.instance_type
   # Agents go in private subnets — they only need outbound access (Slack Socket
   # Mode + AWS API via NAT). No public IP required.
   subnet_id                   = local.private_subnets[index(var.agent_names, each.key) % 2]
@@ -65,8 +65,8 @@ resource "aws_instance" "agent" {
   user_data_replace_on_change = true
 
   tags = {
-    Name                  = "${var.fleet_name}-${each.key}"
-    "fleetmind:agent_id"  = each.key
+    Name                   = "${var.fleet_name}-${each.key}"
+    "fleetmind:agent_id"   = each.key
     "fleetmind:fleet_name" = var.fleet_name
   }
 
