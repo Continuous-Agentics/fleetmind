@@ -300,7 +300,7 @@ State lands at `s3://<bucket>/env:/acme-bots/fleetmind/terraform.tfstate` automa
 
 ### 4b. Write the infra-only tfvars
 
-Create `infra/terraform/workspaces/acme-bots.tfvars` with infrastructure-only settings. **Do not set** `fleet_name`, `agent_names`, `agent_models`, `agent_orchestrators`, or `wake_target_session_key` here — `fleetmind render` derives those and writes them to `acme-bots.derived.tfvars`.
+Create `infra/terraform/workspaces/acme-bots.tfvars` with infrastructure-only settings. **Do not set** `fleet_name`, `agent_names`, `agent_orchestrators`, or `wake_target_session_key` here — `fleetmind render` derives those and writes them to `acme-bots.derived.tfvars`.
 
 ```hcl
 # workspaces/acme-bots.tfvars — infra knobs only
@@ -394,8 +394,7 @@ The auto.tfvars looks like:
 
 ```hcl
 fleet_name             = "acme-bots"
-agent_names            = { blanket = "Blanket", charlie = "Charlie" }
-agent_models           = { blanket = "anthropic/claude-sonnet-4-6", charlie = "anthropic/claude-haiku-4-5" }
+agent_names            = ["blanket", "charlie"]
 agent_orchestrators    = { blanket = true, charlie = false }
 wake_target_session_key = "CXXXXXXXXXX"   # PM's first channel
 ```

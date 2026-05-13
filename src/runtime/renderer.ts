@@ -327,12 +327,6 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
 
 export function renderTerraformVars(fleet: Fleet): string {
   const agentNames = fleet.agents.list.map((a) => `"${a.id}"`).join(", ");
-  const agentModelEntries = fleet.agents.list
-    .map((a) => {
-      const model = a.model ?? fleet.agents.defaults.model;
-      return `  ${a.id} = "${model}"`;
-    })
-    .join("\n");
 
   // Derive wake_target_session_key from the PM (orchestrator) agent's first
   // Slack channel. This is the channel the EventBridge wake target SSM-invokes
@@ -358,11 +352,6 @@ export function renderTerraformVars(fleet: Fleet): string {
     ``,
     `fleet_name  = "${fleet.fleet.name}"`,
     `agent_names = [${agentNames}]`,
-    ``,
-    `# Per-agent model assignments (informational — model is set in openclaw.json workspace config)`,
-    `agent_models = {`,
-    agentModelEntries,
-    `}`,
     ``,
     `# PM (orchestrator) flag per agent — drives task-ledger IAM policy split.`,
     `agent_orchestrators = {`,
