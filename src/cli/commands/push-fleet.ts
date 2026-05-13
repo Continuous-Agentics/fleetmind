@@ -183,11 +183,7 @@ export function buildStagingDir(
  * fleetmind CLI commands (fleetmind status, fleetmind task, etc.)
  * from their own workspace without needing the operator's machine.
  */
-export function addFleetYamlToStaging(stagingDir: string, fleetYamlPath: string): void {
-  if (fs.existsSync(fleetYamlPath)) {
-    fs.copyFileSync(fleetYamlPath, path.join(stagingDir, "fleet.yaml"));
-  }
-}
+
 
 function copyDirSync(src: string, dest: string): void {
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
@@ -355,9 +351,6 @@ export async function runPushFleet(
 
     // Build staging directory (workspace files + .openclaw/openclaw.json)
     const stagingDir = buildStagingDir(agentId, workspaceDir, ocJsonPath, tmpBase);
-
-    // Include fleet.yaml so agents can run fleetmind CLI commands themselves
-    addFleetYamlToStaging(stagingDir, fleetFile);
 
     // Ship cron/jobs.json for orchestrator (PM) agents so sweep jobs land at
     // $WORKSPACE_DIR/.openclaw/cron/jobs.json and are hot-reloaded by the gateway.

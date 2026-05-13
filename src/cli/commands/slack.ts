@@ -709,6 +709,16 @@ export async function generateManifests(
 
   for (const agent of targets) {
     const manifest = buildManifest(agent, fleetName);
+
+    // Slack requires long_description >= 150 characters.
+    const longDesc = (manifest.display_information as Record<string, unknown>).long_description as string;
+    if (longDesc.length < 150) {
+      log.warn(
+        `  ⚠ ${agent.id}: long_description is ${longDesc.length} chars (Slack requires ≥ 150). ` +
+        `Set a longer agents.list[].slack.long_description in fleet.yaml to avoid a manifest error.`
+      );
+    }
+
     const yaml = yamlStringify(manifest, { lineWidth: 0 });
     const filePath = path.join(outDir, `${agent.id}.yaml`);
     writeFn(filePath, yaml);
@@ -748,7 +758,7 @@ export function registerSlackManifests(program: Command): void {
       "Generate per-agent Slack App manifest YAMLs from fleet.yaml. " +
       "Writes one <agent_id>.yaml per agent to the output directory."
     )
-    .option("--fleet <path>", "fleet.yaml path (default: resolved via resolveFleetSource)")
+    .option("--fleet <path>", "fleet.yaml path", "./fleet.yaml")
     .option("--out <dir>", "output directory", "./rendered/slack-manifests/")
     .option(
       "--agent <id>",
