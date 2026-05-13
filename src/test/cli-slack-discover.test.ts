@@ -62,7 +62,7 @@ agents:
     - id: alpha
       name: Alpha
       slack:
-        bot_user_id: "U_ALPHA_EXISTING"
+        bot_user_id: "UALPHAEXST"
         bot_token: "\${ALPHA_BOT_TOKEN}"
     - id: beta
       name: Beta
