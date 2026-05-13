@@ -310,8 +310,14 @@ export function verifyTarball(tarballPath: string, expectedSha256: string): void
 }
 
 /**
- * Apply diff: copy added/modified from staging to workspace, delete removed.
+ /**
+ * Apply diff: copy added/modified from staging to workspace.
  * Uses atomic .new → rename for modified files.
+ *
+ * Deletions are intentionally skipped — pull-self only manages files
+ * it shipped. The runtime creates many files alongside fleetmind's
+ * (memory, sessions, plugin-skills, cron state, etc.) and deleting
+ * anything not in the incoming tarball would wipe agent state.
  */
 export function applyDiff(
   stagingDir: string,
@@ -344,25 +350,7 @@ export function applyDiff(
     log.info(`  ~ ${incoming.path}`);
   }
 
-  // Delete removed files
-  for (const f of diff.deleted) {
-    const target = path.join(workspaceDir, f.path);
-    if (fs.existsSync(target)) {
-      try {
-        fs.unlinkSync(target);
-        log.info(`  - ${f.path}`);
-        // Remove empty parent dirs
-        tryRemoveEmptyDir(path.dirname(target), workspaceDir);
-      } catch (err: unknown) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (code === 'EACCES' || code === 'EPERM') {
-          log.warn(`  ! ${f.path} (skipped — permission denied, run as owner to clean up)`);
-        } else {
-          throw err;
-        }
-      }
-    }
-  }
+  // Deletions are skipped — see function comment above.
 }
 
 /** Remove a directory if it's empty, up to (but not including) stopAt. */
