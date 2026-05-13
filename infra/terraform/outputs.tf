@@ -67,3 +67,8 @@ output "task_ledger_worker_policy_arn" {
   description = "ARN of the bot-ledger-worker IAM policy. Empty string when delegation_enabled = false."
   value       = var.delegation_enabled ? module.task_ledger[0].worker_policy_arn : ""
 }
+
+output "agent_iam_role_names" {
+  description = "IAM role name per agent. Useful for consumers that want to attach additional policies to per-agent roles after terraform apply (e.g. project-specific access grants)."
+  value       = { for k, v in aws_iam_role.agent : k => v.name }
+}

@@ -28,7 +28,7 @@ resource "aws_secretsmanager_secret" "db" {
 
   name                    = "${var.fleet_name}/shared/db"
   description             = "RDS credentials for ${var.fleet_name}"
-  recovery_window_in_days = 7
+  recovery_window_in_days = var.secret_recovery_window_days
 }
 
 resource "aws_secretsmanager_secret_version" "db" {
