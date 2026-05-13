@@ -207,6 +207,12 @@ export const PrivateRegistrySchema = z.object({
   scope: z.string().default("@continuous-agentics"),
 });
 
+// secrets.provider is currently informational — no CLI code reads this field
+// at runtime. Token resolution for `fleetmind secrets populate` uses the
+// env var pattern declared in fleet.yaml (e.g. BLANKET_BOT_TOKEN) regardless
+// of this setting. The enum is kept for future use: when aws-ssm and vault
+// providers are wired through, this field will control which secret backend
+// the CLI uses. For now, leave it as "env" (the default).
 export const SecretsSchema = z.object({
   provider: z.enum(["env", "aws-ssm", "vault"]).default("env"),
 });
