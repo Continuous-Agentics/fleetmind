@@ -30,6 +30,16 @@ import { generateManifests } from "./slack.js";
 import { discoverSlackBotUserIds } from "./slack.js";
 import { populateSecrets } from "./populate.js";
 import { storeGithubApp } from "./github-app.js";
+import {
+  SecretsManagerClient,
+  GetSecretValueCommand,
+  PutSecretValueCommand,
+} from "@aws-sdk/client-secrets-manager";
+import {
+  SSMClient,
+  GetParameterCommand as SsmGetCommand,
+  PutParameterCommand as SsmPutCommand,
+} from "@aws-sdk/client-ssm";
 import { runPushFleet } from "./push-fleet.js";
 import { writeOutputs } from "../../runtime/renderer.js";
 import { provisionFleet } from "../../runtime/provisioner.js";
@@ -71,16 +81,22 @@ function hiddenPrompt(question: string): Promise<string> {
     // Print the question ourselves since the muted stream won't show it.
     process.stdout.write(question);
 
+    // terminal: false avoids readline.emitKeypressEvents() which adds a
+    // persistent 'data' listener to stdin that is NOT removed on close.
+    // With multiple hidden prompts, listeners accumulate and each keystroke
+    // fires N times (once per prior hidden prompt). terminal: false uses
+    // simple line buffering instead — clean listener lifecycle, no accumulation.
     const rl = createInterface({
       input: process.stdin,
       output: muted,
-      terminal: true, // required for readline to handle raw keystrokes
+      terminal: false,
     });
 
-    rl.question("", (answer) => {
+    rl.once("line", (line) => {
+      rl.close();
       // Move to next line — the muted stream suppressed the newline the user typed.
       process.stdout.write("\n");
-      resolve(answer);
+      resolve(line);
     });
   });
 }
@@ -240,24 +256,50 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
     }
   }
 
+  // ── Helper: check if SSM param exists ────────────────────────────────────
+  async function ssmExists(name: string): Promise<boolean> {
+    const ssm = new SSMClient({ region });
+    try { await ssm.send(new SsmGetCommand({ Name: name })); return true; } catch { return false; }
+  }
+
+  // ── Helper: get existing SM secret value ─────────────────────────────────
+  async function getSecret(secretId: string): Promise<string | null> {
+    const sm = new SecretsManagerClient({ region });
+    try {
+      const r = await sm.send(new GetSecretValueCommand({ SecretId: secretId }));
+      return r.SecretString ?? null;
+    } catch { return null; }
+  }
+
+  // ── Helper: write SM secret ───────────────────────────────────────────────
+  async function putSecret(secretId: string, value: Record<string, string>): Promise<void> {
+    const sm = new SecretsManagerClient({ region });
+    await sm.send(new PutSecretValueCommand({
+      SecretId: secretId,
+      SecretString: JSON.stringify(value),
+    }));
+  }
+
   // ── Step 4: Discover bot_user_ids ───────────────────────────────────────────
   if (!allUserIdsSet) {
     header("Step 4 / 12 — Discover bot_user_ids");
-    console.log("  Calls Slack auth.test for each agent using the tokens you just entered.");
-    if (await confirm("  Run fleetmind slack discover --interactive?")) {
-      // Set env vars from collected creds so discover can use them
+    console.log("  Calls Slack auth.test using the tokens entered in step 3.");
+    if (await confirm("  Run fleetmind slack discover?")) {
+      // Pass tokens via env vars — the discover command resolves
+      // <AGENT_UPPER>_BOT_TOKEN before falling back to Secrets Manager.
+      const toClean: string[] = [];
       for (const [agentId, creds] of Object.entries(slackCreds)) {
-        const envKey = `${agentId.toUpperCase().replace(/-/g, "_")}_BOT_TOKEN`;
-        process.env[envKey] = creds.botToken;
+        const key = `${agentId.toUpperCase().replace(/-/g, "_")}_BOT_TOKEN`;
+        process.env[key] = creds.botToken;
+        toClean.push(key);
       }
-      await discoverSlackBotUserIds({
-        fleet: fleetFile,
-        region,
-        interactive: false, // use env vars we just set
-        dryRun: false,
-        force: false,
-      });
-      log.ok("  bot_user_ids written to fleet.yaml");
+      try {
+        await discoverSlackBotUserIds({ fleet: fleetFile, region, interactive: false, dryRun: false, force: false });
+        log.ok("  bot_user_ids written to fleet.yaml");
+      } finally {
+        // Clean up env vars — don't leave tokens in process.env
+        for (const key of toClean) delete process.env[key];
+      }
     }
   } else {
     log.ok("Step 4: all bot_user_ids already set — skipping");
@@ -271,37 +313,38 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
   console.log("  → Capture: App ID (from app settings page) + Installation ID (from install URL)\n");
 
   for (const agent of agents) {
-    console.log(`\x1b[1m  Agent: ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
+    const ssmKey = `/fleetmind/${fleetName}/agents/${agent.id}/github-app/app-id`;
+    const alreadyInSsm = await ssmExists(ssmKey);
+
+    if (alreadyInSsm) {
+      const override = await confirm(`  ${agent.emoji} ${agent.name}: GitHub App already in SSM. Override?`, false);
+      if (!override) {
+        log.ok(`  ${agent.name}: using existing GitHub App credentials`);
+        continue;
+      }
+    } else {
+      console.log(`\n\x1b[1m  ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
+    }
+
     const appId = await prompt(`    App ID:          `);
     const installationId = await prompt(`    Installation ID: `);
     const pemFile = await prompt(`    PEM file path:   `);
     ghAppCreds[agent.id] = { appId: appId.trim(), installationId: installationId.trim(), pemFile: pemFile.trim() };
-    console.log();
   }
+  console.log();
 
   // ── Step 6: GitHub Packages PAT ─────────────────────────────────────────────
   header("Step 6 / 12 — GitHub Packages PAT");
   console.log("  Bots install the fleetmind CLI from GitHub Packages at bootstrap.");
-  console.log("  Needs a PAT with read:packages scope stored in SSM.");
   console.log(`  SSM path: /fleetmind/shared/github-packages-token  (region: ${region})`);
 
-  // Check if it exists
-  let patExists = false;
-  try {
-    const { SSMClient, GetParameterCommand } = await import("@aws-sdk/client-ssm");
-    const ssm = new SSMClient({ region });
-    await ssm.send(new GetParameterCommand({ Name: "/fleetmind/shared/github-packages-token" }));
-    patExists = true;
-  } catch { /* missing */ }
-
-  if (patExists) {
+  if (await ssmExists("/fleetmind/shared/github-packages-token")) {
     log.ok("  PAT already set in SSM — skipping");
   } else {
     const pat = await hiddenPrompt("  GitHub Packages PAT (ghp_...): ");
     if (pat.trim()) {
-      const { SSMClient, PutParameterCommand } = await import("@aws-sdk/client-ssm");
       const ssm = new SSMClient({ region });
-      await ssm.send(new PutParameterCommand({
+      await ssm.send(new SsmPutCommand({
         Name: "/fleetmind/shared/github-packages-token",
         Type: "SecureString",
         Value: pat.trim(),
@@ -314,7 +357,7 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
   // ── Step 7: Render ──────────────────────────────────────────────────────────
   header("Step 7 / 12 — Render");
   console.log("  Generates per-agent openclaw.json and workspaces/derived.tfvars from fleet.yaml.");
-  if (await confirm("  Run fleetmind render?", true)) {
+  if (await confirm("  Run fleetmind render?")) {
     const reloadedFleet = loadFleet(fleetFile);
     await provisionFleet(reloadedFleet, false, path.dirname(fleetFile));
     writeOutputs(reloadedFleet, path.dirname(fleetFile));
@@ -323,7 +366,6 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
 
   // ── Step 8: Terraform ───────────────────────────────────────────────────────
   header("Step 8 / 12 — Terraform");
-  const workspaceDir = path.dirname(fleetFile);
   const tfvarsFile = `workspaces/${fleetName}.derived.tfvars`;
   const infraTfvars = `workspaces/${fleetName}.tfvars`;
 
@@ -333,53 +375,99 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
   console.log(`  \x1b[36mterraform apply \\`);
   console.log(`    -var-file=${infraTfvars} \\`);
   console.log(`    -var-file=${tfvarsFile}\x1b[0m\n`);
-  console.log("  This creates EC2 instances, DDB, S3, Secrets Manager placeholders, etc.");
-  console.log("  Instances will boot but agents won't start until step 9.\n");
-
+  console.log("  Instances will boot but agents crash-loop until secrets are populated.\n");
   await confirm("  Terraform apply complete?", false);
 
-  // ── Step 9: Populate secrets ─────────────────────────────────────────────────
+  // ── Step 9: Populate Secrets Manager ────────────────────────────────────────
   header("Step 9 / 12 — Populate Secrets Manager");
-  console.log("  Writes Slack tokens + Anthropic API key to Secrets Manager per agent.");
-  if (await confirm("  Populate secrets now?")) {
-    // Set env vars from collected creds
-    for (const [agentId, creds] of Object.entries(slackCreds)) {
-      const upper = agentId.toUpperCase().replace(/-/g, "_");
-      process.env[`${upper}_BOT_TOKEN`] = creds.botToken;
-      process.env[`${upper}_APP_TOKEN`] = creds.appToken;
-      process.env[`${upper}_SIGNING_SECRET`] = creds.signingSecret;
-    }
+  console.log("  Writes Slack tokens + Anthropic API key per agent.");
+  console.log("  Slack tokens from step 3 are used automatically; only Anthropic key is prompted.\n");
 
-    const reloadedFleet = loadFleet(fleetFile);
-    await populateSecrets({
-      fleet: fleetFile,
-      dryRun: false,
-      agent: [],
-      region,
-      interactive: true, // prompt for Anthropic keys (not collected above)
-      promptFn: hiddenPrompt,
-      confirmFn: (q: string) => confirm(q),
-    });
+  if (await confirm("  Populate secrets now?")) {
+    for (const agent of agents) {
+      console.log(`\n\x1b[1m  ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
+      const slackSecretId = `${fleetName}/agents/${agent.id}/slack`;
+
+      // ── Slack tokens ────────────────────────────────────────────────────────
+      const collected = slackCreds[agent.id];
+      const existingSlack = await getSecret(slackSecretId);
+      const slackIsPlaceholder = !existingSlack || existingSlack.includes("REPLACE_ME");
+
+      let writeSlack = false;
+      let slackPayload: Record<string, string> | null = null;
+
+      if (collected) {
+        if (!slackIsPlaceholder) {
+          // Already has real values — offer override
+          writeSlack = await confirm("    Slack tokens already in SM. Override with step-3 values?", false);
+        } else {
+          writeSlack = true;
+        }
+        if (writeSlack) {
+          slackPayload = {
+            SLACK_BOT_TOKEN: collected.botToken,
+            SLACK_SIGNING_SECRET: collected.signingSecret,
+            SLACK_APP_TOKEN: collected.appToken,
+          };
+        }
+      } else {
+        // No tokens from step 3 — prompt now
+        if (!slackIsPlaceholder && !await confirm("    Slack tokens already in SM. Override?", false)) {
+          log.ok("    Slack tokens unchanged");
+        } else {
+          const botToken = await hiddenPrompt("    Bot Token (xoxb-...):      ");
+          const signingSecret = await hiddenPrompt("    Signing Secret:           ");
+          const appToken = await hiddenPrompt("    App Token (xapp-...):     ");
+          slackPayload = { SLACK_BOT_TOKEN: botToken, SLACK_SIGNING_SECRET: signingSecret, SLACK_APP_TOKEN: appToken };
+          writeSlack = true;
+        }
+      }
+
+      if (writeSlack && slackPayload) {
+        await putSecret(slackSecretId, slackPayload);
+        log.ok("    Slack tokens written");
+      }
+
+      // ── Anthropic API key ────────────────────────────────────────────────────
+      const anthropicSecretId = `${fleetName}/agents/${agent.id}/anthropic`;
+      const existingAnthropicRaw = await getSecret(anthropicSecretId);
+      const anthropicIsPlaceholder = !existingAnthropicRaw || existingAnthropicRaw.includes("REPLACE_ME");
+
+      let writeAnthropicKey = anthropicIsPlaceholder;
+      if (!anthropicIsPlaceholder) {
+        writeAnthropicKey = await confirm("    Anthropic key already in SM. Override?", false);
+      }
+      if (writeAnthropicKey) {
+        const apiKey = await hiddenPrompt("    Anthropic API key (sk-ant-...): ");
+        if (apiKey.trim()) {
+          await putSecret(anthropicSecretId, { ANTHROPIC_API_KEY: apiKey.trim() });
+          log.ok("    Anthropic key written");
+        }
+      } else {
+        log.ok("    Anthropic key unchanged");
+      }
+    }
   }
 
   // ── Step 10: GitHub App credentials ─────────────────────────────────────────
   header("Step 10 / 12 — Store GitHub App Credentials in SSM");
-  console.log("  Writes app-id, installation-id, and pem key to SSM for each agent.");
-  if (await confirm("  Store GitHub App credentials?")) {
+  const agentsWithNewCreds = Object.keys(ghAppCreds);
+  if (agentsWithNewCreds.length === 0) {
+    log.ok("Step 10: no new GitHub App credentials to store — skipping");
+  } else if (await confirm("  Store GitHub App credentials?")) {
     for (const [agentId, creds] of Object.entries(ghAppCreds)) {
       if (!creds.appId || !creds.installationId || !creds.pemFile) {
-        log.warn(`  ${agentId}: missing credentials — skipping`);
+        log.warn(`  ${agentId}: incomplete credentials — skipping`);
+        continue;
+      }
+      if (!fs.existsSync(creds.pemFile)) {
+        log.warn(`  ${agentId}: pem file not found at ${creds.pemFile} — skipping`);
         continue;
       }
       await storeGithubApp({
-        fleet: fleetName,
-        agent: agentId,
-        appId: creds.appId,
-        installationId: creds.installationId,
-        pemFile: creds.pemFile,
-        region,
-        dryRun: false,
-        overwrite: true,
+        fleet: fleetName, agent: agentId,
+        appId: creds.appId, installationId: creds.installationId, pemFile: creds.pemFile,
+        region, dryRun: false, overwrite: true,
       });
       log.ok(`  ${agentId}: GitHub App credentials stored`);
     }
