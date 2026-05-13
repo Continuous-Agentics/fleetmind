@@ -353,7 +353,23 @@ export async function updateTask(
 export function registerTask(program: Command): void {
   const task = program
     .command("task")
-    .description("Manage task ledger lifecycle (create, ack, ship, block, unblock, signoff, abandon, merge, get, update, set-nag)");
+    .description("Manage task ledger lifecycle (create, ack, ship, block, unblock, signoff, abandon, merge, get, update, set-nag)")
+    .addHelpText('after', `
+Subcommands:
+  create    Create a new task record (PM bot: initial delegation)
+  get       Get a task record by ID
+  ack       Acknowledge a delegation (delegated → accepted)
+  ship      Mark a task shipped (accepted → shipped)
+  block     Mark a task blocked
+  unblock   Unblock a task (blocked → accepted)
+  signoff   Sign off on a shipped task
+  abandon   Abandon a task
+  merge     Mark a task merged
+  set-nag   Set last_nag_at to now
+  update    Update mutable task metadata in flight
+
+Run \`fleetmind task <subcommand> --help\` for examples.
+`);
 
   // ── create ──────────────────────────────────────────────────────────────
 
@@ -375,6 +391,23 @@ export function registerTask(program: Command): void {
     .option("--task-id <hex>", "Override generated task ID (8-char hex)")
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # Create a task in the website-rewrite project
+  $ fleetmind task create \\
+      --project website-rewrite --worker forge --delegated-by pm-bot \\
+      --dod "PR merged and CI green" \\
+      --thread https://acme.slack.com/archives/C0123456789/p1234567890 \\
+      --envelope-ts 1234567890.123456
+
+  # Create a task with a Linear tracker link
+  $ fleetmind task create \\
+      --project api-refactor --worker forge --delegated-by pm-bot \\
+      --dod "All endpoints migrated" \\
+      --thread https://acme.slack.com/archives/C0123456789/p1234567890 \\
+      --envelope-ts 1234567890.123456 \\
+      --tracker https://linear.app/acme/issue/ENG-42
+`)
     .action(async (opts: CreateTaskOptions) => {
       const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
@@ -404,6 +437,14 @@ export function registerTask(program: Command): void {
     .option("--project <slug>", "Project slug (avoids a GetItem round-trip; skill knows from prior 'task get')")
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # Acknowledge a task delegation (worker accepts the work)
+  $ fleetmind task ack --task-id a1b2c3d4 --worker forge
+
+  # Acknowledge with project slug to skip a DynamoDB round-trip
+  $ fleetmind task ack --task-id a1b2c3d4 --worker forge --project website-rewrite
+`)
     .action(async (opts: WorkerTaskOptions) => {
       const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
@@ -427,6 +468,14 @@ export function registerTask(program: Command): void {
     .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # Mark a task shipped when the PR is up
+  $ fleetmind task ship --task-id a1b2c3d4 --worker forge
+
+  # Ship with project slug to skip a DynamoDB round-trip
+  $ fleetmind task ship --task-id a1b2c3d4 --worker forge --project website-rewrite
+`)
     .action(async (opts: WorkerTaskOptions) => {
       const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
@@ -450,6 +499,14 @@ export function registerTask(program: Command): void {
     .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # Mark a task blocked (waiting on an external dependency)
+  $ fleetmind task block --task-id a1b2c3d4 --worker forge
+
+  # Block with project slug to skip a DynamoDB round-trip
+  $ fleetmind task block --task-id a1b2c3d4 --worker forge --project api-refactor
+`)
     .action(async (opts: WorkerTaskOptions) => {
       const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
@@ -475,6 +532,15 @@ export function registerTask(program: Command): void {
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--region <region>", "AWS region (default us-west-2)")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # Unblock a task when the blocker is resolved
+  $ fleetmind task unblock --task-id a1b2c3d4 --worker forge
+
+  # Unblock with a reason explaining what resolved the block
+  $ fleetmind task unblock --task-id a1b2c3d4 --worker forge \\
+      --reason "External API credentials are now available"
+`)
     .action(async (opts: UnblockTaskOptions) => {
       const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
@@ -497,6 +563,14 @@ export function registerTask(program: Command): void {
     .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # Sign off on a shipped task (human approval step)
+  $ fleetmind task signoff --task-id a1b2c3d4
+
+  # Sign off with project slug to skip a DynamoDB round-trip
+  $ fleetmind task signoff --task-id a1b2c3d4 --project website-rewrite
+`)
     .action(async (opts: ProjectTaskOptions) => {
       const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
@@ -519,6 +593,14 @@ export function registerTask(program: Command): void {
     .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # Abandon a task that is no longer needed
+  $ fleetmind task abandon --task-id a1b2c3d4
+
+  # Abandon with project slug to skip a DynamoDB round-trip
+  $ fleetmind task abandon --task-id a1b2c3d4 --project website-rewrite
+`)
     .action(async (opts: ProjectTaskOptions) => {
       const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
@@ -541,6 +623,14 @@ export function registerTask(program: Command): void {
     .option("--project <slug>", "Project slug (avoids a GetItem round-trip)")
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # Mark a task merged after the PR lands
+  $ fleetmind task merge --task-id a1b2c3d4
+
+  # Merge with project slug to skip a DynamoDB round-trip
+  $ fleetmind task merge --task-id a1b2c3d4 --project website-rewrite
+`)
     .action(async (opts: ProjectTaskOptions) => {
       const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
@@ -562,6 +652,14 @@ export function registerTask(program: Command): void {
     .requiredOption("--task-id <hex>", "Task ID")
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON (default: human-readable)")
+    .addHelpText('after', `
+Examples:
+  # Get a human-readable summary of a task
+  $ fleetmind task get --task-id a1b2c3d4
+
+  # Get full task record as JSON (useful for scripting)
+  $ fleetmind task get --task-id a1b2c3d4 --json
+`)
     .action(async (opts: GetTaskOptions) => {
       const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       const record = await getTask(opts, ledger);
@@ -614,6 +712,23 @@ export function registerTask(program: Command): void {
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--region <region>", "AWS region (default us-west-2)")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # Update the definition of done for a task
+  $ fleetmind task update --task-id a1b2c3d4 --dod "All tests pass and docs updated"
+
+  # Reassign a task to a different worker
+  $ fleetmind task update --task-id a1b2c3d4 --worker worker-bot
+
+  # Move a task to a different project
+  $ fleetmind task update --task-id a1b2c3d4 --project new-project-slug
+
+  # Update description from a file (useful for long text)
+  $ fleetmind task update --task-id a1b2c3d4 --description-file ./context.md
+
+  # Update with an audit reason logged to update_history
+  $ fleetmind task update --task-id a1b2c3d4 --dod "Revised scope" --reason "PM adjusted requirements"
+`)
     .action(async (opts: UpdateTaskOptions) => {
       const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {
@@ -635,6 +750,14 @@ export function registerTask(program: Command): void {
     .requiredOption("--task-id <hex>", "Task ID")
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # Record that a nag was sent for a task (updates last_nag_at)
+  $ fleetmind task set-nag --task-id a1b2c3d4
+
+  # Same, with JSON output for scripting
+  $ fleetmind task set-nag --task-id a1b2c3d4 --json
+`)
     .action(async (opts: SetNagOptions) => {
       const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
       try {

@@ -8,6 +8,17 @@ export function registerDiff(program: Command): void {
   program
     .command("diff [fleet]")
     .description("Show what deploy would change without applying anything")
+    .addHelpText('after', `
+Examples:
+  # Diff the default fleet.yaml against what's in ./rendered/
+  $ fleetmind diff
+
+  # Diff a specific fleet file
+  $ fleetmind diff acme-fleet.yaml
+
+  # Typical workflow: diff first, then deploy if changes look right
+  $ fleetmind diff && fleetmind deploy
+`)
     .action((fleetArg: string | undefined) => {
       const fleetFile = fleetArg ?? "fleet.yaml";
       try {

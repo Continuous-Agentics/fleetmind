@@ -526,6 +526,23 @@ export function registerPullSelf(program: Command): void {
     .option("--restart", "Restart gateway after apply", false)
     .option("--force", "Apply even if no changes detected", false)
     .option("--show-diffs", "Show per-file unified diffs for modified files", false)
+    .addHelpText('after', `
+Examples:
+  # Show diff against the latest deploy-staging manifest (default, no changes applied)
+  $ fleetmind pull-self
+
+  # Apply incoming changes without restarting the gateway
+  $ fleetmind pull-self --apply
+
+  # Apply and restart the gateway in one shot
+  $ fleetmind pull-self --apply --restart
+
+  # Show per-file inline diffs for modified files before applying
+  $ fleetmind pull-self --show-diffs
+
+  # Force apply even when no changes are detected
+  $ fleetmind pull-self --apply --force
+`)
     .action(async (opts: {
       region: string;
       dryRun: boolean;

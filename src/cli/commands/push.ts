@@ -7,7 +7,15 @@ import { registerPushFleet } from "./push-fleet.js";
 export function registerPush(program: Command): void {
   const push = program
     .command("push")
-    .description("Push skills, plugins, or fleet updates to agents");
+    .description("Push skills, plugins, or fleet updates to agents")
+    .addHelpText('after', `
+Subcommands:
+  fleet    Package workspaces and push to EC2 via S3 + SSM
+  skill    Push a skill to one or more agents
+  plugin   Enable a plugin on one or more agents
+
+Run \`fleetmind push <subcommand> --help\` for examples.
+`);
 
   registerPushFleet(push);
 
@@ -18,6 +26,17 @@ export function registerPush(program: Command): void {
     .option("-a, --agent <id>", "Target agent ID")
     .option("--all", "Push to all agents")
     .option("-v, --version <ver>", "Skill version to install")
+    .addHelpText('after', `
+Examples:
+  # Push a skill to a specific agent
+  $ fleetmind push skill browser-automation --agent pm-bot
+
+  # Push a skill to all agents in the fleet
+  $ fleetmind push skill carpe-jenkins --all
+
+  # Push a pinned version of a skill to a specific agent
+  $ fleetmind push skill carpe-jenkins --agent forge --version 1.2.0
+`)
     .action((skillName: string, opts) => {
       try {
         const fleet = loadFleet(opts.config);
@@ -51,6 +70,16 @@ export function registerPush(program: Command): void {
     .option("-c, --config <file>", "fleet.yaml path", "fleet.yaml")
     .option("-a, --agent <id>", "Target agent ID")
     .option("--all", "Push to all agents")
+    .addHelpText('after', `
+Examples:
+  # Enable a plugin on a specific agent
+  $ fleetmind push plugin anthropic --agent pm-bot
+
+  # Enable a plugin on all agents in the fleet
+  $ fleetmind push plugin anthropic --all
+
+Note: plugins are written to fleet config — run \`fleetmind render\` to update openclaw.json.
+`)
     .action((pluginName: string, opts) => {
       try {
         const fleet = loadFleet(opts.config);

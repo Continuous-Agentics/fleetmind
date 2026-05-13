@@ -8,6 +8,20 @@ export function registerRender(program: Command): void {
     .command("render [fleet]")
     .description("Render openclaw.json and terraform vars without deploying")
     .option("-o, --out <dir>", "Output base directory", ".")
+    .addHelpText('after', `
+Examples:
+  # Render openclaw.json + terraform vars for the default fleet.yaml
+  $ fleetmind render
+
+  # Render a specific fleet file
+  $ fleetmind render acme-fleet.yaml
+
+  # Write rendered outputs to a custom directory
+  $ fleetmind render --out ./build
+
+  # Render a named fleet file into a custom output dir
+  $ fleetmind render staging-fleet.yaml --out ./rendered-staging
+`)
     .action((fleetArg: string | undefined, opts) => {
       const fleetFile = fleetArg ?? "fleet.yaml";
       try {

@@ -8,12 +8,27 @@ import { log } from "../../utils/log.js";
 export function registerAgent(program: Command): void {
   const agent = program
     .command("agent")
-    .description("Manage individual agents");
+    .description("Manage individual agents")
+    .addHelpText('after', `
+Subcommands:
+  list   List all agents in the fleet
+  info   Show detailed info for a specific agent
+
+Run \`fleetmind agent <subcommand> --help\` for examples.
+`);
 
   agent
     .command("list")
     .description("List all agents in the fleet")
     .option("-c, --config <file>", "fleet.yaml path", "fleet.yaml")
+    .addHelpText('after', `
+Examples:
+  # List all agents in the default fleet.yaml
+  $ fleetmind agent list
+
+  # List agents from a specific fleet file
+  $ fleetmind agent list --config acme-fleet.yaml
+`)
     .action((opts) => {
       try {
         const fleet = loadFleet(opts.config);
@@ -31,6 +46,14 @@ export function registerAgent(program: Command): void {
     .command("info <id>")
     .description("Show details for a specific agent")
     .option("-c, --config <file>", "fleet.yaml path", "fleet.yaml")
+    .addHelpText('after', `
+Examples:
+  # Show full details for the pm-bot agent
+  $ fleetmind agent info pm-bot
+
+  # Show details for an agent from a specific fleet file
+  $ fleetmind agent info forge --config acme-fleet.yaml
+`)
     .action((id: string, opts) => {
       try {
         const fleet = loadFleet(opts.config);

@@ -9,6 +9,14 @@ export function registerStatus(program: Command): void {
   program
     .command("status [fleet]")
     .description("Show fleet configuration and workspace status")
+    .addHelpText('after', `
+Examples:
+  # Show status for the default fleet.yaml
+  $ fleetmind status
+
+  # Show status for a specific fleet file
+  $ fleetmind status acme-fleet.yaml
+`)
     .action((fleetArg: string | undefined) => {
       const fleetFile = fleetArg ?? "fleet.yaml";
       try {

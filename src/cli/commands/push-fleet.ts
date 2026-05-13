@@ -446,6 +446,23 @@ export function registerPushFleet(pushCmd: Command): void {
     .option("--restart", "Restart gateway after apply on each agent", false)
     .option("--dry-run", "Package locally and compute manifest, but skip upload and SSM", false)
     .option("--no-apply", "Upload to S3 but skip SSM trigger")  // Commander's --no-* sets opts.apply=true by default; --no-apply flips to false. Do NOT pass a default value here (would shadow Commander's inverse-flag semantics).
+    .addHelpText('after', `
+Examples:
+  # Dry-run: package workspaces and compute manifests, but skip upload and SSM
+  $ fleetmind push fleet --dry-run
+
+  # Full push: upload to S3 and trigger pull-self + restart on all agents (most common)
+  $ fleetmind push fleet --restart
+
+  # Push to one agent only (e.g. after a targeted skill change)
+  $ fleetmind push fleet --agent pm-bot
+
+  # Push with a custom region
+  $ fleetmind push fleet --region us-east-1 --restart
+
+  # Upload artifacts to S3 but skip the SSM trigger (manual pull-self later)
+  $ fleetmind push fleet --no-apply
+`)
     .action(async (opts: {
       fleet?: string;
       agent: string[];
