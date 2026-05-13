@@ -235,8 +235,12 @@ export async function discoverSlackBotUserIds(
     const agentId = agent.id!;
     const existingUserId = agent.slack?.bot_user_id;
 
-    // Skip if already set and --force not passed
-    if (existingUserId && !options.force) {
+    // Skip if already set to a real Slack user ID and --force not passed.
+    // A real user ID matches /^U[A-Z0-9]+$/ — anything else (e.g. U_REPLACE_ME,
+    // REPLACE_ME, empty) is treated as unset so operators don't need --force
+    // just because the template shipped with a placeholder.
+    const isRealUserId = /^U[A-Z0-9]+$/.test(existingUserId ?? '');
+    if (isRealUserId && !options.force) {
       results.push({
         agentId,
         status: "skipped",
