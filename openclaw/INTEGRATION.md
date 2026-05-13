@@ -93,7 +93,7 @@ Adding a specialist provisions a new EC2 + gateway + Slack app for the
 agent. fleetmind handles the workspace render and skill push; the EC2
 host itself comes from the [`openclaw-terraform`](https://github.com/Continuous-Agentics/openclaw-terraform)
 repo (or whatever module you use to bring up bot hosts), which fleetmind
-feeds via the rendered `fleet.auto.tfvars`.
+feeds via the rendered `fleet.derived.tfvars`.
 
 1. Add a new entry under `agents.list` in `fleet.yaml`:
    ```yaml

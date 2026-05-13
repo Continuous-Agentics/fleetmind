@@ -14,7 +14,7 @@ substrates live here:
 
 Bot EC2 hosts and networking are not provisioned by fleetmind — those live in
 the [`openclaw-terraform`](https://github.com/Continuous-Agentics/openclaw-terraform)
-repo, which fleetmind feeds via the rendered `fleet.auto.tfvars`. That repo
+repo, which fleetmind feeds via the rendered `fleet.derived.tfvars`. That repo
 brings up *one EC2 instance per agent in the fleet* (each running its own
 OpenClaw gateway), plus the IAM roles fleetmind's modules attach policies
 to.

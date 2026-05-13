@@ -2,7 +2,7 @@
 #
 # fleet_name, agent_names, agent_models, agent_orchestrators, and
 # wake_target_session_key are derived from fleet.yaml by `fleetmind render`
-# and written to infra/terraform/fleet.auto.tfvars (auto-loaded by Terraform).
+# and written to infra/terraform/fleet.derived.tfvars (auto-loaded by Terraform).
 # Don't set them here — they'd shadow the renderer's output.
 #
 # This file holds *infrastructure-only* knobs that fleet.yaml doesn't own.

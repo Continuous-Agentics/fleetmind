@@ -6,12 +6,12 @@
 #   # → create Slack apps from generated manifests, capture channel IDs
 #   # → fill slack.channels[] below per agent
 #   fleetmind slack discover --fleet fleet-test-fleet-2.yaml   # fills bot_user_id from auth.test
-#   fleetmind render --fleet fleet-test-fleet-2.yaml           # → workspaces/test-fleet-2.auto.tfvars
+#   fleetmind render --fleet fleet-test-fleet-2.yaml           # → workspaces/test-fleet-2.derived.tfvars
 #   cd infra/terraform
 #   terraform workspace select test-fleet-2
 #   terraform apply \
 #     -var-file=workspaces/test-fleet-2.tfvars \
-#     -var-file=workspaces/test-fleet-2.auto.tfvars
+#     -var-file=workspaces/test-fleet-2.derived.tfvars
 #   fleetmind secrets populate --fleet fleet-test-fleet-2.yaml --interactive
 #   fleetmind push fleet --fleet fleet-test-fleet-2.yaml --restart
 
@@ -110,7 +110,7 @@ outputs:
   openclaw_json: ./rendered/openclaw-fleet-test-2.json
   # Per-workspace path. Renderer writes here; operator passes via -var-file
   # alongside workspaces/test-fleet-2.tfvars at apply time.
-  terraform_vars: ./infra/terraform/workspaces/test-fleet-2.auto.tfvars
+  terraform_vars: ./infra/terraform/workspaces/test-fleet-2.derived.tfvars
 
 openclaw:
   gateway:

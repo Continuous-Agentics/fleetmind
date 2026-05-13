@@ -11,7 +11,7 @@
 # root volume at /opt/openclaw/workspace/<agent_id>/. Persistent state belongs
 # in the shared substrates (task-ledger DDB, context-store DDB, narratives S3).
 # To override instance sizing for specific agents, pass per-agent maps in
-# fleet.auto.tfvars or a custom .tfvars file:
+# fleet.derived.tfvars or a custom .tfvars file:
 #
 #   agent_instance_types = { conductor = "t3.large", forge = "t3.medium" }
 #
@@ -216,7 +216,7 @@ agents:
 # ── Outputs ───────────────────────────────────────────────────────────────────
 outputs:
   openclaw_json: ./rendered/openclaw.json       # Generated OpenClaw config
-  terraform_vars: ./rendered/fleet.auto.tfvars  # Consumed by openclaw-terraform
+  terraform_vars: ./rendered/fleet.derived.tfvars  # Consumed by openclaw-terraform
   workspace_manifests: ./rendered/workspaces/   # Per-agent workspace files
 
 # ── Fleet-wide OpenClaw settings ──────────────────────────────────────────────

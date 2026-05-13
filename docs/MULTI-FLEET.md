@@ -77,16 +77,16 @@ cp infra/terraform/workspaces/default.tfvars infra/terraform/workspaces/test-fle
 #   - wake_target_session_key
 ```
 
-`fleetmind render` (or `push fleet`) also writes a companion `.auto.tfvars` for
+`fleetmind render` (or `push fleet`) also writes a companion `.derived.tfvars` for
 the fleet-derived variables (agent names, models, orchestrators). Apply both
 files together:
 
 ```bash
 terraform workspace select gg-sandbox
-terraform apply -var-file=workspaces/gg-sandbox.tfvars -var-file=workspaces/gg-sandbox.auto.tfvars
+terraform apply -var-file=workspaces/gg-sandbox.tfvars -var-file=workspaces/gg-sandbox.derived.tfvars
 
 terraform workspace select test-fleet-2
-terraform apply -var-file=workspaces/test-fleet-2.tfvars -var-file=workspaces/test-fleet-2.auto.tfvars
+terraform apply -var-file=workspaces/test-fleet-2.tfvars -var-file=workspaces/test-fleet-2.derived.tfvars
 ```
 
 ### 3. Per-fleet fleet.yaml

@@ -428,6 +428,31 @@ export function writeOutputs(
 
   // terraform vars
   const tfPath = path.resolve(baseDir, fleet.outputs.terraform_vars);
+
+  // Guard against the multi-workspace cross-contamination footgun:
+  // *.auto.tfvars at the Terraform working directory (infra/terraform/<file>.auto.tfvars)
+  // is auto-loaded by `terraform apply` regardless of which workspace is selected.
+  // If render writes there, a different fleet's render can silently clobber it,
+  // and operators applying the OTHER workspace pick up the wrong fleet's values.
+  // Per-workspace files under infra/terraform/workspaces/ are NOT auto-loaded
+  // (subdirectory) and must be passed via -var-file explicitly — safe.
+  if (tfPath.endsWith(".auto.tfvars") && tfPath.includes(`${path.sep}infra${path.sep}terraform${path.sep}`)) {
+    const tfDir = path.dirname(tfPath);
+    const isInWorkspacesSubdir = tfDir.endsWith(`${path.sep}workspaces`);
+    if (!isInWorkspacesSubdir) {
+      throw new Error(
+        `Refusing to write rendered tfvars to ${tfPath}.\n` +
+        `Files matching infra/terraform/*.auto.tfvars are auto-loaded by Terraform regardless\n` +
+        `of the selected workspace — a known cross-workspace contamination footgun.\n` +
+        `\n` +
+        `Fix: in fleet.yaml, change outputs.terraform_vars to:\n` +
+        `  ./infra/terraform/workspaces/<fleet-name>.derived.tfvars\n` +
+        `\n` +
+        `Pass it explicitly to terraform apply via -var-file. See docs/MULTI-FLEET.md.`
+      );
+    }
+  }
+
   fs.mkdirSync(path.dirname(tfPath), { recursive: true });
   fs.writeFileSync(tfPath, renderTerraformVars(fleet));
   written["terraform_vars"] = tfPath;

@@ -25,3 +25,8 @@ rendered/
 notes.md
 infra/terraform/terraform.tfvars
 infra/terraform/backend.hcl
+
+# Terraform auto-tfvars at the CWD level (infra/terraform/<file>.auto.tfvars) are
+# auto-loaded regardless of workspace — multi-fleet contamination footgun.
+# Per-workspace files under workspaces/ are passed explicitly via -var-file.
+infra/terraform/*.auto.tfvars
