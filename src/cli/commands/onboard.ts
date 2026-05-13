@@ -21,7 +21,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import readline from "node:readline";
+import { createInterface } from "node:readline";
+import { Writable } from "node:stream";
 import type { Command } from "commander";
 import { loadFleet } from "../../config/loader.js";
 import { log } from "../../utils/log.js";
@@ -30,53 +31,63 @@ import { discoverSlackBotUserIds } from "./slack.js";
 import { populateSecrets } from "./populate.js";
 import { storeGithubApp } from "./github-app.js";
 import { runPushFleet } from "./push-fleet.js";
-import { writeOutputs, renderTerraformVars } from "../../runtime/renderer.js";
+import { writeOutputs } from "../../runtime/renderer.js";
 import { provisionFleet } from "../../runtime/provisioner.js";
 
 // ── Terminal helpers ──────────────────────────────────────────────────────────
 
 /**
- * Hidden input that works with an existing readline interface.
- * Uses rl.question() but mutes the output stream while the user types
- * so characters don't echo. Avoids raw mode entirely, which sidesteps
- * the buffered-newline issue where the previous Enter resolves immediately.
+ * Prompt for visible input. Creates a short-lived readline interface so there
+ * is never more than one interface reading from stdin at a time.
  */
-function hiddenPrompt(rl: readline.Interface, question: string): Promise<string> {
+function prompt(question: string): Promise<string> {
   return new Promise((resolve) => {
-    const out = (rl as unknown as { output: NodeJS.WritableStream }).output;
-    // Replace write so typed characters aren't echoed, but the question is shown
-    const original = out?.write?.bind(out) as ((...args: unknown[]) => boolean) | undefined;
-    let questionWritten = false;
-    if (out && original) {
-      (out as unknown as { write: (...a: unknown[]) => boolean }).write = (...args: unknown[]) => {
-        if (!questionWritten) {
-          // Allow the question text through once
-          questionWritten = true;
-          return original(...args);
-        }
-        // Suppress all echoed keystrokes
-        return true;
-      };
-    }
-
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
     rl.question(question, (answer) => {
-      // Restore original write and add newline
-      if (out && original) {
-        (out as unknown as { write: (...a: unknown[]) => boolean }).write = original;
-      }
+      resolve(answer);
+    });
+  });
+}
+
+/**
+ * Prompt for hidden input (passwords, tokens).
+ *
+ * Uses a dedicated readline interface backed by a muted Writable stream so
+ * that typed characters are never echoed to the terminal. The interface is
+ * closed immediately after the answer is received.
+ *
+ * This is the canonical Node.js pattern for password prompts — no raw mode,
+ * no monkey-patching, no shared-interface conflicts.
+ */
+function hiddenPrompt(question: string): Promise<string> {
+  return new Promise((resolve) => {
+    // A Writable that discards everything — prevents readline echoing keystrokes.
+    const muted = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+
+    // Print the question ourselves since the muted stream won't show it.
+    process.stdout.write(question);
+
+    const rl = createInterface({
+      input: process.stdin,
+      output: muted,
+      terminal: true, // required for readline to handle raw keystrokes
+    });
+
+    rl.question("", (answer) => {
+      // Move to next line — the muted stream suppressed the newline the user typed.
       process.stdout.write("\n");
       resolve(answer);
     });
   });
 }
 
-function prompt(rl: readline.Interface, question: string): Promise<string> {
-  return new Promise((resolve) => rl.question(question, resolve));
-}
-
-async function confirm(rl: readline.Interface, question: string, defaultYes = true): Promise<boolean> {
+async function confirm(question: string, defaultYes = true): Promise<boolean> {
   const hint = defaultYes ? "[Y/n]" : "[y/N]";
-  const answer = (await prompt(rl, `${question} ${hint} `)).trim().toLowerCase();
+  const answer = (await prompt(`${question} ${hint} `)).trim().toLowerCase();
   if (answer === "") return defaultYes;
   return answer === "y" || answer === "yes";
 }
@@ -94,8 +105,6 @@ function step(n: number, total: number, title: string, status: "done" | "next" |
   console.log(`  ${color}${icon}\x1b[0m  ${n}/${total}  ${title}`);
 }
 
-// ── Step checks ───────────────────────────────────────────────────────────────
-
 function isRealUserId(id: string | undefined): boolean {
   return /^U[A-Z0-9]+$/.test(id ?? "");
 }
@@ -107,8 +116,6 @@ function isRealChannelId(id: string | undefined): boolean {
 // ── Main wizard ───────────────────────────────────────────────────────────────
 
 export async function runOnboard(fleetFile: string, region: string): Promise<void> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
   console.log("\n\x1b[1mfleetmind onboard\x1b[0m — guided fleet setup wizard\n");
 
   // ── Load fleet ──────────────────────────────────────────────────────────────
@@ -150,9 +157,8 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
   step(12, TOTAL, "Verify", "next");
   console.log();
 
-  if (!await confirm(rl, "Start onboarding?")) {
+  if (!await confirm("Start onboarding?")) {
     console.log("Aborted.");
-    rl.close();
     return;
   }
 
@@ -164,7 +170,7 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
   if (!manifestsExist) {
     header("Step 2 / 12 — Generate Slack App Manifests");
     console.log("  Generates a YAML manifest for each agent that you paste into api.slack.com.");
-    if (await confirm(rl, "  Generate manifests now?")) {
+    if (await confirm("  Generate manifests now?")) {
       await generateManifests({
         fleet: fleetFile,
         out: manifestsDir,
@@ -187,9 +193,9 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
 
     for (const agent of agents) {
       console.log(`\x1b[1m  Agent: ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
-      const botToken = await hiddenPrompt(rl, `    Bot Token (xoxb-...): `);
-      const signingSecret = await hiddenPrompt(rl, `    Signing Secret:       `);
-      const appToken = await hiddenPrompt(rl, `    App Token (xapp-...): `);
+      const botToken = await hiddenPrompt(`    Bot Token (xoxb-...): `);
+      const signingSecret = await hiddenPrompt(`    Signing Secret:       `);
+      const appToken = await hiddenPrompt(`    App Token (xapp-...): `);
       slackCreds[agent.id] = { botToken, signingSecret, appToken };
       console.log();
     }
@@ -207,7 +213,7 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
       }
       console.log(`\x1b[1m  ${agent.emoji} ${agent.name} — channel IDs\x1b[0m`);
       console.log("    (comma-separated, format: C0123456789)");
-      const channelInput = await prompt(rl, "    Channel IDs: ");
+      const channelInput = await prompt("    Channel IDs: ");
       const channelIds = channelInput.split(",").map(c => c.trim()).filter(Boolean);
       if (channelIds.length > 0) {
         // Write channel IDs back to fleet.yaml
@@ -227,9 +233,9 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
     // Still need to collect for secrets populate later
     for (const agent of agents) {
       console.log(`\x1b[1m  Agent: ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
-      const botToken = await hiddenPrompt(rl, `    Bot Token (xoxb-...): `);
-      const signingSecret = await hiddenPrompt(rl, `    Signing Secret:       `);
-      const appToken = await hiddenPrompt(rl, `    App Token (xapp-...): `);
+      const botToken = await hiddenPrompt(`    Bot Token (xoxb-...): `);
+      const signingSecret = await hiddenPrompt(`    Signing Secret:       `);
+      const appToken = await hiddenPrompt(`    App Token (xapp-...): `);
       slackCreds[agent.id] = { botToken, signingSecret, appToken };
     }
   }
@@ -238,7 +244,7 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
   if (!allUserIdsSet) {
     header("Step 4 / 12 — Discover bot_user_ids");
     console.log("  Calls Slack auth.test for each agent using the tokens you just entered.");
-    if (await confirm(rl, "  Run fleetmind slack discover --interactive?")) {
+    if (await confirm("  Run fleetmind slack discover --interactive?")) {
       // Set env vars from collected creds so discover can use them
       for (const [agentId, creds] of Object.entries(slackCreds)) {
         const envKey = `${agentId.toUpperCase().replace(/-/g, "_")}_BOT_TOKEN`;
@@ -266,9 +272,9 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
 
   for (const agent of agents) {
     console.log(`\x1b[1m  Agent: ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
-    const appId = await prompt(rl, `    App ID:          `);
-    const installationId = await prompt(rl, `    Installation ID: `);
-    const pemFile = await prompt(rl, `    PEM file path:   `);
+    const appId = await prompt(`    App ID:          `);
+    const installationId = await prompt(`    Installation ID: `);
+    const pemFile = await prompt(`    PEM file path:   `);
     ghAppCreds[agent.id] = { appId: appId.trim(), installationId: installationId.trim(), pemFile: pemFile.trim() };
     console.log();
   }
@@ -291,7 +297,7 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
   if (patExists) {
     log.ok("  PAT already set in SSM — skipping");
   } else {
-    const pat = await hiddenPrompt(rl, "  GitHub Packages PAT (ghp_...): ");
+    const pat = await hiddenPrompt("  GitHub Packages PAT (ghp_...): ");
     if (pat.trim()) {
       const { SSMClient, PutParameterCommand } = await import("@aws-sdk/client-ssm");
       const ssm = new SSMClient({ region });
@@ -308,7 +314,7 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
   // ── Step 7: Render ──────────────────────────────────────────────────────────
   header("Step 7 / 12 — Render");
   console.log("  Generates per-agent openclaw.json and workspaces/derived.tfvars from fleet.yaml.");
-  if (await confirm(rl, "  Run fleetmind render?", true)) {
+  if (await confirm("  Run fleetmind render?", true)) {
     const reloadedFleet = loadFleet(fleetFile);
     await provisionFleet(reloadedFleet, false, path.dirname(fleetFile));
     writeOutputs(reloadedFleet, path.dirname(fleetFile));
@@ -330,12 +336,12 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
   console.log("  This creates EC2 instances, DDB, S3, Secrets Manager placeholders, etc.");
   console.log("  Instances will boot but agents won't start until step 9.\n");
 
-  await confirm(rl, "  Terraform apply complete?", false);
+  await confirm("  Terraform apply complete?", false);
 
   // ── Step 9: Populate secrets ─────────────────────────────────────────────────
   header("Step 9 / 12 — Populate Secrets Manager");
   console.log("  Writes Slack tokens + Anthropic API key to Secrets Manager per agent.");
-  if (await confirm(rl, "  Populate secrets now?")) {
+  if (await confirm("  Populate secrets now?")) {
     // Set env vars from collected creds
     for (const [agentId, creds] of Object.entries(slackCreds)) {
       const upper = agentId.toUpperCase().replace(/-/g, "_");
@@ -351,15 +357,15 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
       agent: [],
       region,
       interactive: true, // prompt for Anthropic keys (not collected above)
-      promptFn: (q) => hiddenPrompt(rl, q),
-      confirmFn: (q: string) => confirm(rl, q),
+      promptFn: hiddenPrompt,
+      confirmFn: (q: string) => confirm(q),
     });
   }
 
   // ── Step 10: GitHub App credentials ─────────────────────────────────────────
   header("Step 10 / 12 — Store GitHub App Credentials in SSM");
   console.log("  Writes app-id, installation-id, and pem key to SSM for each agent.");
-  if (await confirm(rl, "  Store GitHub App credentials?")) {
+  if (await confirm("  Store GitHub App credentials?")) {
     for (const [agentId, creds] of Object.entries(ghAppCreds)) {
       if (!creds.appId || !creds.installationId || !creds.pemFile) {
         log.warn(`  ${agentId}: missing credentials — skipping`);
@@ -383,7 +389,7 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
   header("Step 11 / 12 — Push Fleet");
   console.log("  Packages workspace + skills → uploads to S3 → triggers pull-self on each EC2.");
   console.log("  Also upgrades the fleetmind CLI on each instance to the current version.\n");
-  if (await confirm(rl, "  Run fleetmind push fleet --restart --upgrade-cli?")) {
+  if (await confirm("  Run fleetmind push fleet --restart --upgrade-cli?")) {
     const reloadedFleet = loadFleet(fleetFile);
     await runPushFleet({
       fleet: fleetFile,
@@ -404,8 +410,6 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
 
   console.log("\x1b[32m\x1b[1m🎉 Onboarding complete!\x1b[0m");
   console.log(`  Fleet \x1b[1m${fleetName}\x1b[0m is deployed. Your bots should be online in Slack shortly.\n`);
-
-  rl.close();
 }
 
 // ── Commander registration ────────────────────────────────────────────────────
