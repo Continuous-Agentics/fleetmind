@@ -6,7 +6,7 @@ fleetmind supports running multiple independent fleets in a single AWS account v
 
 ### 1. Pick an S3 bucket for remote state
 
-Use an existing account-level bucket (AFT vends `carpe-<account-id>-bot-content` in Carpe accounts) or create one:
+Use an existing account-level bucket or create a dedicated one:
 
 ```bash
 aws s3api create-bucket \
@@ -65,26 +65,28 @@ State files land at `s3://<bucket>/env:/<workspace>/fleetmind/terraform.tfstate`
 
 ### 2. Per-fleet tfvars
 
-Each workspace needs its own `terraform-extras-<fleet>.tfvars` file:
+Each workspace needs its own `infra/terraform/workspaces/<fleet>.tfvars` file.
+Copy the example and adjust:
 
 ```bash
-cp terraform-extras.tfvars terraform-extras-test-fleet-2.tfvars
+cp infra/terraform/workspaces/default.tfvars infra/terraform/workspaces/test-fleet-2.tfvars
 # Edit:
 #   - aws_region (if different)
 #   - agent_ports
 #   - delegation_enabled
-#   - agent_orchestrators
 #   - wake_target_session_key
 ```
 
-Then apply with the matching tfvars:
+`fleetmind render` (or `push fleet`) also writes a companion `.auto.tfvars` for
+the fleet-derived variables (agent names, models, orchestrators). Apply both
+files together:
 
 ```bash
 terraform workspace select gg-sandbox
-terraform apply -var-file=terraform-extras.tfvars
+terraform apply -var-file=workspaces/gg-sandbox.tfvars -var-file=workspaces/gg-sandbox.auto.tfvars
 
 terraform workspace select test-fleet-2
-terraform apply -var-file=terraform-extras-test-fleet-2.tfvars
+terraform apply -var-file=workspaces/test-fleet-2.tfvars -var-file=workspaces/test-fleet-2.auto.tfvars
 ```
 
 ### 3. Per-fleet fleet.yaml

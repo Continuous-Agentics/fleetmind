@@ -371,13 +371,13 @@ Update each agent's `slack.channels` with the real channel IDs:
 # PM agent
 slack:
   channels:
-    - "C0B3J7CT6RJ"   # home channel
-    - "C0B3CGSNATG"   # delegation channel
+    - "CXXXXXXXXXX"   # home channel
+    - "CYYYYYYYYYY"   # delegation channel
 
 # Worker agent
 slack:
   channels:
-    - "C0B3CGSNATG"   # delegation channel only
+    - "CYYYYYYYYYY"   # delegation channel only
 ```
 
 ### 4f. First render
@@ -397,7 +397,7 @@ fleet_name             = "acme-bots"
 agent_names            = { blanket = "Blanket", charlie = "Charlie" }
 agent_models           = { blanket = "anthropic/claude-sonnet-4-6", charlie = "anthropic/claude-haiku-4-5" }
 agent_orchestrators    = { blanket = true, charlie = false }
-wake_target_session_key = "C0B3J7CT6RJ"   # PM's first channel
+wake_target_session_key = "CXXXXXXXXXX"   # PM's first channel
 ```
 
 > **Why the channel must exist before render:** `wake_target_session_key` is derived from the PM's `slack.channels[0]` value. If channels aren't filled in yet, the auto.tfvars will have an empty value and the EventBridge task-ledger trigger won't work.
