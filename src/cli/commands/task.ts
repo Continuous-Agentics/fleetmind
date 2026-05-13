@@ -353,7 +353,7 @@ export async function updateTask(
 export function registerTask(program: Command): void {
   const task = program
     .command("task")
-    .description("Manage task ledger lifecycle (delegation, ack, ship, block, signoff, abandon, merge, get, set-nag)");
+    .description("Manage task ledger lifecycle (create, ack, ship, block, unblock, signoff, abandon, merge, get, update, set-nag)");
 
   // ── create ──────────────────────────────────────────────────────────────
 

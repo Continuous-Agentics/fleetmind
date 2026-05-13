@@ -41,38 +41,58 @@ Isolation over efficiency. A misbehaving worker can't crash the orchestrator; a 
 
 Bot EC2 hosts come from the [openclaw-terraform](https://github.com/Continuous-Agentics/openclaw-terraform) repo, fed by the `rendered/fleet.auto.tfvars` fleetmind generates.
 
+## Installation
+
+fleetmind is published to [GitHub Packages](https://github.com/features/packages) as a private scoped package.
+You need a GitHub classic PAT with `read:packages` scope:
+
+```bash
+# One-time local setup
+echo "@continuous-agentics:registry=https://npm.pkg.github.com" >> ~/.npmrc
+echo "//npm.pkg.github.com/:_authToken=<YOUR_PAT>" >> ~/.npmrc
+
+npm install -g @continuous-agentics/fleetmind
+```
+
 ## Quick Start
 
 ```bash
-npm install -g fleetmind
-
 # 1. Scaffold a new fleet
 fleetmind init --name acme-fleet --client "Acme Corp"
 
 # 2. Edit fleet.yaml — add agents, Slack tokens, skills
-# 3. Store secrets
+# 3. Store secrets (used to resolve ${VAR} references in fleet.yaml)
 fleetmind secrets set CONDUCTOR_BOT_TOKEN xoxb-...
 fleetmind secrets set CONDUCTOR_APP_TOKEN xapp-...
 fleetmind secrets set PIXEL_BOT_TOKEN xoxb-...
 fleetmind secrets set PIXEL_APP_TOKEN xapp-...
 
-# 4. Preview changes
+# 4. Generate Slack app manifests, create apps in Slack UI, then discover bot_user_ids
+fleetmind slack manifests --out ./rendered/slack-manifests/
+# ... create each app at https://api.slack.com/apps → From a manifest ...
+fleetmind slack discover
+
+# 5. Preview what would be deployed
 fleetmind diff
 
-# 5. Deploy — renders workspaces locally to ./rendered/workspaces/<agent_id>/
-#    and outputs openclaw.json + fleet.auto.tfvars to ./rendered/
-fleetmind deploy
+# 6. Apply Terraform (provisions EC2 hosts, IAM, networking)
+#    See infra/terraform/ and docs/SETUP-A-FLEET.md for the full first-time sequence
+cd infra/terraform && terraform workspace select acme-fleet
+terraform apply -var-file=workspaces/acme-fleet.auto.tfvars
 
-# 6. Copy rendered workspaces to each EC2 (until deploy transport ships in issue #7)
-#    The local ./rendered/workspaces/<agent_id>/ dirs map to <workspace_base>/<agent_id>/
-#    on EC2 (workspace_base from fleet.yaml, typically /opt/openclaw/workspace).
-#    e.g.: scp -r ./rendered/workspaces/conductor ec2-user@<ip>:<workspace_base>/
-#          scp -r ./rendered/cron               ec2-user@<ip>:<workspace_base>/
+# 7. Push per-agent credentials into Secrets Manager
+fleetmind secrets populate --interactive
 
-# 7. Restart each agent's gateway on its EC2
-#    e.g. via SSM: aws ssm send-command --targets ... --parameters \
-#      'commands=["openclaw gateway restart"]'
+# 8. Render workspaces, upload to S3, trigger pull-self on every bot, restart gateways
+fleetmind push fleet --restart
 ```
+
+**Day-to-day:** after changing `fleet.yaml` or workspace files, re-push:
+```bash
+fleetmind push fleet --restart
+```
+
+For the full first-time fleet setup walkthrough, see [`docs/SETUP-A-FLEET.md`](docs/SETUP-A-FLEET.md).
 
 ## fleet.yaml Overview
 
@@ -121,29 +141,78 @@ See `fleet.example.yaml` for the full annotated schema.
 
 ## CLI Reference
 
+### Workspace + deploy
+
 | Command | Description |
 |---|---|
-| `fleetmind init` | Scaffold a new fleet.yaml |
-| `fleetmind deploy` | Render per-agent workspaces and push to each EC2 |
-| `fleetmind diff` | Show what deploy would change |
-| `fleetmind render` | Emit openclaw.json + tfvars without deploying |
-| `fleetmind watch` | GitOps: auto-push skill updates from skills repo |
-| `fleetmind status` | Show fleet + workspace status |
-| `fleetmind push skill <name> --agent <id>` | Push a skill to an agent |
+| `fleetmind init` | Scaffold a new `fleet.yaml` |
+| `fleetmind render [fleet]` | Render `openclaw.json` + tfvars locally to `./rendered/` |
+| `fleetmind deploy [fleet]` | Render workspaces locally (`./rendered/`) — does **not** push to EC2 |
+| `fleetmind push fleet [--agent <id>] [--restart]` | Render → upload to S3 → trigger `pull-self` on each bot (main deploy command) |
+| `fleetmind pull-self [--apply] [--restart]` | Bot-side: pull latest workspace from S3 and apply (runs on EC2) |
+| `fleetmind diff [fleet]` | Show what `deploy` would change without applying |
+| `fleetmind watch [fleet]` | GitOps: auto-push skill updates from the skills repo |
+| `fleetmind status [fleet]` | Show fleet configuration and workspace status |
+| `fleetmind self-upgrade [--latest\|--version <v>] [--apply]` | Upgrade the fleetmind CLI in-place on a bot EC2 (run as root) |
+
+### Skills + plugins
+
+| Command | Description |
+|---|---|
+| `fleetmind push skill <name> --agent <id>` | Push a skill to a specific agent |
 | `fleetmind push skill <name> --all` | Push a skill to all agents |
 | `fleetmind push plugin <name> --all` | Push a plugin fleet-wide |
+
+### Agents + secrets
+
+| Command | Description |
+|---|---|
 | `fleetmind agent list` | List all agents |
 | `fleetmind agent info <id>` | Show agent details |
-| `fleetmind secrets set KEY value` | Store a secret |
+| `fleetmind secrets set KEY value` | Store a secret locally (resolved in `${VAR}` fleet.yaml refs) |
 | `fleetmind secrets list` | List stored secret keys |
 | `fleetmind secrets export` | Export secrets as shell exports |
-| `fleetmind context get <key>` | Read a value from the shared ContextStore |
+| `fleetmind secrets populate [--interactive]` | Push Slack + Anthropic credentials into Secrets Manager |
+
+### Slack
+
+| Command | Description |
+|---|---|
+| `fleetmind slack manifests [--out <dir>]` | Generate per-agent Slack app manifest YAMLs from `fleet.yaml` |
+| `fleetmind slack discover` | Resolve each agent's `bot_user_id` via auth.test and write back to `fleet.yaml` |
+
+### GitHub Apps
+
+| Command | Description |
+|---|---|
+| `fleetmind github-app store` | Push GitHub App credentials (app-id, installation-id, PEM) into SSM |
+
+### Shared ContextStore
+
+| Command | Description |
+|---|---|
+| `fleetmind context get <key>` | Read a value from the shared DynamoDB ContextStore |
 | `fleetmind context set <key> <value>` | Write a value to the ContextStore |
 | `fleetmind context delete <key>` | Delete a key |
 | `fleetmind context list [prefix]` | List keys, optionally filtered by prefix |
-| `fleetmind task <create\|ack\|ship\|block\|signoff\|abandon\|merge\|get>` | Drive a task through its lifecycle in the delegation ledger |
+
+### Task ledger (delegation)
+
+| Command | Description |
+|---|---|
+| `fleetmind task create` | Create a task record (PM bot: initial delegation) |
+| `fleetmind task ack` | Acknowledge a delegation (worker: `delegated→accepted`) |
+| `fleetmind task ship` | Mark a task shipped (worker: `accepted→shipped`) |
+| `fleetmind task block` | Mark a task blocked |
+| `fleetmind task unblock` | Unblock a task (`blocked→accepted`) |
+| `fleetmind task signoff` | Sign off on shipped work (`shipped→signed_off`) |
+| `fleetmind task merge` | Mark a task merged (`shipped\|signed_off→merged`) |
+| `fleetmind task abandon` | Abandon a task (PM bot only) |
+| `fleetmind task get` | Fetch a task record by ID |
+| `fleetmind task update` | Update mutable task metadata (title, DoD, worker, thread) |
+| `fleetmind task set-nag` | Record last nag timestamp (used by PM heartbeat sweeps) |
 | `fleetmind narrative <get\|put>` | Read/write the S3-backed task narrative `.md` |
-| `fleetmind query <pending\|merged\|stale>` | Query the delegation ledger by status / project |
+| `fleetmind query <pending\|shipped\|merged\|stale\|all>` | Query the task ledger by status/project |
 
 ## Shared ContextStore (Hive Mind)
 

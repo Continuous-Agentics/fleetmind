@@ -37,7 +37,7 @@ After this, `npm install -g @continuous-agentics/fleetmind` works locally.
    ```
    This publishes `@continuous-agentics/fleetmind` to GitHub Packages at the new version.
 5. **Update infra:**
-   Edit `infra/terraform/terraform-extras.tfvars`:
+   Edit the fleet's tfvars in `infra/terraform/workspaces/` (e.g. `default.tfvars`):
    ```hcl
    fleetmind_version = "0.5.0"   # match whatever you just published
    ```
