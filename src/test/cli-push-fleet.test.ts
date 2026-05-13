@@ -123,6 +123,9 @@ function makeMockDeps(state: MockDepsState, opts?: { instanceId?: string | null 
       const cmdId = `ssm-cmd-${++state.ssmCommandIdCounter}`;
       return cmdId;
     },
+    async acquireLock() { /* no-op in tests */ },
+    async releaseLock() { /* no-op in tests */ },
+    async archiveToHistory() { /* no-op in tests */ },
   };
 }
 
