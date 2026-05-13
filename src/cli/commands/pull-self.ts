@@ -99,8 +99,14 @@ export function computeWorkspaceManifest(workspaceDir: string): ManifestFile[] {
       if (entry.isDirectory()) {
         walk(abs);
       } else if (entry.isFile() || entry.isSymbolicLink()) {
-        const rel = path.relative(workspaceDir, abs).replace(/\\/g, "/");
+        // Use statSync (follows symlinks) to guard against symlinks that point
+        // to directories — readFileSync on those throws EISDIR.
         const stat = fs.statSync(abs);
+        if (!stat.isFile()) {
+          if (stat.isDirectory()) walk(abs);
+          continue;
+        }
+        const rel = path.relative(workspaceDir, abs).replace(/\\/g, "/");
         const content = fs.readFileSync(abs);
         const sha256 = crypto.createHash("sha256").update(content).digest("hex");
         const mode = parseInt((stat.mode & 0o777).toString(8), 10);
