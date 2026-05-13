@@ -311,7 +311,89 @@ export function verifyTarball(tarballPath: string, expectedSha256: string): void
 }
 
 /**
- /**
+ * Deep-merge two plain objects. Values from `overrides` win over `base`.
+ * Arrays are replaced (not concatenated).
+ */
+function deepMerge(
+  base: Record<string, unknown>,
+  overrides: Record<string, unknown>
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...base };
+  for (const [key, val] of Object.entries(overrides)) {
+    if (
+      val !== null &&
+      typeof val === 'object' &&
+      !Array.isArray(val) &&
+      typeof base[key] === 'object' &&
+      base[key] !== null &&
+      !Array.isArray(base[key])
+    ) {
+      result[key] = deepMerge(
+        base[key] as Record<string, unknown>,
+        val as Record<string, unknown>
+      );
+    } else {
+      result[key] = val;
+    }
+  }
+  return result;
+}
+
+/**
+ * Compute a partial object containing only keys that differ between base and live.
+ */
+function diffObjects(
+  base: Record<string, unknown>,
+  live: Record<string, unknown>
+): Record<string, unknown> {
+  const patches: Record<string, unknown> = {};
+  for (const key of new Set([...Object.keys(base), ...Object.keys(live)])) {
+    if (JSON.stringify(base[key]) !== JSON.stringify(live[key])) {
+      patches[key] = live[key];
+    }
+  }
+  return patches;
+}
+
+/**
+ * Three-way merge for openclaw.json:
+ *   result = deepMerge(incoming, live − base)
+ *
+ * incoming = new rendered config from tarball
+ * live     = current on-disk config (may have operator patches)
+ * base     = what fleetmind last rendered (.openclaw/openclaw.base.json)
+ *
+ * Operator patches (live keys that differ from base) are preserved on top
+ * of the incoming rendered config. If no base exists (first push), incoming
+ * wins entirely. Returns merged config with transient _patched=true when
+ * patches were applied.
+ */
+export function mergeOpenClawConfig(
+  incomingPath: string,
+  livePath: string,
+  workspaceDir: string
+): Record<string, unknown> {
+  const incoming = JSON.parse(fs.readFileSync(incomingPath, 'utf-8')) as Record<string, unknown>;
+
+  const basePath = path.join(workspaceDir, '.openclaw', 'openclaw.base.json');
+  if (!fs.existsSync(basePath) || !fs.existsSync(livePath)) {
+    return incoming;
+  }
+
+  const base = JSON.parse(fs.readFileSync(basePath, 'utf-8')) as Record<string, unknown>;
+  const live = JSON.parse(fs.readFileSync(livePath, 'utf-8')) as Record<string, unknown>;
+
+  const patches = diffObjects(base, live);
+  if (Object.keys(patches).length === 0) {
+    return incoming;
+  }
+
+  const merged = deepMerge(incoming, patches);
+  (merged as Record<string, unknown>)._patched = true;
+  return merged;
+}
+
+/**
  * Apply diff: copy added/modified from staging to workspace.
  * Uses atomic .new → rename for modified files.
  *
@@ -341,8 +423,15 @@ export function applyDiff(
     fs.mkdirSync(path.dirname(dest), { recursive: true });
 
     if (incoming.path === ".openclaw/openclaw.json") {
-      // OpenClaw handles config reload separately; direct write
-      fs.copyFileSync(src, dest);
+      // Three-way merge: incoming (rendered) + (live - base) = merged.
+      // Operator patches applied via 'openclaw config patch' survive pushes.
+      const merged = mergeOpenClawConfig(src, dest, workspaceDir);
+      fs.writeFileSync(dest, JSON.stringify(merged, null, 2));
+      if (merged._patched) {
+        log.dim(`    ℹ live config patches preserved (see .openclaw/openclaw.base.json for base)`);
+        delete (merged as Record<string, unknown>)._patched;
+        fs.writeFileSync(dest, JSON.stringify(merged, null, 2));
+      }
     } else {
       const tmp = `${dest}.new`;
       fs.copyFileSync(src, tmp);

@@ -168,11 +168,15 @@ export function buildStagingDir(
     copyDirSync(renderedWorkspaceDir, staging);
   }
 
-  // Copy openclaw.json into .openclaw/
+  // Copy openclaw.json into .openclaw/ AND a .openclaw/openclaw.base.json snapshot.
+  // pull-self uses the base to compute (live - base) = operator config patches,
+  // then merges those patches on top of the incoming rendered config so live
+  // config changes (e.g. from 'openclaw config patch' in chat) survive pushes.
   if (fs.existsSync(renderedOcJsonPath)) {
     const oclawDir = path.join(staging, ".openclaw");
     fs.mkdirSync(oclawDir, { recursive: true });
     fs.copyFileSync(renderedOcJsonPath, path.join(oclawDir, "openclaw.json"));
+    fs.copyFileSync(renderedOcJsonPath, path.join(oclawDir, "openclaw.base.json"));
   }
 
   return staging;
