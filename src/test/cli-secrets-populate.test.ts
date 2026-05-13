@@ -9,6 +9,9 @@
  *   - --agent filter works
  *   - --from env file is loaded correctly
  *   - Anthropic key resolution (per-agent → field → fleet-wide fallback)
+ *   - signing_secret is optional (not needed for socket-mode)
+ *   - populate does NOT prompt for SLACK_SIGNING_SECRET
+ *   - fleet.yaml without signing_secret parses cleanly
  */
 
 import assert from "node:assert/strict";
@@ -74,22 +77,19 @@ describe("resolveSlack", () => {
   const env = {
     CONDUCTOR_BOT_TOKEN: "xoxb-bot",
     CONDUCTOR_APP_TOKEN: "xapp-app",
-    CONDUCTOR_SIGNING_SECRET: "signingsecret123",
   };
 
   const slack = {
     account_id: "conductor",
     bot_token: "${CONDUCTOR_BOT_TOKEN}",
     app_token: "${CONDUCTOR_APP_TOKEN}",
-    signing_secret: "${CONDUCTOR_SIGNING_SECRET}",
   };
 
-  test("resolves all three Slack fields when env vars are set", () => {
+  test("resolves all Slack fields when env vars are set", () => {
     const res = resolveSlack("conductor", slack, env);
     assert.equal(res.ok, true);
     assert.equal(res.values.SLACK_BOT_TOKEN, "xoxb-bot");
     assert.equal(res.values.SLACK_APP_TOKEN, "xapp-app");
-    assert.equal(res.values.SLACK_SIGNING_SECRET, "signingsecret123");
     assert.deepEqual(res.missing, []);
   });
 
@@ -98,14 +98,13 @@ describe("resolveSlack", () => {
     assert.equal(res.ok, false);
     assert.ok(res.missing.includes("CONDUCTOR_BOT_TOKEN"));
     assert.ok(res.missing.includes("CONDUCTOR_APP_TOKEN"));
-    assert.ok(res.missing.includes("CONDUCTOR_SIGNING_SECRET"));
   });
 
   test("partial resolution — only missing vars reported", () => {
     const partialEnv = { CONDUCTOR_BOT_TOKEN: "xoxb-bot" };
     const res = resolveSlack("conductor", slack, partialEnv);
     assert.equal(res.ok, false);
-    assert.equal(res.missing.length, 2);
+    assert.equal(res.missing.length, 1);
     assert.ok(res.missing.includes("CONDUCTOR_APP_TOKEN"));
   });
 
@@ -114,11 +113,18 @@ describe("resolveSlack", () => {
       account_id: "test",
       bot_token: "xoxb-literal",
       app_token: "xapp-literal",
-      signing_secret: "literal-secret",
     };
     const res = resolveSlack("test", literalSlack, {});
     assert.equal(res.ok, true);
     assert.equal(res.values.SLACK_BOT_TOKEN, "xoxb-literal");
+  });
+
+  test("does not resolve SLACK_SIGNING_SECRET (not needed for socket-mode)", () => {
+    const envWithSecret = { ...env, CONDUCTOR_SIGNING_SECRET: "should-be-ignored" };
+    const res = resolveSlack("conductor", slack, envWithSecret);
+    assert.equal(res.ok, true);
+    assert.equal((res.values as Record<string, unknown>)["SLACK_SIGNING_SECRET"], undefined,
+      "SLACK_SIGNING_SECRET must not appear in resolved values");
   });
 });
 
@@ -237,7 +243,7 @@ describe("populateSecrets dry-run", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fm-fleet-"));
     fleetFile = path.join(tmpDir, "fleet.yaml");
 
-    // Write a minimal fleet.yaml
+    // Write a minimal fleet.yaml (no signing_secret — not needed for socket-mode)
     fs.writeFileSync(fleetFile, `
 fleet:
   name: test-fleet
@@ -254,14 +260,12 @@ agents:
         account_id: conductor
         bot_token: "\${CONDUCTOR_BOT_TOKEN}"
         app_token: "\${CONDUCTOR_APP_TOKEN}"
-        signing_secret: "\${CONDUCTOR_SIGNING_SECRET}"
     - id: forge
       name: Forge
       slack:
         account_id: forge
         bot_token: "\${FORGE_BOT_TOKEN}"
         app_token: "\${FORGE_APP_TOKEN}"
-        signing_secret: "\${FORGE_SIGNING_SECRET}"
 `);
   });
 
@@ -279,8 +283,8 @@ agents:
     // Set all required env vars
     const savedEnv: Record<string, string | undefined> = {};
     const vars = [
-      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET",
-      "FORGE_BOT_TOKEN", "FORGE_APP_TOKEN", "FORGE_SIGNING_SECRET",
+      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN",
+      "FORGE_BOT_TOKEN", "FORGE_APP_TOKEN",
       "ANTHROPIC_API_KEY",
     ];
     for (const v of vars) {
@@ -315,7 +319,7 @@ agents:
 
   test("constructs correct secret name with fleet_name prefix", async () => {
     const savedEnv: Record<string, string | undefined> = {};
-    const vars = ["CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET", "ANTHROPIC_API_KEY"];
+    const vars = ["CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "ANTHROPIC_API_KEY"];
     for (const v of vars) {
       savedEnv[v] = process.env[v];
       process.env[v] = `val-${v}`;
@@ -336,6 +340,45 @@ agents:
         if (savedEnv[v] === undefined) delete process.env[v];
         else process.env[v] = savedEnv[v];
       }
+    }
+  });
+
+  test("fleet.yaml with signing_secret still parses (backward compat — field is optional/ignored)", async () => {
+    const tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), "fm-compat-"));
+    const legacyFleet = path.join(tmpDir2, "fleet.yaml");
+    fs.writeFileSync(legacyFleet, `
+fleet:
+  name: legacy-fleet
+delegation:
+  enabled: false
+  aws_region: us-west-2
+agents:
+  defaults:
+    model: anthropic/claude-haiku-4
+  list:
+    - id: conductor
+      name: Conductor
+      slack:
+        account_id: conductor
+        bot_token: "\${CONDUCTOR_BOT_TOKEN}"
+        app_token: "\${CONDUCTOR_APP_TOKEN}"
+        signing_secret: "\${CONDUCTOR_SIGNING_SECRET}"
+`);
+
+    const savedEnv: Record<string, string | undefined> = {};
+    const vars = ["CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET", "ANTHROPIC_API_KEY"];
+    for (const v of vars) { savedEnv[v] = process.env[v]; process.env[v] = `val-${v}`; }
+
+    try {
+      // Should NOT throw — signing_secret is accepted but ignored
+      const results = await populateSecrets({ fleet: legacyFleet, dryRun: true, agent: ["conductor"] });
+      assert.equal(results.length, 2, "conductor produces 2 results even with signing_secret present in yaml");
+      assert.ok(results.every((r) => r.ok));
+    } finally {
+      for (const v of vars) {
+        if (savedEnv[v] === undefined) delete process.env[v]; else process.env[v] = savedEnv[v];
+      }
+      fs.rmSync(tmpDir2, { recursive: true, force: true });
     }
   });
 
@@ -362,7 +405,7 @@ agents:
 
   test("--agent filter restricts to specified agents", async () => {
     const savedEnv: Record<string, string | undefined> = {};
-    const vars = ["CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET", "ANTHROPIC_API_KEY"];
+    const vars = ["CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "ANTHROPIC_API_KEY"];
     for (const v of vars) {
       savedEnv[v] = process.env[v];
       process.env[v] = `val-${v}`;
@@ -391,13 +434,12 @@ agents:
     fs.writeFileSync(envFile, [
       "CONDUCTOR_BOT_TOKEN=xoxb-from-file",
       "CONDUCTOR_APP_TOKEN=xapp-from-file",
-      "CONDUCTOR_SIGNING_SECRET=secret-from-file",
       "ANTHROPIC_API_KEY=sk-ant-from-file",
     ].join("\n"));
 
     // Make sure these are NOT in process.env
     const savedVars: Record<string, string | undefined> = {};
-    for (const v of ["CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET", "ANTHROPIC_API_KEY"]) {
+    for (const v of ["CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "ANTHROPIC_API_KEY"]) {
       savedVars[v] = process.env[v];
       delete process.env[v];
     }
@@ -452,14 +494,12 @@ agents:
         account_id: conductor
         bot_token: "\${CONDUCTOR_BOT_TOKEN}"
         app_token: "\${CONDUCTOR_APP_TOKEN}"
-        signing_secret: "\${CONDUCTOR_SIGNING_SECRET}"
     - id: forge
       name: Forge
       slack:
         account_id: forge
         bot_token: "\${FORGE_BOT_TOKEN}"
         app_token: "\${FORGE_APP_TOKEN}"
-        signing_secret: "\${FORGE_SIGNING_SECRET}"
 `);
   });
 
@@ -498,8 +538,8 @@ agents:
   // ── Test 1: env-set credentials are used silently (no prompt) ────────────────
   test("skips prompt for credentials already in env", async () => {
     const allVars = [
-      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET",
-      "FORGE_BOT_TOKEN", "FORGE_APP_TOKEN", "FORGE_SIGNING_SECRET",
+      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN",
+      "FORGE_BOT_TOKEN", "FORGE_APP_TOKEN",
       "ANTHROPIC_API_KEY",
     ];
     const saved = clearVars(allVars);
@@ -531,16 +571,15 @@ agents:
   // ── Test 2: prompts fired for missing credentials ─────────────────────────────
   test("prompts for missing credentials and uses supplied input", async () => {
     const allVars = [
-      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET",
+      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN",
       "ANTHROPIC_API_KEY",
     ];
     const saved = clearVars(allVars);
 
-    // Provide answers for the 4 missing conductor fields (3 slack + 1 anthropic)
+    // Provide answers for the 3 missing conductor fields (2 slack + 1 anthropic)
     const promptFn = makePromptStub([
       "xoxb-conductor-bot",
       "xapp-conductor-app",
-      "conductor-signing",
       "sk-ant-conductor",
     ]);
 
@@ -556,6 +595,8 @@ agents:
 
       assert.equal(results.length, 2, "conductor should produce 2 results");
       assert.ok(results.every((r) => r.ok), "all results should be ok");
+      // SLACK_SIGNING_SECRET must not appear in the pushed secret payload
+      // (verified indirectly: only 3 prompts fired, none for signing_secret)
     } finally {
       restoreVars(saved);
     }
@@ -564,7 +605,7 @@ agents:
   // ── Test 3: empty input re-prompts ────────────────────────────────────────────
   test("re-prompts on empty input until a value is supplied", async () => {
     const allVars = [
-      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET",
+      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN",
       "ANTHROPIC_API_KEY",
     ];
     const saved = clearVars(allVars);
@@ -574,7 +615,6 @@ agents:
       "",                       // empty → should re-prompt
       "xoxb-real-bot-token",   // real value
       "xapp-app",
-      "signing-secret",
       "sk-ant-key",
     ]);
 
@@ -598,8 +638,8 @@ agents:
   // ── Test 4: confirmation summary lists all agent×secret ──────────────────────
   test("confirmation summary lists every agent/secret combination", async () => {
     const allVars = [
-      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET",
-      "FORGE_BOT_TOKEN", "FORGE_APP_TOKEN", "FORGE_SIGNING_SECRET",
+      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN",
+      "FORGE_BOT_TOKEN", "FORGE_APP_TOKEN",
       "ANTHROPIC_API_KEY",
     ];
     const saved = clearVars(allVars);
@@ -634,13 +674,13 @@ agents:
   // ── Test 5: --interactive + --dry-run runs prompts but skips AWS ──────────────
   test("--interactive --dry-run runs prompts, shows summary, skips AWS", async () => {
     const allVars = [
-      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET",
+      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN",
       "ANTHROPIC_API_KEY",
     ];
     const saved = clearVars(allVars);
 
     const promptFn = makePromptStub([
-      "xoxb-bot", "xapp-app", "signing", "sk-ant-key",
+      "xoxb-bot", "xapp-app", "sk-ant-key",
     ]);
 
     let confirmCalled = false;
@@ -670,14 +710,14 @@ agents:
   // ── Test 6: --agent filter skips other agents' prompts ───────────────────────
   test("--agent filter: only prompts for the specified agent", async () => {
     const allVars = [
-      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET",
-      "FORGE_BOT_TOKEN", "FORGE_APP_TOKEN", "FORGE_SIGNING_SECRET",
+      "CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN",
+      "FORGE_BOT_TOKEN", "FORGE_APP_TOKEN",
       "ANTHROPIC_API_KEY",
     ];
     const saved = clearVars(allVars);
 
     const promptedFor: string[] = [];
-    const answers = ["xoxb-bot", "xapp-app", "signing", "sk-ant-key"];
+    const answers = ["xoxb-bot", "xapp-app", "sk-ant-key"];
     const promptFn = async (p: string) => {
       promptedFor.push(p);
       return answers.shift() ?? "";
@@ -709,7 +749,7 @@ agents:
 
   // ── Test 7: confirmation "y" proceeds to push (dry-run verifies) ──────────────
   test("confirmation 'y' proceeds; 'n' aborts", async () => {
-    const allVars = ["CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET", "ANTHROPIC_API_KEY"];
+    const allVars = ["CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "ANTHROPIC_API_KEY"];
     const saved = clearVars(allVars);
     for (const v of allVars) process.env[v] = `val-${v.toLowerCase()}`;
 
@@ -750,11 +790,10 @@ agents:
     fs.writeFileSync(envFile, [
       "CONDUCTOR_BOT_TOKEN=xoxb-from-file",
       "CONDUCTOR_APP_TOKEN=xapp-from-file",
-      "CONDUCTOR_SIGNING_SECRET=secret-from-file",
       "ANTHROPIC_API_KEY=sk-ant-from-file",
     ].join("\n"));
 
-    const allVars = ["CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "CONDUCTOR_SIGNING_SECRET", "ANTHROPIC_API_KEY"];
+    const allVars = ["CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "ANTHROPIC_API_KEY"];
     const saved = clearVars(allVars);
 
     const promptCalls: string[] = [];
@@ -774,6 +813,46 @@ agents:
       assert.equal(promptCalls.length, 0, "no prompts should fire when --from provides all values");
       assert.equal(results.length, 2, "should have 2 results");
       assert.ok(results.every((r) => r.ok));
+    } finally {
+      restoreVars(saved);
+    }
+  });
+
+  // ── Test 9: interactive populate never prompts for SLACK_SIGNING_SECRET ────────────
+  test("interactive mode never prompts for SLACK_SIGNING_SECRET", async () => {
+    // signing_secret is not needed for socket-mode — populate must not ask for it
+    const allVars = ["CONDUCTOR_BOT_TOKEN", "CONDUCTOR_APP_TOKEN", "ANTHROPIC_API_KEY"];
+    const saved = clearVars(allVars);
+
+    const promptedLabels: string[] = [];
+    const promptFn = makePromptStub(["xoxb-bot", "xapp-app", "sk-ant-key"]);
+    const trackingPromptFn = async (p: string) => {
+      promptedLabels.push(p);
+      return promptFn(p);
+    };
+
+    try {
+      const results = await populateSecrets({
+        fleet: fleetFile,
+        dryRun: true,
+        agent: ["conductor"],
+        interactive: true,
+        promptFn: trackingPromptFn,
+        confirmFn: makeConfirmStub(true),
+      });
+
+      assert.equal(results.length, 2, "should produce 2 results");
+      assert.ok(results.every((r) => r.ok));
+
+      // Verify no prompt mentioned signing_secret or SLACK_SIGNING_SECRET
+      const signingPrompt = promptedLabels.find((p) =>
+        p.toLowerCase().includes("signing") || p.toUpperCase().includes("SIGNING_SECRET")
+      );
+      assert.equal(
+        signingPrompt,
+        undefined,
+        `populate must not prompt for signing_secret; got: ${signingPrompt}`
+      );
     } finally {
       restoreVars(saved);
     }

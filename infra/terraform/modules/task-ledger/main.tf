@@ -677,7 +677,13 @@ resource "aws_cloudwatch_event_rule" "ddb_terminal" {
   tags = local.base_tags
 }
 
+# Gated on wake_target_session_key being non-empty. Operator can apply the
+# initial fleet infrastructure first, create Slack apps + channels (needed to
+# fill the channel_id in the session key), then re-apply with the real key to
+# attach the SSM target. Without this gating, the input_transformer would embed
+# an empty string and break the wake script at runtime.
 resource "aws_cloudwatch_event_target" "ddb_terminal_ssm" {
+  count    = var.wake_target_session_key != "" ? 1 : 0
   rule     = aws_cloudwatch_event_rule.ddb_terminal.name
   arn      = "arn:aws:ssm:${local.region}::document/AWS-RunShellScript"
   role_arn = aws_iam_role.eventbridge_ssm.arn

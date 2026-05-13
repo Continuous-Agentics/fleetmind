@@ -53,12 +53,13 @@ resource "aws_instance" "agent" {
   }
 
   user_data = templatefile("${path.module}/user_data/agent_bootstrap.sh.tpl", {
-    fleet_name       = var.fleet_name
-    agent_id         = each.key
-    agent_port       = each.value.port
-    openclaw_version = var.openclaw_version
-    node_version     = var.node_version
-    aws_region       = var.aws_region
+    fleet_name        = var.fleet_name
+    agent_id          = each.key
+    agent_port        = each.value.port
+    openclaw_version  = var.openclaw_version
+    node_version      = var.node_version
+    aws_region        = var.aws_region
+    fleetmind_version = var.fleetmind_version
   })
 
   user_data_replace_on_change = true

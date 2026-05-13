@@ -25,12 +25,73 @@ const ROLE_TEMPLATE_DIR: Record<string, string> = {
   "worker": "openclaw/worker-bot/workspace",
 };
 
-function applyPlaceholders(text: string, agent: AgentConfig): string {
-  return text
+// =============================================================================
+// Fleet roster helpers
+// =============================================================================
+
+const ROLE_LABELS: Record<string, string> = {
+  "pm": "PM (orchestrator)",
+  "backend-worker": "Backend worker",
+  "frontend-worker": "Frontend worker",
+  "worker": "Worker",
+};
+
+function roleLabel(role: string | undefined): string {
+  return ROLE_LABELS[role ?? "worker"] ?? "Worker";
+}
+
+/**
+ * Generate the `## Fleet Members` markdown section for a given agent.
+ * Lists all other agents in the fleet (not self).
+ */
+export function buildFleetRoster(fleet: Fleet, currentAgent: AgentConfig): string {
+  const peers = fleet.agents.list.filter((a) => a.id !== currentAgent.id);
+
+  if (peers.length === 0) {
+    return [
+      "## Fleet Members",
+      "",
+      `You are a solo bot in the **${fleet.fleet.name}** fleet. No peer bots configured today.`,
+      "",
+    ].join("\n");
+  }
+
+  const lines: string[] = [
+    "## Fleet Members",
+    "",
+    `You are part of the **${fleet.fleet.name}** fleet. Your peers:`,
+    "",
+  ];
+
+  for (const peer of peers) {
+    const userId = peer.slack?.bot_user_id ?? "TODO (run fleetmind slack discover)";
+    const channels = (peer.slack?.channels ?? []).join(", ") || "(none configured)";
+    const label = roleLabel(peer.role);
+    lines.push(`- **${peer.name}** (${peer.emoji ?? ""}) — ${peer.description ?? ""}`);
+    lines.push(`  - Slack user: \`${userId}\` (mention: \`<@${userId}>\`)`);
+    lines.push(`  - Operates in: ${channels}`);
+    lines.push(`  - Role: ${label}`);
+    lines.push("");
+  }
+
+  lines.push("Use this roster when delegating, replying, or coordinating across channels.");
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+function applyPlaceholders(text: string, agent: AgentConfig, fleet?: Fleet): string {
+  let result = text
     .replaceAll("{{NAME}}", agent.name)
     .replaceAll("{{EMOJI}}", agent.emoji ?? "")
     .replaceAll("{{DESCRIPTION}}", agent.description ?? "")
     .replaceAll("{{SOUL_BODY}}", agent.persona?.soul ?? "");
+
+  if (fleet !== undefined) {
+    result = result.replaceAll("{{FLEET_ROSTER}}", buildFleetRoster(fleet, agent));
+  }
+
+  return result;
 }
 
 function readRoleTemplate(role: string, filename: string): string | null {
@@ -243,19 +304,19 @@ export async function provisionAgent(
 
   const soulTemplate = readRoleTemplate(role, "SOUL.md");
   const soulContent = soulTemplate !== null
-    ? applyPlaceholders(soulTemplate, agent)
+    ? applyPlaceholders(soulTemplate, agent, fleet)
     : soulMd(agent);
   writeFile(path.join(workspace, "SOUL.md"), soulContent, dryRun);
 
   const agentsTemplate = readRoleTemplate(role, "AGENTS.md");
   const agentsContent = agentsTemplate !== null
-    ? applyPlaceholders(agentsTemplate, agent)
+    ? applyPlaceholders(agentsTemplate, agent, fleet)
     : agentsMd(agent);
   writeFile(path.join(workspace, "AGENTS.md"), agentsContent, dryRun);
 
   const identityTemplate = readRoleTemplate(role, "IDENTITY.md");
   const identityContent = identityTemplate !== null
-    ? applyPlaceholders(identityTemplate, agent)
+    ? applyPlaceholders(identityTemplate, agent, fleet)
     : identityMd(agent);
   writeFile(path.join(workspace, "IDENTITY.md"), identityContent, dryRun);
 

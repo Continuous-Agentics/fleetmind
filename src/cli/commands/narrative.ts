@@ -2,22 +2,22 @@
  * fleetmind narrative — read/write task narrative content to S3
  *
  * Usage:
- *   fleetmind narrative get --task-id <hex>
- *   fleetmind narrative put --task-id <hex>   (reads stdin)
+ *   fleetmind narrative get --task-id <hex> [--json]
+ *   fleetmind narrative put --task-id <hex> --event <shipped|blocked|update>  (reads stdin)
  *
  * The s3_key is resolved from the DynamoDB task record (single GetItem call).
  * Requires delegation.enabled + delegation.table_name + delegation.s3_bucket.
  */
 
 import { Command } from "commander";
-import { loadFleet } from "../../config/loader.js";
+import { resolveAndLoadFleet } from "../../config/loader.js";
 import { TaskLedger } from "../../runtime/delegation/ddb.js";
 import { NarrativeStore } from "../../runtime/delegation/s3.js";
 import { log } from "../../utils/log.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function makeLedger(fleet: ReturnType<typeof loadFleet>): TaskLedger {
+function makeLedger(fleet: ReturnType<typeof resolveAndLoadFleet>): TaskLedger {
   const d = fleet.delegation;
   if (!d?.enabled || !d.table_name) {
     log.error("Delegation is not enabled. Set delegation.enabled = true and delegation.table_name in fleet.yaml.");
@@ -26,7 +26,7 @@ function makeLedger(fleet: ReturnType<typeof loadFleet>): TaskLedger {
   return new TaskLedger({ tableName: d.table_name, region: d.aws_region });
 }
 
-function makeNarrativeStore(fleet: ReturnType<typeof loadFleet>): NarrativeStore {
+function makeNarrativeStore(fleet: ReturnType<typeof resolveAndLoadFleet>): NarrativeStore {
   const d = fleet.delegation;
   if (!d?.enabled || !d.s3_bucket) {
     log.error("Delegation is not enabled. Set delegation.enabled = true and delegation.s3_bucket in fleet.yaml.");
@@ -59,9 +59,12 @@ export function registerNarrative(program: Command): void {
     .command("get")
     .description("Print the narrative .md for a task to stdout")
     .requiredOption("--task-id <hex>", "Task ID (8-char hex)")
-    .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
-    .action(async (opts: { taskId: string; fleet: string }) => {
-      const fleet = loadFleet(opts.fleet);
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
+    .option("--region <region>", "AWS region override")
+    .option("--json", "Output JSON object with task_id, project, narrative, last_modified")
+    .action(async (opts: { taskId: string; fleet?: string; region?: string; json?: boolean }) => {
+      if (opts.region) process.env["AWS_REGION"] = opts.region;
+      const fleet = resolveAndLoadFleet(opts.fleet);
       const ledger = makeLedger(fleet);
       const store = makeNarrativeStore(fleet);
 
@@ -71,13 +74,22 @@ export function registerNarrative(program: Command): void {
         process.exit(1);
       }
 
-      const body = await store.getNarrative(record.task_s3_key);
-      if (body === undefined) {
+      const result = await store.getNarrativeWithMeta(record.task_s3_key);
+      if (result === undefined) {
         log.warn(`Narrative not yet available for task ${opts.taskId} (key: ${record.task_s3_key})`);
         process.exit(1);
       }
 
-      process.stdout.write(body);
+      if (opts.json) {
+        console.log(JSON.stringify({
+          task_id: opts.taskId,
+          project: record.project,
+          narrative: result.body,
+          last_modified: result.lastModified,
+        }, null, 2));
+      } else {
+        process.stdout.write(result.body);
+      }
     });
 
   // ── put ──────────────────────────────────────────────────────────────────
@@ -86,10 +98,19 @@ export function registerNarrative(program: Command): void {
     .command("put")
     .description("Write a narrative .md for a task from stdin")
     .requiredOption("--task-id <hex>", "Task ID (8-char hex)")
-    .option("--event <name>", "Event name for local fallback filename (shipped|blocked)", "event")
-    .option("--fleet <file>", "fleet.yaml path", "fleet.yaml")
-    .action(async (opts: { taskId: string; event: string; fleet: string }) => {
-      const fleet = loadFleet(opts.fleet);
+    .requiredOption("--event <event>", "Event type: shipped|blocked|update")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
+    .option("--region <region>", "AWS region override")
+    .action(async (opts: { taskId: string; event: string; fleet?: string; region?: string }) => {
+      // Validate event value
+      const validEvents = ["shipped", "blocked", "update"];
+      if (!validEvents.includes(opts.event)) {
+        log.error(`Invalid --event value '${opts.event}'. Must be one of: ${validEvents.join(", ")}`);
+        process.exit(1);
+      }
+
+      if (opts.region) process.env["AWS_REGION"] = opts.region;
+      const fleet = resolveAndLoadFleet(opts.fleet);
       const ledger = makeLedger(fleet);
       const store = makeNarrativeStore(fleet);
 
@@ -112,7 +133,7 @@ export function registerNarrative(program: Command): void {
 
       const result = await store.putNarrative(record.task_s3_key, body, {
         taskId: opts.taskId,
-        fallbackEvent: opts.event,
+        event: opts.event,
       });
 
       if (result.ok) {
@@ -120,6 +141,7 @@ export function registerNarrative(program: Command): void {
       } else {
         log.warn(`S3 write failed. Narrative saved locally at ${result.fallback}`);
         log.warn("Retry the S3 write on the next heartbeat.");
+        // Exit 2 as spec requires — the bot-reception skill checks $? -eq 2
         process.exit(2);
       }
     });

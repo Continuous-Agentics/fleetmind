@@ -20,13 +20,16 @@ terraform {
   #     --key-schema AttributeName=LockID,KeyType=HASH \
   #     --billing-mode PAY_PER_REQUEST
   #
-  # backend "s3" {
-  #   bucket         = "fleetmind-tfstate"
-  #   key            = "fleetmind/terraform.tfstate"
-  #   region         = "us-east-1"
-  #   dynamodb_table = "fleetmind-tfstate-lock"
-  #   encrypt        = true
-  # }
+  # Remote state — partial config. Operator provides bucket, region,
+  # dynamodb_table via -backend-config flags or a local backend.hcl file.
+  # See backend.example.hcl in this directory + docs/MULTI-FLEET.md.
+  #
+  # The `key` argument is intentionally omitted: Terraform workspaces auto-prefix
+  # state files with `env:/<workspace>/`, so the workspace itself isolates state
+  # across fleets. Run `terraform workspace new <fleet-name>` per fleet.
+  backend "s3" {
+    encrypt = true
+  }
 }
 
 provider "aws" {

@@ -58,16 +58,48 @@ export function renderAgentOpenClawJson(
     },
   ];
 
-  // Slack accounts — only this agent's account
+  // Slack accounts — only this agent's account (no groupPolicy here; it lives at top level)
   const slackAccounts: Record<string, unknown> = {
     [agent.slack.account_id]: {
       enabled: true,
       botToken: agent.slack.bot_token,
       appToken: agent.slack.app_token,
       webhookPath: `/slack/${agent.slack.account_id}`,
-      groupPolicy: "open",
     },
   };
+
+  // Per-channel config — derive inter-bot users allowlists
+  // For each channel this agent operates in, find all OTHER agents that share it
+  // and collect their bot_user_id values for the users allowlist.
+  const perChannelEntries: Record<string, unknown> = {};
+  const agentChannels = agent.slack.channels ?? [];
+  for (let i = 0; i < agentChannels.length; i++) {
+    const channelId = agentChannels[i]!;
+    const requireMention = i > 0; // first channel = home, always responsive
+    const botUserIds: string[] = [];
+    for (const other of agents.list) {
+      if (other.id === agentId) continue;
+      const otherChannels = other.slack.channels ?? [];
+      if (!otherChannels.includes(channelId)) continue;
+      if (!other.slack.bot_user_id) {
+        process.stderr.write(
+          `[fleetmind renderer] WARNING: agent "${other.id}" shares channel ${channelId} with "${agentId}" but has no bot_user_id — skipping bot-specific users allowlist entry for that agent.\n`
+        );
+        continue;
+      }
+      botUserIds.push(other.slack.bot_user_id);
+    }
+    // Always include "*" wildcard so human users are never blocked by the per-channel
+    // users allowlist. OpenClaw's authorizeSlackBotRoomMessage filters out "*" from the
+    // bot-identity check, so only bot messages gate on the specific user_ids listed.
+    const usersList = [...botUserIds, "*"];
+    perChannelEntries[channelId] = {
+      allowBots: true,
+      enabled: true,
+      requireMention,
+      users: usersList,
+    };
+  }
 
   // agentToAgent allow list — array of target agent-id strings (per OpenClaw config schema).
   // The per-agent slice already contains only THIS agent's send targets from fleet.yaml,
@@ -103,10 +135,15 @@ export function renderAgentOpenClawJson(
     session: {
       dmScope: oc.session.dm_scope,
     },
+    messages: {
+      visibleReplies: "automatic",
+      groupChat: { visibleReplies: "automatic" },
+    },
     channels: {
       slack: {
         mode: oc.slack.mode,
         enabled: true,
+        groupPolicy: "allowlist",
         typingReaction: oc.slack.typing_reaction,
         ackReaction: oc.slack.ack_reaction,
         allowBots: oc.slack.allow_bots,
@@ -119,6 +156,7 @@ export function renderAgentOpenClawJson(
           channel: oc.slack.reply_to_mode_by_chat_type.channel,
         },
         accounts: slackAccounts,
+        ...(Object.keys(perChannelEntries).length > 0 ? { channels: perChannelEntries } : {}),
       },
     },
     gateway: {
@@ -184,7 +222,7 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
     },
   }));
 
-  // Slack accounts
+  // Slack accounts (no per-account groupPolicy; lives at top level as "allowlist")
   const slackAccounts: Record<string, unknown> = {};
   for (const agent of agents.list) {
     slackAccounts[agent.slack.account_id] = {
@@ -192,7 +230,6 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
       botToken: agent.slack.bot_token,
       appToken: agent.slack.app_token,
       webhookPath: `/slack/${agent.slack.account_id}`,
-      groupPolicy: "open",
     };
   }
 
@@ -239,10 +276,15 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
     session: {
       dmScope: oc.session.dm_scope,
     },
+    messages: {
+      visibleReplies: "automatic",
+      groupChat: { visibleReplies: "automatic" },
+    },
     channels: {
       slack: {
         mode: oc.slack.mode,
         enabled: true,
+        groupPolicy: "allowlist",
         typingReaction: oc.slack.typing_reaction,
         ackReaction: oc.slack.ack_reaction,
         allowBots: oc.slack.allow_bots,
@@ -292,6 +334,24 @@ export function renderTerraformVars(fleet: Fleet): string {
     })
     .join("\n");
 
+  // Derive wake_target_session_key from the PM (orchestrator) agent's first
+  // Slack channel. This is the channel the EventBridge wake target SSM-invokes
+  // when a terminal task event fires. Empty string when the orchestrator has
+  // no channels configured yet (e.g., first render before Slack apps exist) —
+  // the task-ledger module gates the event target on this being non-empty.
+  const pmAgent = fleet.agents.list.find((a) => a.orchestrator);
+  const pmChannels = pmAgent?.slack.channels ?? [];
+  const wakeKey =
+    pmAgent && pmChannels.length > 0
+      ? `agent:main:slack:channel:${pmChannels[0]}`
+      : "";
+
+  // Derive agent_orchestrators map from fleet.yaml. Drives task-ledger's IAM
+  // policy split (pm vs worker) and the wake target Name tag derivation.
+  const orchestratorEntries = fleet.agents.list
+    .map((a) => `  ${a.id} = ${a.orchestrator ? "true" : "false"}`)
+    .join("\n");
+
   const lines = [
     `# Auto-generated by FleetMind — do not edit manually`,
     `# Fleet: ${fleet.fleet.name} v${fleet.fleet.version}`,
@@ -304,8 +364,18 @@ export function renderTerraformVars(fleet: Fleet): string {
     agentModelEntries,
     `}`,
     ``,
+    `# PM (orchestrator) flag per agent — drives task-ledger IAM policy split.`,
+    `agent_orchestrators = {`,
+    orchestratorEntries,
+    `}`,
+    ``,
+    `# Wake target derived from the PM agent's first Slack channel. Used by the`,
+    `# task-ledger EventBridge target to SSM-invoke the PM on terminal task events.`,
+    `# Empty until the PM's slack.channels is populated in fleet.yaml.`,
+    `wake_target_session_key = "${wakeKey}"`,
+    ``,
     `# NOTE: agent_ports, instance_type, aws_region, and other infrastructure vars`,
-    `# are not derived from fleet.yaml — set them in terraform.tfvars manually.`,
+    `# are not derived from fleet.yaml — set them in your workspace tfvars manually.`,
     `# See infra/terraform/variables.tf for all available variables.`,
   ];
   return lines.join("\n") + "\n";
@@ -326,7 +396,7 @@ export function renderTerraformVars(fleet: Fleet): string {
  * `./rendered/openclaw.json` will silently produce the new per-agent layout
  * at `./rendered/openclaw/<agent_id>/openclaw.json` without any config change.
  */
-function resolveOpenClawBaseDir(ocJsonPath: string, baseDir: string): string {
+export function resolveOpenClawBaseDir(ocJsonPath: string, baseDir: string): string {
   const resolved = path.resolve(baseDir, ocJsonPath);
   if (resolved.endsWith(".json")) {
     return resolved.slice(0, -".json".length);

@@ -41,9 +41,16 @@ agents:
           the loop on every assignment.
       slack:
         account_id: conductor
+        bot_user_id: "U0B34DGUL1G"          # Conductor's Slack bot user_id (captured via auth.test)
+        channels: ["C0B2NNJEFKR", "C0B324RF1QW"]  # PM home + delegation channel
         bot_token: "${CONDUCTOR_BOT_TOKEN}"
         app_token: "${CONDUCTOR_APP_TOKEN}"
-        signing_secret: "${CONDUCTOR_SIGNING_SECRET}"
+        background_color: "#2C3E50"        # Slack App manifest display colour
+        long_description: >
+          Conductor is the project-manager bot for Grace's gg-sandbox test fleet (Continuous-Agentics/fleetmind).
+          It receives tasks from humans, delegates work to specialty worker bots (Forge), tracks tasks in a
+          DynamoDB ledger, and closes the loop on every delegation. Runs on dedicated EC2 in AWS account
+          251714435910 (us-west-2).
       skills:
         - name: bot-delegation
           source: fleetmind
@@ -69,9 +76,18 @@ agents:
           from Conductor (the PM bot) and ship them.
       slack:
         account_id: forge
+        # TODO: run `fleetmind secrets auth-test --agent forge` (or equivalent) to capture
+        # Forge's bot user_id from Slack auth.test, then fill in bot_user_id below.
+        # bot_user_id: "U_FORGE"
+        channels: ["C0B324RF1QW"]          # delegation channel only
         bot_token: "${FORGE_BOT_TOKEN}"
         app_token: "${FORGE_APP_TOKEN}"
-        signing_secret: "${FORGE_SIGNING_SECRET}"
+        background_color: "#8B4513"        # Slack App manifest display colour (role default)
+        long_description: >
+          Forge is the backend specialty worker bot for Grace's gg-sandbox test fleet
+          (Continuous-Agentics/fleetmind). It receives task envelopes from Conductor (the PM bot),
+          acknowledges with :eyes:, ships work back through a DynamoDB task ledger, and posts completion
+          summaries. Runs on dedicated EC2 in AWS account 251714435910 (us-west-2).
       skills:
         - name: bot-reception
           source: fleetmind
@@ -82,7 +98,10 @@ agents:
 
 outputs:
   openclaw_json: ./rendered/openclaw.json
-  terraform_vars: ./rendered/fleet.auto.tfvars
+  # Write directly into the Terraform directory so `*.auto.tfvars` is picked up
+  # by `terraform apply` automatically. This file is auto-loaded; operators
+  # don't need to pass it explicitly via -var-file.
+  terraform_vars: ./infra/terraform/fleet.auto.tfvars
 
 openclaw:
   gateway:

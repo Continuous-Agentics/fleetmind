@@ -86,6 +86,25 @@ If it fails with a network/permissions error: proceed with posting the envelope
 anyway, log the failure in `memory/active-delegations.md` (field:
 `ledger_write_failed: <reason>`), and retry on the next heartbeat.
 
+**Amending task metadata after delegation:**
+If the scope changes after a task is delegated (worker pushback, PM clarification, reassignment),
+use `fleetmind task update` instead of abandoning and recreating. Update history is preserved.
+
+```bash
+# Narrow the DoD after worker review
+fleetmind task update --task-id <hex> --dod "..." --reason "scope cut after worker review"
+
+# Reassign to a specialist
+fleetmind task update --task-id <hex> --worker <new-worker-id> --reason "specialist now available"
+
+# Fix a wrong thread URL
+fleetmind task update --task-id <hex> --thread "https://slack.com/archives/..."
+```
+
+Immutable fields (rejected by `task update`): `task_id`, `status`, `created_at`, `created_by`,
+and all transition timestamps (`accepted_at`, `shipped_at`, etc.). Terminal tasks (`merged`,
+`abandoned`) are frozen — update will exit 2 with `TaskConditionError`.
+
 **Picking the project slug:**
 - A project is a durable initiative, not a single task. "website-rewrite" is a
   project; "add-date-filter" is a delegation inside it.
@@ -260,6 +279,28 @@ For each stale task: post in the planning thread, update audit log to `escalated
 log for a task, retry `fleetmind task create` on this heartbeat.
 
 Quiet otherwise. No "everything's fine" pings.
+
+### 6.5. When a worker is blocked but the cause can be resolved
+
+`blocked` is NOT terminal-final — it's a pause state that can resume. When a
+worker reports blocked (envelope thread reply, or DDB heartbeat sees `status=
+blocked`), assess whether the cause is something you (or a human in the planning
+thread) can resolve:
+
+- *Auth gap, missing credential, missing dependency, infra glitch:* often
+  fixable in minutes. Resolve it, then either:
+  - **Prompt the worker to unblock themselves**: post in the delegation thread
+    "resolved — you can `fleetmind task unblock --task-id <hex> --worker <id>
+    --reason "..."` and resume", OR
+  - **Unblock on behalf of the worker** (operator decision): run
+    `fleetmind task unblock --task-id <hex> --worker <worker_id> --reason
+    "resolved by PM"` yourself. The worker's `task ack`/`ship` path continues to
+    work from `accepted`.
+- *Scope cut, missing requirement, design ambiguity:* not a transient blocker.
+  Treat as terminal blocked; close the loop normally (Step 7).
+
+If you unblock, leave a note in the planning thread audit log explaining what
+changed, so the trail remains for human review.
 
 ### 7. Close the loop
 

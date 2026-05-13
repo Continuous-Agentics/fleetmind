@@ -1,0 +1,137 @@
+# fleet-test-fleet-2.yaml — minimal viable test fleet for gg-sandbox (251714435910)
+# 1 PM (Blanket) + 1 worker (Charlie, backend specialty)
+#
+# Operator workflow:
+#   fleetmind slack manifests --fleet fleet-test-fleet-2.yaml --out ./rendered/slack-manifests-test-fleet-2/
+#   # → create Slack apps from generated manifests, capture channel IDs
+#   # → fill slack.channels[] below per agent
+#   fleetmind slack discover --fleet fleet-test-fleet-2.yaml   # fills bot_user_id from auth.test
+#   fleetmind render --fleet fleet-test-fleet-2.yaml           # → workspaces/test-fleet-2.auto.tfvars
+#   cd infra/terraform
+#   terraform workspace select test-fleet-2
+#   terraform apply \
+#     -var-file=workspaces/test-fleet-2.tfvars \
+#     -var-file=workspaces/test-fleet-2.auto.tfvars
+#   fleetmind secrets populate --fleet fleet-test-fleet-2.yaml --interactive
+#   fleetmind push fleet --fleet fleet-test-fleet-2.yaml --restart
+
+fleet:
+  name: fleet-test-2
+  version: "1.0.0"
+  client: "Continuous-Agentics"
+  description: "Test fleet on gg-sandbox — validate fleetmind end-to-end"
+
+delegation:
+  enabled: true
+  aws_region: us-west-2
+  table_name: fleet-test-2-tasks
+  s3_bucket: fleet-test-2-ledger        # matches TF module default ${fleet_name}-ledger
+
+agents:
+  defaults:
+    model: anthropic/claude-haiku-4-5
+    workspace_base: /opt/openclaw/workspace
+    plugins:
+      - anthropic
+
+  list:
+    - id: blanket
+      name: Blanket
+      emoji: 🐈
+      role: pm
+      description: "PM bot — Cat Overlord"
+      orchestrator: true
+      model: anthropic/claude-sonnet-4-6
+      persona:
+        soul: |
+          You are Blanket, the project-manager bot for the fleet-test-2 test fleet.
+          You delegate tasks to worker bots via the bot-delegation skill and close
+          the loop on every assignment.
+      slack:
+        account_id: blanket
+        # TODO: fill in after `fleetmind secrets populate` + `fleetmind slack discover`.
+        # bot_user_id: "U…"
+        channels: ["C0B3J7CT6RJ", "C0B3CGSNATG"]   # PM home + dev/delegation
+        bot_token: "${BLANKET_BOT_TOKEN}"
+        app_token: "${BLANKET_APP_TOKEN}"
+        background_color: "#2C3E50"
+        long_description: >
+          Blanket is the project-manager bot for Grace's fleet-test-2 test fleet
+          (Continuous-Agentics/fleetmind). It receives tasks from humans,
+          delegates work to specialty worker bots (Charlie), tracks tasks in a
+          DynamoDB ledger, and closes the loop on every delegation. Runs on
+          dedicated EC2 in AWS account 251714435910 (us-west-2).
+      skills:
+        - name: bot-delegation
+          source: fleetmind
+      agent_to_agent:
+        can_send_to: [charlie]
+      delegation:
+        worker_bots: [charlie]
+        sweeps:
+          - name: blanket-sweep-charlie
+            worker_id: charlie
+            every: 5m
+            model: anthropic/claude-haiku-4-5
+
+    - id: charlie
+      name: Charlie
+      emoji: ⚙️
+      role: backend-worker
+      description: "Backend worker — fleet-test-2"
+      orchestrator: false
+      persona:
+        soul: |
+          You are Charlie, a backend worker bot. You accept delegated tasks
+          from Blanket (the PM bot) and ship them.
+      slack:
+        account_id: charlie
+        # TODO: fill in after `fleetmind secrets populate` + `fleetmind slack discover`.
+        # bot_user_id: "U…"
+        channels: ["C0B3CGSNATG"]                  # dev/delegation channel only
+        bot_token: "${CHARLIE_BOT_TOKEN}"
+        app_token: "${CHARLIE_APP_TOKEN}"
+        background_color: "#8B4513"
+        long_description: >
+          Charlie is the backend specialty worker bot for Grace's fleet-test-2
+          test fleet (Continuous-Agentics/fleetmind). It receives task envelopes
+          from Blanket (the PM bot), acknowledges with :eyes:, ships work back
+          through a DynamoDB task ledger, and posts completion summaries. Runs
+          on dedicated EC2 in AWS account 251714435910 (us-west-2).
+      skills:
+        - name: bot-reception
+          source: fleetmind
+      agent_to_agent:
+        can_send_to: [blanket]
+      delegation:
+        specialty: backend
+
+outputs:
+  openclaw_json: ./rendered/openclaw-fleet-test-2.json
+  # Per-workspace path. Renderer writes here; operator passes via -var-file
+  # alongside workspaces/test-fleet-2.tfvars at apply time.
+  terraform_vars: ./infra/terraform/workspaces/test-fleet-2.auto.tfvars
+
+openclaw:
+  gateway:
+    port: 18789
+    mode: local
+    bind: loopback
+  session:
+    dm_scope: per-channel-peer
+  tools:
+    profile: coding
+    web_search:
+      enabled: false
+      provider: duckduckgo
+  slack:
+    mode: socket
+    typing_reaction: black_cat
+    ack_reaction: eyes
+    allow_bots: true
+    history_limit: 50
+    streaming:
+      mode: partial
+      native_transport: true
+    reply_to_mode_by_chat_type:
+      channel: all

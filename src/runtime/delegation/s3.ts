@@ -12,7 +12,7 @@
  */
 
 import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import { createWriteStream, mkdirSync } from "fs";
+import { mkdirSync } from "fs";
 import { writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -61,6 +61,17 @@ export class NarrativeStore {
    * Returns the file content as a string, or undefined if not found.
    */
   async getNarrative(s3Key: string): Promise<string | undefined> {
+    const result = await this.getNarrativeWithMeta(s3Key);
+    return result?.body;
+  }
+
+  /**
+   * Read a narrative .md file from S3, returning body + metadata.
+   * Returns undefined if not found.
+   */
+  async getNarrativeWithMeta(
+    s3Key: string
+  ): Promise<{ body: string; lastModified?: string } | undefined> {
     try {
       const result = await this.s3.send(
         new GetObjectCommand({
@@ -69,7 +80,9 @@ export class NarrativeStore {
         })
       );
       if (!result.Body) return undefined;
-      return await result.Body.transformToString("utf-8");
+      const body = await result.Body.transformToString("utf-8");
+      const lastModified = result.LastModified?.toISOString();
+      return { body, lastModified };
     } catch (err: unknown) {
       const code =
         err instanceof Error && "Code" in err
@@ -94,22 +107,25 @@ export class NarrativeStore {
   async putNarrative(
     s3Key: string,
     body: string,
-    opts?: { fallbackEvent?: string; taskId?: string }
+    opts?: { fallbackEvent?: string; taskId?: string; event?: string }
   ): Promise<{ ok: boolean; fallback?: string }> {
+    const event = opts?.event ?? opts?.fallbackEvent ?? "event";
     try {
       await this.s3.send(
         new PutObjectCommand({
           Bucket: this.bucket,
           Key: s3Key,
           Body: body,
-          ContentType: "text/markdown; charset=utf-8",
+          ContentType: "text/markdown",
+          Metadata: {
+            "x-amz-meta-event": event,
+          },
         })
       );
       return { ok: true };
     } catch (err) {
       // Fall back to local pending queue — do not block the Slack reply.
       const taskId = opts?.taskId ?? s3Key.split("/").pop()?.replace(".md", "") ?? "unknown";
-      const event = opts?.fallbackEvent ?? "event";
       try {
         writeFallback(taskId, event, body);
       } catch {

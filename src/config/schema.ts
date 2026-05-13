@@ -38,6 +38,24 @@ export const SlackAccountSchema = z.object({
   account_id: z.string(),
   bot_token: z.string(),
   app_token: z.string(),
+  /** Slack bot user_id (U…) for this agent — captured via `auth.test`. Used by the
+   * renderer to build per-channel `users` allowlists for inter-bot delivery.
+   * Optional: if unset the renderer emits a warning but does not fail. */
+  bot_user_id: z.string().optional(),
+  /** Slack channel IDs (C…) this agent operates in. The renderer uses this list
+   * to emit `channels.slack.channels.<id>` entries with inter-bot users allowlists. */
+  channels: z.array(z.string()).default([]),
+  // ── Slack App manifest generation (`fleetmind slack manifests`) ──────────
+  /** Long-form description for the Slack App manifest. Auto-generated from
+   * agent description + role + fleet name when omitted. */
+  long_description: z.string().optional(),
+  /** Hex colour for the Slack App display info (e.g. "#8B4513").
+   * Defaults per agent role when omitted. Override here for per-agent control. */
+  background_color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+  /** Extra bot OAuth scopes appended after the default set (deduped). */
+  extra_scopes: z.array(z.string()).default([]),
+  /** Extra Slack event subscriptions appended after the default set (deduped). */
+  extra_events: z.array(z.string()).default([]),
 });
 
 export const AgentToAgentSchema = z.object({

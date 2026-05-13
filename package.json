@@ -1,7 +1,41 @@
 {
-  "name": "fleetmind",
-  "version": "0.3.0",
+  "name": "@continuous-agentics/fleetmind",
+  "version": "0.4.3",
   "description": "Deploy and manage OpenClaw multi-agent fleets",
+  "keywords": [
+    "ai",
+    "agents",
+    "multi-agent",
+    "fleet",
+    "openclaw",
+    "automation",
+    "cli"
+  ],
+  "author": "Continuous Agentics",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Continuous-Agentics/fleetmind.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Continuous-Agentics/fleetmind/issues"
+  },
+  "homepage": "https://github.com/Continuous-Agentics/fleetmind#readme",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "files": [
+    "dist/cli",
+    "dist/config",
+    "dist/runtime",
+    "dist/utils",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "bin": {
     "fleetmind": "./dist/cli/index.js"
@@ -22,6 +56,7 @@
     "commander": "^12.1.0",
     "js-yaml": "^4.1.0",
     "simple-git": "^3.25.0",
+    "yaml": "^2.9.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

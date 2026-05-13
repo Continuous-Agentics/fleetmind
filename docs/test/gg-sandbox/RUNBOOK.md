@@ -29,7 +29,7 @@ This runbook covers the full end-to-end deployment: Terraform infra → secrets 
 | EBS workspace volumes (unnecessary) | PR #34 removed: workspaces live on root EBS | ✅ Fixed |
 | VPC endpoints for SSM/SecretsManager | PR #40 added: interface endpoints opt-in via `enable_interface_endpoints` | ✅ Added |
 | `fleetmind deploy` EACCES on local render | PR #32 fixed: renders to `./rendered/workspaces/<id>/` | ✅ Fixed |
-| No automated deploy transport (S3/SSM push) | Issues #7–#15 — **still open** | 🟡 Manual SCP workaround |
+| No automated deploy transport (S3/SSM push) | `fleetmind push fleet` + `pull-self` (this PR) | ✅ Shipped |
 | Fleet Members table in AGENTS.md | Issue #20 — quality gap, not blocking | 🟡 Open |
 | `wake_target_session_key` no validation block | TF smell, not blocking | 🟡 Open |
 | DynamoDB context-store name `fleetmind-fleetmind` | TF smell with default fleet_name | 🟡 Open |
@@ -57,29 +57,52 @@ Five bootstrap/renderer bugs surfaced during the first live deploy attempt. All 
 - `terraform` ≥ 1.6 (or use `tfenv` — `.terraform-version` is committed)
 - `aws` CLI v2 configured with access to gg-sandbox (`251714435910`)
 - `node` ≥ 20, `npm` ≥ 10
-- `fleetmind` CLI: `npm install -g fleetmind` (or `npm install && npm link` from repo root)
+- `fleetmind` CLI: `npm install -g @continuous-agentics/fleetmind` (see npm auth setup below)
 - SSH key with access to EC2 (if using SCP transport — see Step 5)
+
+### Configure npm for GitHub Packages (one-time)
+
+fleetmind is now published as a **private scoped package** on GitHub Packages, not public npm.
+You need a GitHub PAT with `read:packages` scope to install it:
+
+```bash
+# 1. Generate a classic PAT at https://github.com/settings/tokens
+#    Required scopes: read:packages (write:packages if you'll publish)
+
+# 2. Add to your ~/.npmrc:
+echo "@continuous-agentics:registry=https://npm.pkg.github.com" >> ~/.npmrc
+echo "//npm.pkg.github.com/:_authToken=<YOUR_PAT>" >> ~/.npmrc
+
+# 3. Now install:
+npm install -g @continuous-agentics/fleetmind
+```
+
+See `RELEASING.md` for the full release process and SSM token setup for EC2 instances.
 
 ### AWS identity
 Use `AdministratorAccess` on the deploying identity for a test run. Enumerate least-privilege post-validation. The principal needs EC2, VPC, IAM, Secrets Manager, DynamoDB, S3, EventBridge, SQS, SNS, SSM, and CloudWatch permissions. See the Pre-Flight Assessment for the full permission list.
 
 ### Slack apps
-Two Slack apps are required — one per agent. Install them in your test workspace before proceeding. Manifests are in `test/gg-sandbox/slack-manifests/`. Each app needs:
-- Socket Mode enabled
-- Bot Token Scopes: `channels:history`, `channels:read`, `chat:write`, `groups:history`, `groups:read`, `im:history`, `im:read`, `users:read`
-- `app_mentions:read` scope
-- Event subscriptions: `message.channels`, `message.groups`, `message.im`, `app_mention`
-- An App-Level Token (`xapp-...`) with `connections:write` scope
+Two Slack apps are required — one per agent. Create them in your test workspace before proceeding.
+
+**Generate the manifests** (run from the repo root after `npm install`):
+```bash
+fleetmind slack manifests --out docs/test/gg-sandbox/slack-manifests/
+```
+This writes one `<agent_id>.yaml` per agent (e.g. `conductor.yaml`, `forge.yaml`). Upload each YAML into the Slack app-create wizard (`https://api.slack.com/apps → Create New App → From a manifest`).
+
+The generated manifests include the full scope + event set verified to work with the live gg-sandbox bots. Committed reference copies live in `docs/test/gg-sandbox/slack-manifests/` and can be re-generated at any time from `fleet.yaml`.
 
 After creating each app, collect and export to your shell:
 ```bash
 export CONDUCTOR_BOT_TOKEN="xoxb-..."
 export CONDUCTOR_APP_TOKEN="xapp-..."
-export CONDUCTOR_SIGNING_SECRET="..."
 export FORGE_BOT_TOKEN="xoxb-..."
 export FORGE_APP_TOKEN="xapp-..."
-export FORGE_SIGNING_SECRET="..."
 export ANTHROPIC_API_KEY="sk-ant-..."   # used for both agents in this test fleet
+
+> **Note:** `signing_secret` is not needed for socket-mode setups (what fleetmind uses).
+> It is only required for HTTP request-mode Slack apps. Do not export it.
 ```
 
 > **These env vars must be set for the entire session.** The `fleetmind render` step bakes them into `openclaw.json` at render time (see Step 5). They're also needed for `fleetmind secrets populate` (Step 4).
@@ -88,12 +111,17 @@ export ANTHROPIC_API_KEY="sk-ant-..."   # used for both agents in this test flee
 
 ## Step 1: Clone & Install
 
+> **Reminder:** Before `terraform apply`, `@continuous-agentics/fleetmind` must be
+> published to GitHub Packages at the version pinned in `terraform-extras.tfvars`
+> (`fleetmind_version`). If the package isn't published yet, STAGE 6b of the bootstrap
+> will fail on every instance. See `RELEASING.md` → "Post-merge order for PR #59".
+
 ```bash
 git clone -b test/gg-sandbox https://github.com/Continuous-Agentics/fleetmind.git
 cd fleetmind
 npm install
 npm run build          # confirm: 0 errors
-npm test               # confirm: 91/91 pass
+npm test               # confirm: 199 pass
 ```
 
 The working `fleet.yaml` for this deploy is in the repo root. Review it before proceeding — it references the gg-sandbox account, us-west-2 region, and the gg-sandbox Slack workspace.
@@ -242,7 +270,9 @@ cd /path/to/fleetmind   # repo root
 fleetmind secrets populate --interactive --region us-west-2
 ```
 
-The `populate` command reads `fleet.yaml`, identifies the `${VAR}` placeholders in each agent's `slack.bot_token` / `app_token` / `signing_secret` fields, resolves them from your environment, and pushes them to Secrets Manager using the standard key names (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_SIGNING_SECRET`).
+The `populate` command reads `fleet.yaml`, identifies the `${VAR}` placeholders in each agent's `slack.bot_token` and `app_token` fields, resolves them from your environment, and pushes them to Secrets Manager using the standard key names (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`).
+
+> **Note:** `signing_secret` / `SLACK_SIGNING_SECRET` is **not** required for socket-mode bots and is not prompted for or stored.
 
 For the Anthropic key (one per agent in this fleet):
 ```bash
@@ -266,8 +296,7 @@ aws secretsmanager put-secret-value \
   --secret-id "gg-sandbox/agents/conductor/slack" \
   --secret-string "{
     \"SLACK_BOT_TOKEN\":\"$CONDUCTOR_BOT_TOKEN\",
-    \"SLACK_APP_TOKEN\":\"$CONDUCTOR_APP_TOKEN\",
-    \"SLACK_SIGNING_SECRET\":\"$CONDUCTOR_SIGNING_SECRET\"
+    \"SLACK_APP_TOKEN\":\"$CONDUCTOR_APP_TOKEN\"
   }"
 
 # Forge Slack tokens
@@ -276,8 +305,7 @@ aws secretsmanager put-secret-value \
   --secret-id "gg-sandbox/agents/forge/slack" \
   --secret-string "{
     \"SLACK_BOT_TOKEN\":\"$FORGE_BOT_TOKEN\",
-    \"SLACK_APP_TOKEN\":\"$FORGE_APP_TOKEN\",
-    \"SLACK_SIGNING_SECRET\":\"$FORGE_SIGNING_SECRET\"
+    \"SLACK_APP_TOKEN\":\"$FORGE_APP_TOKEN\"
   }"
 ```
 
@@ -288,7 +316,7 @@ At each gateway start, the systemd unit runs `ExecStartPre=/usr/local/bin/fetch-
 2. Merges the two JSON blobs into a flat key=value file at `/run/openclaw-<agent_id>.env`
 3. The systemd `EnvironmentFile=/run/openclaw-<agent_id>.env` directive makes these available to the `openclaw gateway` process
 
-The gateway process will have `ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_SIGNING_SECRET` in its environment at startup. OpenClaw reads the Anthropic API key from the `ANTHROPIC_API_KEY` environment variable natively (standard Anthropic SDK pattern).
+The gateway process will have `ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, and `SLACK_APP_TOKEN` in its environment at startup. OpenClaw reads the Anthropic API key from the `ANTHROPIC_API_KEY` environment variable natively (standard Anthropic SDK pattern). `SLACK_SIGNING_SECRET` is not stored or injected — it is not used by socket-mode bots.
 
 ---
 
@@ -330,12 +358,49 @@ To verify after storing, SSH into the agent EC2 and run `gh-app-token` — it sh
 
 ---
 
+## Step 4c: Discover bot user_ids
+
+Run this after **Step 4a** (populate Slack secrets) and optionally after **Step 4b** (GitHub App store). It fetches each agent's bot token from Secrets Manager, calls Slack `auth.test`, and writes the discovered `bot_user_id` back into `fleet.yaml` automatically.
+
+```bash
+fleetmind slack discover --fleet fleet.yaml --region us-west-2
+```
+
+For a dry run (no writes to `fleet.yaml`):
+```bash
+fleetmind slack discover --fleet fleet.yaml --region us-west-2 --dry-run
+```
+
+To re-run for a single agent (e.g. after token rotation or adding a new agent):
+```bash
+fleetmind slack discover --fleet fleet.yaml --region us-west-2 --agent forge
+```
+
+To overwrite `bot_user_id` values that are already set:
+```bash
+fleetmind slack discover --fleet fleet.yaml --region us-west-2 --force
+```
+
+After discovery runs, **re-render** so the discovered IDs propagate into `rendered/openclaw/<agent>/openclaw.json`:
+
+```bash
+fleetmind render
+```
+
+The renderer uses `bot_user_id` from `fleet.yaml` to derive per-channel `users` allowlists for inter-bot Slack message delivery. Without running discover first, agents in shared channels won't have bot-specific allowlist entries.
+
+---
+
 ## Step 5: Render & Deploy Workspaces
 
 ### 5a. Render locally
 
 ```bash
 cd /path/to/fleetmind
+
+# Sanity check: confirm fleetmind is installed and authenticated against GitHub Packages
+# (requires the npm auth setup from Prerequisites above)
+fleetmind --version
 
 # Ensure all token env vars are set in your shell (see Prerequisites)
 # The loader expands ${VAR} references in fleet.yaml at parse time,
@@ -442,79 +507,90 @@ For the test deploy, skip this entirely. The gateway will start fine without aut
 
 ### 5d. Transport workspaces to EC2
 
-> **Current state:** `fleetmind deploy` renders locally but does not push to EC2 (issues #7–#15 — deploy transport not yet shipped). The workaround is SCP over a bastion, or SSM file transfer.
+Use `fleetmind push fleet` to package and deploy workspaces in one command. This
+replaces the manual tar / S3 copy / SSM flow.
 
-The local rendered workspace path is `./rendered/workspaces/<agent_id>/`. The EC2 target path is `<workspace_base>/<agent_id>/` (no `workspace-` prefix) — for this fleet: `/opt/openclaw/workspace/<agent_id>/`.
+**Prerequisites:**
+- Create the deploy-staging S3 bucket (one-time):
+  ```bash
+  aws s3 mb s3://gg-sandbox-ledger --region us-west-2
+  ```
+- Your AWS identity needs `ssm:SendCommand`, `ssm:DescribeInstanceInformation`, and
+  `s3:PutObject` on `gg-sandbox-ledger/deploy-staging/*`. See `docs/OPERATING.md` for
+  the full IAM policy.
 
-**Option A: SCP via bastion (if you have SSH access)**
-
-```bash
-# Get private IPs from Terraform output
-CONDUCTOR_IP=$(terraform -chdir=infra/terraform output -json private_ips | jq -r '.conductor')
-FORGE_IP=$(terraform -chdir=infra/terraform output -json private_ips | jq -r '.forge')
-
-# SCP workspaces (adjust bastion host/key path)
-scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
-  -r ./rendered/workspaces/conductor \
-  ec2-user@$CONDUCTOR_IP:/opt/openclaw/workspace/
-
-scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
-  -r ./rendered/workspaces/forge \
-  ec2-user@$FORGE_IP:/opt/openclaw/workspace/
-
-# SCP per-agent openclaw.json to each instance (each has its own slice)
-scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
-  ./rendered/openclaw/conductor/openclaw.json \
-  ec2-user@$CONDUCTOR_IP:/opt/openclaw/workspace/conductor/.openclaw/openclaw.json
-
-scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
-  ./rendered/openclaw/forge/openclaw.json \
-  ec2-user@$FORGE_IP:/opt/openclaw/workspace/forge/.openclaw/openclaw.json
-
-# SCP cron jobs (conductor only — it's the PM bot)
-scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
-  -r ./rendered/cron \
-  ec2-user@$CONDUCTOR_IP:/opt/openclaw/workspace/conductor/
-```
-
-**Option B: SSM file push (no bastion required)**
+**Dry-run first (always recommended):**
 
 ```bash
-CONDUCTOR_ID=$(terraform -chdir=infra/terraform output -json instance_ids | jq -r '.conductor')
-FORGE_ID=$(terraform -chdir=infra/terraform output -json instance_ids | jq -r '.forge')
-
-# Package and push via SSM (base64 encode, send as command, decode on EC2)
-for AGENT in conductor forge; do
-  INSTANCE_ID=$(terraform -chdir=infra/terraform output -json instance_ids | jq -r ".$AGENT")
-  tar czf /tmp/${AGENT}-workspace.tar.gz -C ./rendered/workspaces ${AGENT}
-  B64=$(base64 -w0 /tmp/${AGENT}-workspace.tar.gz)
-  aws ssm send-command \
-    --region us-west-2 \
-    --instance-ids $INSTANCE_ID \
-    --document-name AWS-RunShellScript \
-    --parameters "commands=[
-      \"mkdir -p /opt/openclaw/workspace\",
-      \"echo '$B64' | base64 -d > /tmp/${AGENT}-workspace.tar.gz\",
-      \"tar xzf /tmp/${AGENT}-workspace.tar.gz -C /opt/openclaw/workspace/\",
-      \"chown -R ec2-user:ec2-user /opt/openclaw/workspace/${AGENT}\"
-    ]"
-done
-
-# Push per-agent openclaw.json to each instance (each has its own slice)
-for AGENT in conductor forge; do
-  INSTANCE_ID=$(terraform -chdir=infra/terraform output -json instance_ids | jq -r ".$AGENT")
-  B64=$(base64 -w0 ./rendered/openclaw/${AGENT}/openclaw.json)
-  aws ssm send-command \
-    --region us-west-2 \
-    --instance-ids $INSTANCE_ID \
-    --document-name AWS-RunShellScript \
-    --parameters "commands=[
-      \"mkdir -p /opt/openclaw/workspace/${AGENT}/.openclaw\",
-      \"echo '$B64' | base64 -d > /opt/openclaw/workspace/${AGENT}/.openclaw/openclaw.json\",
-      \"chown -R ec2-user:ec2-user /opt/openclaw/workspace/${AGENT}\"
-    ]"
-done
+fleetmind push fleet --dry-run
 ```
+
+This renders, packages, and prints a per-agent file manifest (count + total size) but
+does **not** upload anything or trigger any bots.
+
+**Full push:**
+
+```bash
+fleetmind push fleet
+```
+
+This:
+1. Renders workspaces + per-agent `openclaw.json` (same as `fleetmind deploy`)
+2. Packages each agent's workspace into a signed tarball
+3. Uploads tarball + manifest to `s3://gg-sandbox-ledger/deploy-staging/`
+4. Sends an SSM command to each agent to run `fleetmind pull-self --apply`
+5. Prints the SSM command ID per agent for follow-up
+
+Check that each agent applied successfully:
+```bash
+aws ssm get-command-invocation \
+  --command-id <cmd-id-from-push-summary> \
+  --instance-id <instance-id> \
+  --region us-west-2 \
+  --query 'StandardOutputContent' --output text
+```
+
+**Push and restart gateways in one step:**
+
+```bash
+fleetmind push fleet --restart
+```
+
+---
+
+> **Fallback: manual SCP / SSM (if `push fleet` isn't available)**
+>
+> The original manual steps are preserved below for reference if you need to bootstrap
+> an instance that doesn't yet have `fleetmind` installed, or in case of emergency.
+>
+> ```bash
+> CONDUCTOR_IP=$(terraform -chdir=infra/terraform output -json private_ips | jq -r '.conductor')
+> FORGE_IP=$(terraform -chdir=infra/terraform output -json private_ips | jq -r '.forge')
+>
+> # SCP workspaces (requires bastion or VPN)
+> scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
+>   -r ./rendered/workspaces/conductor ec2-user@$CONDUCTOR_IP:/opt/openclaw/workspace/
+> scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
+>   -r ./rendered/workspaces/forge ec2-user@$FORGE_IP:/opt/openclaw/workspace/
+>
+> # SCP per-agent openclaw.json
+> scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
+>   ./rendered/openclaw/conductor/openclaw.json \
+>   ec2-user@$CONDUCTOR_IP:/opt/openclaw/workspace/conductor/.openclaw/openclaw.json
+> scp -i ~/.ssh/your-key.pem -J ec2-user@<bastion-ip> \
+>   ./rendered/openclaw/forge/openclaw.json \
+>   ec2-user@$FORGE_IP:/opt/openclaw/workspace/forge/.openclaw/openclaw.json
+>
+> # SSM file push (no bastion — for post-launch updates)
+> for AGENT in conductor forge; do
+>   INSTANCE_ID=$(terraform -chdir=infra/terraform output -json instance_ids | jq -r ".$AGENT")
+>   tar czf /tmp/${AGENT}-workspace.tar.gz -C ./rendered/workspaces ${AGENT}
+>   B64=$(base64 -w0 /tmp/${AGENT}-workspace.tar.gz)
+>   aws ssm send-command --region us-west-2 --instance-ids $INSTANCE_ID \
+>     --document-name AWS-RunShellScript \
+>     --parameters "commands=[\"echo '$B64' | base64 -d > /tmp/${AGENT}-workspace.tar.gz\",\"tar xzf /tmp/${AGENT}-workspace.tar.gz -C /opt/openclaw/workspace/\",\"chown -R ec2-user:ec2-user /opt/openclaw/workspace/${AGENT}\"]"
+> done
+> ```
 
 ### 5e. Verify workspace layout on EC2
 
@@ -609,58 +685,11 @@ If the service fails:
 
 ---
 
-## Step 6b: Fleet Introduction Handshake (manual, one-time)
+## Step 6b: Fleet Roster (automated)
 
-Each gateway only knows its own Slack identity. For the PM to delegate, it needs each worker's Slack `user_id` and `delegation_channel`; for workers to reply correctly, they need the PM's. fleet.yaml carries the agent IDs but not the runtime Slack identities (those don't exist until the Slack apps are created and installed).
+The renderer automatically derives a `## Fleet Members` section in each agent's AGENTS.md from fleet.yaml (after `fleetmind slack discover` populates the `bot_user_id` values). The manual Slack handshake is no longer needed — bots boot with the roster baked into their workspace.
 
-For now this is a manual handshake. Future work: automate via `fleetmind fleet introduce` (tracked as issue #20).
-
-### 6b.1. Capture each bot's Slack `user_id` and home channel
-
-For each bot, from your laptop:
-
-```bash
-# Use the agent's BOT token (xoxb-...) — same one in Secrets Manager
-TOKEN="<the bot's xoxb token>"
-curl -sH "Authorization: Bearer $TOKEN" https://slack.com/api/auth.test | jq '{bot_user_id:.user_id, team:.team_id}'
-```
-
-Also capture the channel IDs for the bot's home channels (right-click channel → Copy link → the trailing ID).
-
-For this fleet that's:
-- Conductor (PM): `user_id=U…`, home channel `#fleetmind-project-management` (`C0B2NNJEFKR`)
-- Forge (backend worker): `user_id=U…`, delegation channel `#fleetmind-dev-land` (`C0B324RF1QW`)
-
-### 6b.2. Brief the PM
-
-DM Conductor in `#fleetmind-project-management` with the roster. Something like:
-
-> Your fleet is `gg-sandbox`. Team:
-> - Forge (backend worker) — `slack_user_id=U0YYYY`, `delegation_channel=C0B324RF1QW`
->
-> Please:
-> 1. Record this in your `MEMORY.md` under a "Fleet Members" section.
-> 2. Post a roster message in `#fleetmind-dev-land` mentioning `<@U0YYYY>` so Forge knows you're the PM and where to reply.
-> 3. Confirm back here when both are done.
-
-### 6b.3. Have each worker record the same roster
-
-When the PM's intro message lands in `#fleetmind-dev-land`, DM Forge (or thread-reply) asking it to record the roster in its own `MEMORY.md` under "Fleet Members":
-- Conductor (PM) — `slack_user_id=U0XXXX`, home channel `C0B2NNJEFKR`
-- Self confirmation: "I'm Forge, backend worker"
-
-Do the same for any additional workers as the fleet grows.
-
-### 6b.4. Verify
-
-SSM into each instance and confirm `MEMORY.md` has the new "Fleet Members" section:
-
-```bash
-grep -A 4 "Fleet Members" /opt/openclaw/workspace/conductor/MEMORY.md
-grep -A 4 "Fleet Members" /opt/openclaw/workspace/forge/MEMORY.md
-```
-
-If both bots restart from cold, the roster persists (it's on the root EBS volume, not in `/run` or memory).
+If you add a new agent to the fleet later, re-run `fleetmind slack discover` to populate the new agent's `bot_user_id`, then `fleetmind push fleet` to redeploy with updated rosters.
 
 ---
 
