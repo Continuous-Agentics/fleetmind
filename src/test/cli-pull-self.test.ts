@@ -323,7 +323,7 @@ describe("applyDiff", () => {
     assert.ok(!fs.existsSync(`${existingFile}.new`), ".new temp file should be cleaned up");
   });
 
-  test("deletes removed files from workspace", () => {
+  test("does NOT delete files marked as deleted (runtime-managed files must not be wiped)", () => {
     const toDelete = path.join(workspaceDir, "skills", "old-skill", "SKILL.md");
     fs.mkdirSync(path.dirname(toDelete), { recursive: true });
     fs.writeFileSync(toDelete, "old skill", "utf-8");
@@ -336,7 +336,8 @@ describe("applyDiff", () => {
 
     applyDiff(stagingDir, workspaceDir, diff);
 
-    assert.ok(!fs.existsSync(toDelete), "deleted file should be removed");
+    // Deletions are intentionally skipped — pull-self only adds/modifies.
+    assert.ok(fs.existsSync(toDelete), "file should NOT be deleted by pull-self");
   });
 });
 
