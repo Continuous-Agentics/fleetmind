@@ -66,7 +66,7 @@ The following is a real fleet definition — one orchestrator PM and one worker 
 #   # Create Slack apps from manifests. Fill in slack.channels[] per agent below.
 #   fleetmind render fleet-acme-bots.yaml
 #   cd infra/terraform && terraform workspace select acme-bots
-#   terraform apply -var-file=workspaces/acme-bots.tfvars -var-file=workspaces/acme-bots.auto.tfvars
+#   terraform apply -var-file=workspaces/acme-bots.tfvars -var-file=workspaces/acme-bots.derived.tfvars
 #   fleetmind secrets populate --fleet fleet-acme-bots.yaml --interactive --region us-west-2
 #   fleetmind slack discover --fleet fleet-acme-bots.yaml --region us-west-2
 #   fleetmind render fleet-acme-bots.yaml           # second render — now has bot_user_ids
@@ -178,7 +178,7 @@ agents:
 # These must be passed to terraform apply via -var-file.
 outputs:
   openclaw_json: ./rendered/openclaw-acme-bots.json
-  terraform_vars: ./infra/terraform/workspaces/acme-bots.auto.tfvars
+  terraform_vars: ./infra/terraform/workspaces/acme-bots.derived.tfvars
 
 # Gateway and Slack behavior shared across the fleet.
 openclaw:
@@ -300,7 +300,7 @@ State lands at `s3://<bucket>/env:/acme-bots/fleetmind/terraform.tfstate` automa
 
 ### 4b. Write the infra-only tfvars
 
-Create `infra/terraform/workspaces/acme-bots.tfvars` with infrastructure-only settings. **Do not set** `fleet_name`, `agent_names`, `agent_models`, `agent_orchestrators`, or `wake_target_session_key` here — `fleetmind render` derives those and writes them to `acme-bots.auto.tfvars`.
+Create `infra/terraform/workspaces/acme-bots.tfvars` with infrastructure-only settings. **Do not set** `fleet_name`, `agent_names`, `agent_models`, `agent_orchestrators`, or `wake_target_session_key` here — `fleetmind render` derives those and writes them to `acme-bots.derived.tfvars`.
 
 ```hcl
 # workspaces/acme-bots.tfvars — infra knobs only
@@ -388,7 +388,7 @@ fleetmind render fleet-acme-bots.yaml
 
 This writes:
 - `./rendered/openclaw-acme-bots.json` (per-agent config slices)
-- `./infra/terraform/workspaces/acme-bots.auto.tfvars` — **derived vars**, including `wake_target_session_key` (derived from the PM's first channel ID)
+- `./infra/terraform/workspaces/acme-bots.derived.tfvars` — **derived vars**, including `wake_target_session_key` (derived from the PM's first channel ID)
 
 The auto.tfvars looks like:
 
@@ -409,7 +409,7 @@ cd infra/terraform
 terraform workspace select acme-bots
 terraform apply \
   -var-file=workspaces/acme-bots.tfvars \
-  -var-file=workspaces/acme-bots.auto.tfvars
+  -var-file=workspaces/acme-bots.derived.tfvars
 ```
 
 Review the plan. Expect roughly 60–80 resources to add (VPC, subnets, NAT, EC2 instances, IAM roles, SSM parameters, S3 bucket, DynamoDB table, EventBridge rules). Confirm with `yes`.

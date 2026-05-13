@@ -3,7 +3,7 @@
 # Pairs with a sibling fleet-test-fleet-2.yaml file (operator creates) that
 # defines the fleet name + agents. `fleetmind render --fleet fleet-test-fleet-2.yaml`
 # emits fleet_name, agent_names, agent_models, agent_orchestrators, and
-# wake_target_session_key into infra/terraform/fleet.auto.tfvars.
+# wake_target_session_key into infra/terraform/fleet.derived.tfvars.
 #
 # This file holds infrastructure-only knobs.
 

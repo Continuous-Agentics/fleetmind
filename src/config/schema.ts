@@ -213,7 +213,7 @@ export const SecretsSchema = z.object({
 
 export const OutputsSchema = z.object({
   openclaw_json: z.string().default("./rendered/openclaw.json"),
-  terraform_vars: z.string().default("./rendered/fleet.auto.tfvars"),
+  terraform_vars: z.string().default("./rendered/fleet.derived.tfvars"),
   workspace_manifests: z.string().default("./rendered/workspaces/"),
 });
 

@@ -417,7 +417,7 @@ rendered/
       openclaw.json      ← per-agent config for the conductor gateway (see Step 5b)
     forge/
       openclaw.json      ← per-agent config for the forge gateway
-  fleet.auto.tfvars      ← Terraform variable overrides
+  fleet.derived.tfvars      ← Terraform variable overrides
   workspaces/
     conductor/           ← SOUL.md, AGENTS.md, IDENTITY.md, USER.md, skills/
     forge/               ← same

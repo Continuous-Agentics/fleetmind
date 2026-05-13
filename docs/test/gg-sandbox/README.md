@@ -16,7 +16,7 @@ Both run in the same Slack channel (set in `terraform-extras.tfvars`).
 
 - `fleet.yaml` (root) — declarative fleet definition
 - `infra/terraform/terraform-extras.tfvars` — infra-only vars (region, ports,
-  delegation, wake-target session key). Append to `rendered/fleet.auto.tfvars`
+  delegation, wake-target session key). Append to `rendered/fleet.derived.tfvars`
   after running `npx fleetmind render`.
 - `docs/test/gg-sandbox/slack-manifests/{conductor,forge}.yaml` — paste these
   at <https://api.slack.com/apps/manifest> to create the two Slack apps.
@@ -40,8 +40,8 @@ npm install
 npx fleetmind render
 
 # Merge the infra-only extras with the rendered tfvars
-cat infra/terraform/terraform-extras.tfvars >> rendered/fleet.auto.tfvars
-cp rendered/fleet.auto.tfvars infra/terraform/terraform.tfvars
+cat infra/terraform/terraform-extras.tfvars >> rendered/fleet.derived.tfvars
+cp rendered/fleet.derived.tfvars infra/terraform/terraform.tfvars
 
 # Provision infra
 cd infra/terraform

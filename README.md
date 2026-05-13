@@ -39,7 +39,7 @@ Fleet-wide shared key/value state is available via the **ContextStore** — a Dy
 
 Isolation over efficiency. A misbehaving worker can't crash the orchestrator; a runaway skill on one bot doesn't starve another; each agent can be redeployed, restarted, or rolled back independently. The cost is more EC2 instances per fleet — deemed acceptable for the durability and blast-radius properties.
 
-Bot EC2 hosts come from the [openclaw-terraform](https://github.com/Continuous-Agentics/openclaw-terraform) repo, fed by the `rendered/fleet.auto.tfvars` fleetmind generates.
+Bot EC2 hosts come from the [openclaw-terraform](https://github.com/Continuous-Agentics/openclaw-terraform) repo, fed by the `rendered/fleet.derived.tfvars` fleetmind generates.
 
 ## Installation
 
@@ -78,7 +78,7 @@ fleetmind diff
 # 6. Apply Terraform (provisions EC2 hosts, IAM, networking)
 #    See infra/terraform/ and docs/SETUP-A-FLEET.md for the full first-time sequence
 cd infra/terraform && terraform workspace select acme-fleet
-terraform apply -var-file=workspaces/acme-fleet.auto.tfvars
+terraform apply -var-file=workspaces/acme-fleet.derived.tfvars
 
 # 7. Push per-agent credentials into Secrets Manager
 fleetmind secrets populate --interactive
@@ -283,7 +283,7 @@ Unpinned skills (`- name: coding`) auto-update. Pinned skills (`version: "2.1.0"
 
 ## Terraform Integration
 
-FleetMind generates `rendered/fleet.auto.tfvars` for the [openclaw-terraform](https://github.com/Continuous-Agentics/openclaw-terraform) repo, which provisions the per-agent EC2 hosts, IAM roles, networking, and any AWS-side glue. Terraform picks the tfvars file up automatically (`.auto.tfvars` files are loaded by default).
+FleetMind generates `rendered/fleet.derived.tfvars` for the [openclaw-terraform](https://github.com/Continuous-Agentics/openclaw-terraform) repo, which provisions the per-agent EC2 hosts, IAM roles, networking, and any AWS-side glue. Terraform picks the tfvars file up automatically (`.derived.tfvars` files are loaded by default).
 
 `fleetmind deploy` also provisions the DynamoDB ContextStore table via the included Terraform module in `infra/terraform/modules/context-store/`. The optional task ledger substrate lives in `infra/terraform/modules/task-ledger/` and is applied separately when delegation is enabled.
 

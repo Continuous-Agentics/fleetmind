@@ -56,7 +56,7 @@ function makeFleet(workspaceBase = EC2_WORKSPACE_BASE): Fleet {
     secrets: { provider: "env" },
     outputs: {
       openclaw_json: "./rendered/openclaw.json",
-      terraform_vars: "./rendered/fleet.auto.tfvars",
+      terraform_vars: "./rendered/fleet.derived.tfvars",
       workspace_manifests: "./rendered/workspaces/",
     },
     openclaw: {
