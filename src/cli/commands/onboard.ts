@@ -37,46 +37,36 @@ import { provisionFleet } from "../../runtime/provisioner.js";
 
 /**
  * Hidden input that works with an existing readline interface.
- * Pauses rl, sets stdin raw mode, reads chars manually (no echo), then resumes rl.
+ * Uses rl.question() but mutes the output stream while the user types
+ * so characters don't echo. Avoids raw mode entirely, which sidesteps
+ * the buffered-newline issue where the previous Enter resolves immediately.
  */
 function hiddenPrompt(rl: readline.Interface, question: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    process.stdout.write(question);
-    rl.pause();
-
-    const chunks: string[] = [];
-    const onData = (char: string): void => {
-      if (char === "\r" || char === "\n") {
-        process.stdin.setRawMode?.(false);
-        process.stdin.removeListener("data", onData);
-        process.stdin.pause();
-        rl.resume();
-        process.stdout.write("\n");
-        resolve(chunks.join(""));
-      } else if (char === "\u0003") {
-        // Ctrl-C
-        process.stdin.setRawMode?.(false);
-        process.stdin.removeListener("data", onData);
-        rl.resume();
-        reject(new Error("Aborted"));
-      } else if (char === "\u007F" || char === "\u0008") {
-        // Backspace
-        chunks.pop();
-      } else {
-        chunks.push(char);
-      }
-    };
-
-    try {
-      process.stdin.setRawMode?.(true);
-      process.stdin.setEncoding("utf8");
-      process.stdin.resume();
-      process.stdin.on("data", onData);
-    } catch (err) {
-      // TTY not available (e.g. piped input) — fall back to visible prompt
-      rl.resume();
-      prompt(rl, question).then(resolve).catch(reject);
+  return new Promise((resolve) => {
+    const out = (rl as unknown as { output: NodeJS.WritableStream }).output;
+    // Replace write so typed characters aren't echoed, but the question is shown
+    const original = out?.write?.bind(out) as ((...args: unknown[]) => boolean) | undefined;
+    let questionWritten = false;
+    if (out && original) {
+      (out as unknown as { write: (...a: unknown[]) => boolean }).write = (...args: unknown[]) => {
+        if (!questionWritten) {
+          // Allow the question text through once
+          questionWritten = true;
+          return original(...args);
+        }
+        // Suppress all echoed keystrokes
+        return true;
+      };
     }
+
+    rl.question(question, (answer) => {
+      // Restore original write and add newline
+      if (out && original) {
+        (out as unknown as { write: (...a: unknown[]) => boolean }).write = original;
+      }
+      process.stdout.write("\n");
+      resolve(answer);
+    });
   });
 }
 
