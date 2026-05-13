@@ -37,9 +37,9 @@ resource "aws_secretsmanager_secret_version" "db" {
   secret_id = aws_secretsmanager_secret.db[0].id
 
   secret_string = templatefile("${path.module}/templates/db_secret.tftpl", {
-    password     = random_password.db[0].result
-    endpoint     = aws_db_instance.main[0].endpoint
-    fleet_name   = var.fleet_name
+    password   = random_password.db[0].result
+    endpoint   = aws_db_instance.main[0].endpoint
+    fleet_name = var.fleet_name
   })
 }
 

@@ -116,9 +116,9 @@ resource "aws_iam_role_policy" "agent_github_app" {
         ]
       },
       {
-        Sid    = "GitHubAppKMSDecrypt"
-        Effect = "Allow"
-        Action = ["kms:Decrypt"]
+        Sid      = "GitHubAppKMSDecrypt"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
         Resource = ["arn:aws:kms:${var.aws_region}:*:key/aws/ssm"]
       },
     ]
@@ -146,9 +146,9 @@ resource "aws_iam_role_policy" "agent_github_packages" {
         ]
       },
       {
-        Sid    = "GitHubPackagesKMSDecrypt"
-        Effect = "Allow"
-        Action = ["kms:Decrypt"]
+        Sid      = "GitHubPackagesKMSDecrypt"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
         Resource = ["arn:aws:kms:${var.aws_region}:*:key/aws/ssm"]
       },
     ]

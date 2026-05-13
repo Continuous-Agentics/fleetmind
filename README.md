@@ -287,6 +287,18 @@ FleetMind generates `rendered/fleet.derived.tfvars` for the [openclaw-terraform]
 
 `fleetmind deploy` also provisions the DynamoDB ContextStore table via the included Terraform module in `infra/terraform/modules/context-store/`. The optional task ledger substrate lives in `infra/terraform/modules/task-ledger/` and is applied separately when delegation is enabled.
 
+## CI
+
+GitHub Actions runs on every push to `main` and every pull request:
+
+| Job | What it does |
+|-----|--------------|
+| `build-and-test` | `npm ci` → `npm run build` (tsc) → `npm test` (320+ tests) → `npm pack --dry-run` (verifies published tarball contains only `dist/`, `README.md`, `LICENSE`) |
+| `terraform-validate` | `terraform init -backend=false` + `terraform validate` on root module and `modules/task-ledger/`; `terraform fmt -check -recursive` to catch formatting drift |
+| `shellcheck` | Runs ShellCheck on all `infra/scripts/*.sh` standalone scripts |
+
+A `publish.yml` workflow skeleton is also present for release-on-tag — it is **manual-only** (`workflow_dispatch`) until the flow is validated. See [RELEASING.md](RELEASING.md) for publish instructions.
+
 ## Requirements
 
 - Node.js 20+

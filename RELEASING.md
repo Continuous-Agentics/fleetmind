@@ -36,6 +36,12 @@ After this, `npm install -g @continuous-agentics/fleetmind` works locally.
    npm publish
    ```
    This publishes `@continuous-agentics/fleetmind` to GitHub Packages at the new version.
+
+   > **Once `.github/workflows/publish.yml` is enabled (currently manual-only):** tagging
+   > `v<version>` will trigger the publish workflow automatically via GitHub Actions.
+   > Until then, run `npm publish` manually as above.
+   > To enable: change the workflow trigger from `workflow_dispatch` to `push: tags: ['v*']`
+   > and validate the flow once via the GitHub Actions UI first.
 5. **Update infra:**
    Edit the fleet's tfvars in `infra/terraform/workspaces/` (e.g. `default.tfvars`):
    ```hcl
