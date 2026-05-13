@@ -18,7 +18,7 @@ resource "aws_secretsmanager_secret" "agent_slack" {
 
   name                    = "${var.fleet_name}/agents/${each.key}/slack"
   description             = "Slack tokens for ${var.fleet_name} agent: ${each.key}"
-  recovery_window_in_days = 7
+  recovery_window_in_days = var.secret_recovery_window_days
 
   tags = { Agent = each.key }
 }
@@ -41,7 +41,7 @@ resource "aws_secretsmanager_secret" "agent_anthropic" {
 
   name                    = "${var.fleet_name}/agents/${each.key}/anthropic"
   description             = "Anthropic API key for ${var.fleet_name} agent: ${each.key}"
-  recovery_window_in_days = 7
+  recovery_window_in_days = var.secret_recovery_window_days
 
   tags = { Agent = each.key }
 }

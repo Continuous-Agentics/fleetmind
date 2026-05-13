@@ -143,3 +143,9 @@ variable "fleetmind_version" {
   type        = string
   default     = "latest"
 }
+
+variable "secret_recovery_window_days" {
+  description = "AWS Secrets Manager recovery window (days) after deletion. Used for per-agent slack/anthropic secrets and the optional RDS master password secret. Set to 0 to disable recovery (delete immediately) — useful for ephemeral test fleets."
+  type        = number
+  default     = 7
+}
