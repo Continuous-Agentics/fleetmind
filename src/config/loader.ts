@@ -45,6 +45,13 @@ export function resolveFleetSource(flag?: string): FleetSource {
     return { kind: "name", name: flag };
   }
 
+  // Case 2.5 — FLEET_YAML env var (set in operator shell to avoid passing --fleet every time)
+  const envFleet = process.env["FLEET_YAML"];
+  if (envFleet) {
+    const abs = path.resolve(envFleet);
+    return { kind: "file", path: abs };
+  }
+
   // Case 3 — bot path: /etc/fleetmind/agent.env
   const agentEnvPath = "/etc/fleetmind/agent.env";
   if (fs.existsSync(agentEnvPath)) {
