@@ -243,12 +243,14 @@ async function defaultLookupInstance(
   agentId: string,
   region: string
 ): Promise<string | null> {
+  // Tag keys must match the fleetmind:* namespace set by infra/terraform/ec2.tf.
+  // Unprefixed `fleet_name` / `agent_id` tags don't exist on the instances.
   const ssm = new SSMClient({ region });
   const resp = await ssm.send(
     new DescribeInstanceInformationCommand({
       Filters: [
-        { Key: "tag:fleet_name", Values: [fleetName] },
-        { Key: "tag:agent_id", Values: [agentId] },
+        { Key: "tag:fleetmind:fleet_name", Values: [fleetName] },
+        { Key: "tag:fleetmind:agent_id", Values: [agentId] },
       ],
     })
   );
