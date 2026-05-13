@@ -16,6 +16,7 @@ import {
 import { parseDocument } from "yaml";
 import chalk from "chalk";
 import { log } from "../../utils/log.js";
+import { promptHidden } from "./populate.js";
 
 // ── Dependency-injection interfaces ──────────────────────────────────────────
 
@@ -60,6 +61,10 @@ export interface DiscoverOptions {
   agent?: string[];
   dryRun: boolean;
   force: boolean;
+  /** When true, prompt for each agent's bot token interactively (hidden input). */
+  interactive?: boolean;
+  /** Injectable prompt function for hidden input — used in tests to avoid raw-mode TTY. */
+  promptFn?: (prompt: string) => Promise<string>;
   /** Injectable Secrets Manager client for unit tests. */
   smClient?: SmSendable;
   /** Injectable HTTP function for unit tests. */
@@ -241,46 +246,68 @@ export async function discoverSlackBotUserIds(
       continue;
     }
 
-    // Fetch secret from SM
+    // Resolve bot token — interactive prompt first (if --interactive), then
+    // env var fallback, then Secrets Manager.
+    // This allows 'fleetmind slack discover' to run immediately after Slack
+    // app creation without needing Secrets Manager or terraform apply.
     const secretName = `${fleetName}/agents/${agentId}/slack`;
     let botToken: string | null = null;
 
-    try {
-      const resp = await smClient.send(
-        new GetSecretValueCommand({ SecretId: secretName })
-      );
-      if (!resp.SecretString) {
-        log.warn(
-          `${agentId}: secret ${secretName} has no SecretString — skipping`
-        );
-        results.push({
-          agentId,
-          status: "failed",
-          reason: `secret ${secretName} has no SecretString`,
-        });
+    if (options.interactive) {
+      const prompted = await options.promptFn!(`Bot token for ${agentId} (xoxb-...): `);
+      if (prompted && prompted.startsWith('xoxb-')) {
+        botToken = prompted.trim();
+      } else {
+        log.warn(`${agentId}: invalid token (must start with xoxb-) — skipping`);
+        results.push({ agentId, status: 'failed', reason: 'invalid token entered' });
         continue;
       }
-      botToken = extractBotToken(resp.SecretString);
-      if (!botToken) {
-        log.warn(
-          `${agentId}: SLACK_BOT_TOKEN not found in secret ${secretName} — skipping`
-        );
-        results.push({
-          agentId,
-          status: "failed",
-          reason: `SLACK_BOT_TOKEN not found in secret ${secretName}`,
-        });
-        continue;
+    } else {
+      // Env var fallback: <AGENT_ID_UPPER>_BOT_TOKEN
+      const envVarName = `${agentId.toUpperCase().replace(/-/g, '_')}_BOT_TOKEN`;
+      const envToken = process.env[envVarName];
+      if (envToken && envToken.startsWith('xoxb-')) {
+        botToken = envToken;
+        log.dim(`${agentId}: using bot token from env ${envVarName}`);
+      } else {
+        try {
+          const resp = await smClient.send(
+            new GetSecretValueCommand({ SecretId: secretName })
+          );
+          if (!resp.SecretString) {
+            log.warn(
+              `${agentId}: secret ${secretName} has no SecretString — skipping`
+            );
+            results.push({
+              agentId,
+              status: "failed",
+              reason: `secret ${secretName} has no SecretString`,
+            });
+            continue;
+          }
+          botToken = extractBotToken(resp.SecretString);
+          if (!botToken) {
+            log.warn(
+              `${agentId}: SLACK_BOT_TOKEN not found in secret ${secretName} — skipping`
+            );
+            results.push({
+              agentId,
+              status: "failed",
+              reason: `SLACK_BOT_TOKEN not found in secret ${secretName}`,
+            });
+            continue;
+          }
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`${agentId}: could not fetch secret ${secretName}: ${msg} — skipping`);
+          results.push({
+            agentId,
+            status: "failed",
+            reason: `secret fetch failed: ${msg}`,
+          });
+          continue;
+        }
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`${agentId}: could not fetch secret ${secretName}: ${msg} — skipping`);
-      results.push({
-        agentId,
-        status: "failed",
-        reason: `secret fetch failed: ${msg}`,
-      });
-      continue;
     }
 
     // Call auth.test
@@ -379,17 +406,18 @@ Run \`fleetmind slack <subcommand> --help\` for examples.
   slack
     .command("discover")
     .description(
-      "Fetch each agent's Slack bot token from Secrets Manager, call auth.test, " +
-      "and write the discovered bot_user_id back into fleet.yaml"
+      "Call Slack auth.test for each agent and write the discovered bot_user_id back into fleet.yaml. " +
+      "Token source priority: --interactive prompt > env var (<AGENT>_BOT_TOKEN) > Secrets Manager."
     )
     .option("--fleet <path>", "fleet.yaml path", "./fleet.yaml")
-    .option("--region <region>", "AWS region for Secrets Manager", "us-west-2")
+    .option("--region <region>", "AWS region for Secrets Manager (not needed with --interactive)", "us-west-2")
     .option(
       "--agent <id>",
       "limit to specific agent (repeatable)",
       (val: string, prev: string[]) => [...prev, val],
       [] as string[]
     )
+    .option("-i, --interactive", "prompt for each agent's bot token with hidden input (no AWS needed)", false)
     .option("--dry-run", "print proposed changes without writing fleet.yaml", false)
     .option(
       "--force",
@@ -397,23 +425,33 @@ Run \`fleetmind slack <subcommand> --help\` for examples.
       false
     )
     .addHelpText('after', `
+Token source priority (first match wins):
+  1. --interactive    Prompt for each token at the terminal (hidden input, no AWS needed)
+  2. Env vars         <AGENT_ID_UPPER>_BOT_TOKEN (e.g. ARIADNE_BOT_TOKEN)
+  3. Secrets Manager  \${fleet_name}/agents/\${agent_id}/slack (default)
+
 Examples:
-  # Auto-fill bot_user_id for all agents (reads tokens from Secrets Manager)
+  # Prompt for tokens interactively — use this right after creating Slack apps,
+  # before terraform apply or secrets populate
+  $ fleetmind slack discover --interactive
+
+  # Auto-fill from Secrets Manager (after fleetmind secrets populate)
   $ fleetmind slack discover
 
   # Discover for a single agent only
-  $ fleetmind slack discover --agent pm-bot
+  $ fleetmind slack discover --agent pm-bot --interactive
 
   # Dry-run: show what would be written to fleet.yaml without writing
-  $ fleetmind slack discover --dry-run
+  $ fleetmind slack discover --dry-run --interactive
 
   # Force overwrite even when bot_user_id is already set in fleet.yaml
-  $ fleetmind slack discover --force
+  $ fleetmind slack discover --force --interactive
 `)
     .action(async (opts: {
       fleet: string;
       region: string;
       agent: string[];
+      interactive: boolean;
       dryRun: boolean;
       force: boolean;
     }) => {
@@ -422,6 +460,8 @@ Examples:
           fleet: opts.fleet,
           region: opts.region,
           agent: opts.agent.length > 0 ? opts.agent : undefined,
+          interactive: opts.interactive,
+          promptFn: opts.interactive ? promptHidden : undefined,
           dryRun: opts.dryRun,
           force: opts.force,
         });
