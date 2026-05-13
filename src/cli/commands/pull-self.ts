@@ -26,6 +26,7 @@ import {
 
 import type { ManifestFile, DeployManifest } from "./push-fleet.js";
 import { log } from "../../utils/log.js";
+import { applyWorkspacePatches } from "../../runtime/patch-engine.js";
 
 export { ManifestFile, DeployManifest };
 
@@ -620,7 +621,21 @@ export async function runPullSelf(
   const appliedCount = diff.added.length + diff.modified.length + diff.deleted.length;
   log.success(`\n✓ Applied ${appliedCount} change${appliedCount !== 1 ? "s" : ""} to ${workspaceDir}`);
 
-  // Step 10: Restart if requested
+  // Step 10: Apply workspace patches (idempotent — skip already-applied)
+  const patchesPath = path.join(workspaceDir, "PATCHES.md");
+  if (fs.existsSync(patchesPath)) {
+    log.step("Applying workspace patches...");
+    const patchResults = applyWorkspacePatches(patchesPath, workspaceDir);
+    const applied = patchResults.filter((r) => r.status === "applied").length;
+    const skipped = patchResults.filter((r) => r.status === "skipped").length;
+    if (applied > 0) {
+      log.ok(`  ${applied} patch${applied !== 1 ? "es" : ""} applied, ${skipped} already up to date`);
+    } else if (patchResults.length > 0) {
+      log.dim(`  all ${skipped} patches already applied`);
+    }
+  }
+
+  // Step 11: Restart if requested
   if (opts.restart) {
     log.step(`Restarting openclaw-${agentId}...`);
     restartGateway(agentId);
