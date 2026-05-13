@@ -22,6 +22,7 @@ import { registerSelfUpgrade } from "./commands/self-upgrade.js";
 import { registerSlackDiscover, registerSlackManifests } from "./commands/slack.js";
 import { registerPullSelf } from "./commands/pull-self.js";
 import { registerPullWorkspace } from "./commands/pull-workspace.js";
+import { registerOnboard } from "./commands/onboard.js";
 
 // Inject stored secrets into env before any command runs
 injectSecrets();
@@ -62,5 +63,6 @@ registerSlackDiscover(program);
 registerSlackManifests(program);
 registerPullSelf(program);
 registerPullWorkspace(program);
+registerOnboard(program);
 
 program.parse();
