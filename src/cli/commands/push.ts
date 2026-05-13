@@ -22,7 +22,7 @@ Run \`fleetmind push <subcommand> --help\` for examples.
   push
     .command("skill <name>")
     .description("Push a skill to one or more agents")
-    .option("-c, --config <file>", "fleet.yaml path", "fleet.yaml")
+    .option("-f, --fleet <path>", "fleet.yaml path", "fleet.yaml")
     .option("-a, --agent <id>", "Target agent ID")
     .option("--all", "Push to all agents")
     .option("-v, --version <ver>", "Skill version to install")
@@ -39,7 +39,7 @@ Examples:
 `)
     .action((skillName: string, opts) => {
       try {
-        const fleet = loadFleet(opts.config);
+        const fleet = loadFleet(opts.fleet);
         const watcher = new SkillsWatcher(fleet);
 
         const targets = opts.all
@@ -67,7 +67,7 @@ Examples:
   push
     .command("plugin <name>")
     .description("Push a plugin to one or more agents (updates fleet config)")
-    .option("-c, --config <file>", "fleet.yaml path", "fleet.yaml")
+    .option("-f, --fleet <path>", "fleet.yaml path", "fleet.yaml")
     .option("-a, --agent <id>", "Target agent ID")
     .option("--all", "Push to all agents")
     .addHelpText('after', `
@@ -82,7 +82,7 @@ Note: plugins are written to fleet config — run \`fleetmind render\` to update
 `)
     .action((pluginName: string, opts) => {
       try {
-        const fleet = loadFleet(opts.config);
+        const fleet = loadFleet(opts.fleet);
 
         const targets = opts.all
           ? fleet.agents.list
