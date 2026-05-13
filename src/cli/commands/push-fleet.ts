@@ -46,7 +46,7 @@ import {
 
 import { loadFleet } from "../../config/loader.js";
 import { provisionFleet } from "../../runtime/provisioner.js";
-import { writeOutputs } from "../../runtime/renderer.js";
+import { writeOutputs, resolveOpenClawBaseDir } from "../../runtime/renderer.js";
 import { log } from "../../utils/log.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -332,8 +332,15 @@ export async function runPushFleet(
     log.step(`Packaging ${agent.emoji} ${agent.name} (${agentId})...`);
 
     const workspaceDir = path.join(localBase, "rendered", "workspaces", agentId);
-    // Per-agent openclaw.json (rendered by writeOutputs)
-    const ocJsonPath = path.join(localBase, "rendered", "openclaw", agentId, "openclaw.json");
+    // Per-agent openclaw.json (rendered by writeOutputs). Derive the base dir
+    // from fleet.outputs.openclaw_json so fleets with custom output paths (e.g.
+    // ./rendered/openclaw-<fleet>.json for parallel-fleet deploys) are honored.
+    // Previously hardcoded to ./rendered/openclaw/<agent>/openclaw.json which
+    // silently broke push for any fleet not using the default output path —
+    // tarballs went up without openclaw.json, CondPathExists never satisfied,
+    // gateway never started on first deploy.
+    const ocBaseDir = resolveOpenClawBaseDir(fleet.outputs.openclaw_json, localBase);
+    const ocJsonPath = path.join(ocBaseDir, agentId, "openclaw.json");
 
     // Build staging directory (workspace files + .openclaw/openclaw.json)
     const stagingDir = buildStagingDir(agentId, workspaceDir, ocJsonPath, tmpBase);
