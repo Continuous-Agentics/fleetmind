@@ -7,6 +7,7 @@ import { log } from "../../utils/log.js";
 export function registerDiff(program: Command): void {
   program
     .command("diff [fleet]")
+    .option("-f, --fleet <path>", "fleet.yaml path (overrides positional arg and FLEET_YAML env var)")
     .description("Show what deploy would change without applying anything")
     .addHelpText('after', `
 Examples:
@@ -19,8 +20,8 @@ Examples:
   # Typical workflow: diff first, then deploy if changes look right
   $ fleetmind diff && fleetmind deploy
 `)
-    .action((fleetArg: string | undefined) => {
-      const fleetFile = fleetArg ?? "fleet.yaml";
+    .action((fleetArg: string | undefined, opts) => {
+      const fleetFile = opts.fleet ?? fleetArg ?? "fleet.yaml";
       try {
         const fleet = loadFleet(fleetFile);
         const changes = diffFleet(fleet);

@@ -191,10 +191,32 @@ function detectDeletedDirs(deleted: ManifestFile[], incoming: ManifestFile[]): M
  * Format a diff for human display.
  * Returns the printed string (so callers/tests can assert on it).
  */
+/**
+ * Compute +added / -removed line counts between two text strings.
+ * Returns "+0 -0" when content is identical or non-text.
+ */
+function lineDeltaLabel(current: string, incoming: string): string {
+  const cur = current.split("\n");
+  const inc = incoming.split("\n");
+  let added = 0, removed = 0;
+  const maxLen = Math.max(cur.length, inc.length);
+  for (let i = 0; i < maxLen; i++) {
+    if (cur[i] !== inc[i]) {
+      if (cur[i] !== undefined) removed++;
+      if (inc[i] !== undefined) added++;
+    }
+  }
+  const a = added > 0 ? `+${added}` : "";
+  const r = removed > 0 ? `-${removed}` : "";
+  return [a, r].filter(Boolean).join(" ") || "unchanged";
+}
+
 export function formatDiff(
   agentId: string,
   diff: FileDiff,
-  incomingFiles: ManifestFile[]
+  incomingFiles: ManifestFile[],
+  workspaceDir?: string,
+  stagingDir?: string
 ): string {
   const lines: string[] = [`Fleet update for ${agentId}:`];
 
@@ -207,8 +229,17 @@ export function formatDiff(
 
   if (diff.modified.length > 0) {
     lines.push("  Modified:");
-    for (const { incoming, currentSize } of diff.modified) {
-      lines.push(`    ${incoming.path}  (was ${fmtBytes(currentSize)}, now ${fmtBytes(incoming.size)})`);
+    for (const { incoming } of diff.modified) {
+      let delta = "";
+      if (workspaceDir && stagingDir) {
+        try {
+          const curContent = fs.readFileSync(path.join(workspaceDir, incoming.path), "utf-8");
+          const incContent = fs.readFileSync(path.join(stagingDir, incoming.path), "utf-8");
+          delta = "  " + lineDeltaLabel(curContent, incContent);
+        } catch { /* non-text or missing — fall back to byte sizes */ }
+      }
+      const byteFallback = delta ? "" : `  (was ${fmtBytes(incoming.size)})`;
+      lines.push(`    ${incoming.path}${delta || byteFallback}`);
     }
   }
 
@@ -219,7 +250,6 @@ export function formatDiff(
       const top = f.path.split("/")[0]!;
       const isDir = top !== f.path && dirRemovals.has(top);
       if (isDir) {
-        // Print the dir once, not every file
         if (f.path === diff.deleted.find((d) => d.path.startsWith(top + "/"))?.path) {
           const count = dirRemovals.get(top)!;
           lines.push(`    ${top}/  (entire dir, ${count} file${count !== 1 ? "s" : ""})`);
@@ -230,68 +260,86 @@ export function formatDiff(
     }
   }
 
-  // Summary
   const dirRemovals = detectDeletedDirs(diff.deleted, incomingFiles);
   const dirCount = dirRemovals.size;
   const parts: string[] = [];
   if (diff.added.length) parts.push(`${diff.added.length} added`);
   if (diff.modified.length) parts.push(`${diff.modified.length} modified`);
   if (diff.deleted.length) {
-    if (dirCount > 0) {
-      parts.push(`${diff.deleted.length} deleted (${dirCount} dir removal${dirCount !== 1 ? "s" : ""})`);
-    } else {
-      parts.push(`${diff.deleted.length} deleted`);
-    }
+    parts.push(dirCount > 0
+      ? `${diff.deleted.length} deleted (${dirCount} dir removal${dirCount !== 1 ? "s" : ""})`
+      : `${diff.deleted.length} deleted`);
   }
 
   lines.push("");
   lines.push(`Summary: ${parts.length ? parts.join(", ") : "no changes"}.`);
   lines.push("");
   lines.push("Apply with: fleetmind pull-self --apply [--restart]");
+  if (diff.modified.length > 0) {
+    lines.push("Show file diffs: fleetmind pull-self --show-diffs [<file>] [--full]");
+  }
 
   return lines.join("\n");
 }
 
-/** Show per-file unified diffs using the system `diff` tool (capped at 50 lines/file). */
+/**
+ * Show per-file unified diffs for modified files.
+ * @param filter  If set, only show diffs for files matching this substring/glob.
+ * @param full    If true, show the entire diff without line cap.
+ */
 export function showFileDiffs(
   stagingDir: string,
   workspaceDir: string,
-  modified: { incoming: ManifestFile; currentSize: number }[]
+  modified: { incoming: ManifestFile; currentSize: number }[],
+  filter?: string,
+  full?: boolean
 ): void {
-  const MAX_LINES = 50;
-  for (const { incoming } of modified) {
+  const MAX_LINES_PER_FILE = 200;
+
+  const targets = filter
+    ? modified.filter(({ incoming }) =>
+        incoming.path.includes(filter) ||
+        incoming.path.endsWith(filter)
+      )
+    : modified;
+
+  if (targets.length === 0) {
+    log.dim(filter ? `  no modified files matching '${filter}'` : "  no modified files");
+    return;
+  }
+
+  for (const { incoming } of targets) {
     const currentPath = path.join(workspaceDir, incoming.path);
     const stagingPath = path.join(stagingDir, incoming.path);
     if (!fs.existsSync(currentPath) || !fs.existsSync(stagingPath)) continue;
 
-    // Only show diffs for text-like files
     try {
       const currentContent = fs.readFileSync(currentPath, "utf-8");
       const stagingContent = fs.readFileSync(stagingPath, "utf-8");
       if (currentContent === stagingContent) continue;
 
-      log.info(`\n--- ${incoming.path} (current)`);
-      log.info(`+++ ${incoming.path} (incoming)`);
+      log.info(`\n\x1b[33m--- ${incoming.path} (current)\x1b[0m`);
+      log.info(`\x1b[33m+++ ${incoming.path} (incoming)\x1b[0m`);
 
-      // Simple line diff
       const currentLines = currentContent.split("\n");
       const stagingLines = stagingContent.split("\n");
       const maxLen = Math.max(currentLines.length, stagingLines.length);
+      const cap = full ? Infinity : MAX_LINES_PER_FILE;
       let shown = 0;
-      for (let i = 0; i < maxLen && shown < MAX_LINES; i++) {
+
+      for (let i = 0; i < maxLen && shown < cap; i++) {
         const c = currentLines[i];
         const s = stagingLines[i];
         if (c !== s) {
-          if (c !== undefined) { log.info(`- ${c}`); shown++; }
-          if (s !== undefined) { log.info(`+ ${s}`); shown++; }
+          if (c !== undefined) { log.info(`\x1b[31m- ${c}\x1b[0m`); shown++; }
+          if (s !== undefined) { log.info(`\x1b[32m+ ${s}\x1b[0m`); shown++; }
         }
       }
-      if (shown >= MAX_LINES) {
-        log.dim("  (diff truncated at 50 lines)");
+      if (shown >= cap) {
+        log.dim(`  … diff truncated at ${cap} lines. Re-run with --full to see everything.`);
       }
     } catch {
-      // Binary or unreadable — skip
-      log.dim(`  ${incoming.path}: (binary or unreadable — skipping inline diff)`);
+      log.dim(`  ${incoming.path}: (binary or unreadable — skipping)`);
     }
   }
 }
@@ -494,6 +542,8 @@ export interface PullSelfOptions {
   restart: boolean;
   force: boolean;
   showDiffs: boolean;
+  showDiffsFilter?: string;
+  showDiffsFull?: boolean;
   /** Override agent env (for testing). */
   agentEnvOverride?: AgentEnv;
 }
@@ -575,7 +625,7 @@ export async function runPullSelf(
     return { changed: false, applied: false, diff };
   }
 
-  // Step 5: Print diff
+  // Step 5: Print diff (no staging dir yet — byte sizes as fallback for modified files)
   const diffOutput = formatDiff(agentId, diff, incomingManifest.files);
   console.log(diffOutput);
 
@@ -607,7 +657,7 @@ export async function runPullSelf(
 
   // Show per-file diffs if --show-diffs
   if (opts.showDiffs && diff.modified.length > 0) {
-    showFileDiffs(stagingDir, workspaceDir, diff.modified);
+    showFileDiffs(stagingDir, workspaceDir, diff.modified, opts.showDiffsFilter, opts.showDiffsFull);
   }
 
   // Step 9: Apply diff
@@ -658,20 +708,27 @@ export function registerPullSelf(program: Command): void {
     .option("--apply", "Apply the diff to the live workspace", false)
     .option("--restart", "Restart gateway after apply", false)
     .option("--force", "Apply even if no changes detected", false)
-    .option("--show-diffs", "Show per-file unified diffs for modified files", false)
+    .option("--show-diffs [file]", "Show per-file unified diffs for modified files. Optionally filter to a specific file path.")
+    .option("--full", "Show full diffs without line cap (use with --show-diffs)", false)
     .addHelpText('after', `
+Diff display:
+  Default output shows git-stat-style (+added -removed) line counts per file.
+  Use --show-diffs to see the actual unified diff for all modified files.
+  Use --show-diffs AGENTS.md to see the diff for a specific file only.
+  Use --show-diffs --full to bypass the 200-line per-file cap.
+
 Examples:
-  # Show diff against the latest deploy-staging manifest (default, no changes applied)
+  # Show diff against the latest deploy-staging manifest
   $ fleetmind pull-self
 
-  # Apply incoming changes without restarting the gateway
-  $ fleetmind pull-self --apply
-
-  # Apply and restart the gateway in one shot
+  # Apply and restart the gateway
   $ fleetmind pull-self --apply --restart
 
-  # Show per-file inline diffs for modified files before applying
-  $ fleetmind pull-self --show-diffs
+  # See what changed in AGENTS.md before applying
+  $ fleetmind pull-self --show-diffs AGENTS.md
+
+  # See full diff for all modified files
+  $ fleetmind pull-self --show-diffs --full
 
   # Force apply even when no changes are detected
   $ fleetmind pull-self --apply --force
@@ -682,16 +739,20 @@ Examples:
       apply: boolean;
       restart: boolean;
       force: boolean;
-      showDiffs: boolean;
+      showDiffs?: string | boolean;
+      full: boolean;
     }) => {
       try {
+        const showDiffsFilter = typeof opts.showDiffs === 'string' ? opts.showDiffs : undefined;
         const { changed, applied } = await runPullSelf({
           region: opts.region,
           dryRun: opts.dryRun,
           apply: opts.apply,
           restart: opts.restart,
           force: opts.force,
-          showDiffs: opts.showDiffs,
+          showDiffs: !!opts.showDiffs,
+          showDiffsFilter,
+          showDiffsFull: opts.full,
         });
 
         if (changed && !applied && !opts.dryRun) {

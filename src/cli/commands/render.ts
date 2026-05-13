@@ -6,6 +6,7 @@ import { log } from "../../utils/log.js";
 export function registerRender(program: Command): void {
   program
     .command("render [fleet]")
+    .option("-f, --fleet <path>", "fleet.yaml path (overrides positional arg and FLEET_YAML env var)")
     .description("Render openclaw.json and terraform vars without deploying")
     .option("-o, --out <dir>", "Output base directory", ".")
     .addHelpText('after', `
@@ -23,7 +24,7 @@ Examples:
   $ fleetmind render staging-fleet.yaml --out ./rendered-staging
 `)
     .action((fleetArg: string | undefined, opts) => {
-      const fleetFile = fleetArg ?? "fleet.yaml";
+      const fleetFile = opts.fleet ?? fleetArg ?? "fleet.yaml";
       try {
         const fleet = loadFleet(fleetFile);
         const written = writeOutputs(fleet, opts.out);

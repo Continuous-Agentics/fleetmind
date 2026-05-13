@@ -183,7 +183,7 @@ describe("formatDiff", () => {
     assert.ok(output.includes("1.2 KB"), "should show size");
   });
 
-  test("lists modified files with was/now sizes", () => {
+  test("lists modified files", () => {
     const diff: FileDiff = {
       added: [],
       modified: [{ incoming: makeFile("AGENTS.md", 4600), currentSize: 4000 }],
@@ -192,8 +192,6 @@ describe("formatDiff", () => {
     const output = formatDiff("conductor", diff, [diff.modified[0]!.incoming]);
     assert.ok(output.includes("Modified:"), "should have Modified section");
     assert.ok(output.includes("AGENTS.md"), "should list modified file");
-    assert.ok(output.includes("was"), "should show was size");
-    assert.ok(output.includes("now"), "should show now size");
   });
 
   test("lists deleted files", () => {

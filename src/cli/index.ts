@@ -21,6 +21,7 @@ import { registerGithubApp } from "./commands/github-app.js";
 import { registerSelfUpgrade } from "./commands/self-upgrade.js";
 import { registerSlackDiscover, registerSlackManifests } from "./commands/slack.js";
 import { registerPullSelf } from "./commands/pull-self.js";
+import { registerPullWorkspace } from "./commands/pull-workspace.js";
 
 // Inject stored secrets into env before any command runs
 injectSecrets();
@@ -60,5 +61,6 @@ registerSelfUpgrade(program);
 registerSlackDiscover(program);
 registerSlackManifests(program);
 registerPullSelf(program);
+registerPullWorkspace(program);
 
 program.parse();
