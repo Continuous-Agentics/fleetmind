@@ -1,6 +1,6 @@
 {
   "name": "@continuous-agentics/fleetmind",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "Deploy and manage OpenClaw multi-agent fleets",
   "keywords": [
     "ai",
@@ -30,6 +30,7 @@
     "dist/config",
     "dist/runtime",
     "dist/utils",
+    "openclaw",
     "README.md",
     "LICENSE"
   ],
