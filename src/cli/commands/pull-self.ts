@@ -12,7 +12,8 @@
  */
 
 import crypto from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -449,6 +450,31 @@ export async function runPullSelf(
   }
 
   log.dim(`  incoming: ${incomingManifest.files.length} files (rendered ${incomingManifest.rendered_at})`);
+
+  // Step 3b: Auto-upgrade CLI if manifest specifies a different version
+  const manifestVersion = incomingManifest.fleetmind_version;
+  if (manifestVersion && manifestVersion !== 'unknown') {
+    const installedVersion = (() => {
+      try {
+        const here = path.dirname(fileURLToPath(import.meta.url));
+        const pkgPath = path.resolve(here, '..', '..', '..', 'package.json');
+        return (JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version: string }).version;
+      } catch { return 'unknown'; }
+    })();
+    if (installedVersion !== 'unknown' && installedVersion !== manifestVersion) {
+      log.step(`CLI version mismatch (installed: ${installedVersion}, manifest: ${manifestVersion}) — upgrading...`);
+      try {
+        execSync(`fleetmind self-upgrade --version ${manifestVersion} --apply`, { stdio: 'inherit' });
+        log.ok(`  fleetmind upgraded to ${manifestVersion} — re-exec to pick up new binary`);
+        // Re-exec this process with the upgraded binary so the new version handles the apply
+        const args = process.argv.slice(1);
+        execFileSync(process.execPath, args, { stdio: 'inherit' });
+        return { changed: true, applied: true, diff: { added: [], modified: [], deleted: [] } };
+      } catch (err) {
+        log.warn(`  self-upgrade failed: ${String(err)} — continuing with installed version`);
+      }
+    }
+  }
 
   // Step 4: Compute diff
   const diff = computeDiff(currentFiles, incomingManifest.files);

@@ -290,6 +290,12 @@ export interface PushFleetOptions {
   restart: boolean;
   dryRun: boolean;
   noApply: boolean;
+  /**
+   * When set, prepend a self-upgrade step to the SSM command so the CLI on
+   * each instance is upgraded before pull-self runs. "latest" upgrades to
+   * the newest published version; a semver string pins to that version.
+   */
+  upgradeCli?: string;
   localBase?: string;
   fleetmindVersion?: string;
 }
@@ -412,7 +418,10 @@ export async function runPushFleet(
           results.push({ agent_id: agentId, status: "pushed", reason: "instance not in SSM" });
         } else {
           const restartFlag = opts.restart ? " --restart" : "";
-          const cmd = `sudo -u ec2-user fleetmind pull-self --apply${restartFlag} --region ${region}`;
+          const upgradeStep = opts.upgradeCli
+            ? `fleetmind self-upgrade --version ${opts.upgradeCli} --apply && `
+            : "";
+          const cmd = `${upgradeStep}sudo -u ec2-user fleetmind pull-self --apply${restartFlag} --region ${region}`;
           log.step(`    sending SSM command to ${instanceId}...`);
           const cmdId = await sendSsmCommand(instanceId, [cmd], region);
           log.ok(`  ${agentId}: SSM command sent → ${cmdId}`);
@@ -463,21 +472,31 @@ export function registerPushFleet(pushCmd: Command): void {
     .option("-a, --agent <id>", "Only push to this agent (repeatable)", (val: string, prev: string[]) => [...prev, val], [] as string[])
     .option("--region <region>", "AWS region", "us-west-2")
     .option("--restart", "Restart gateway after apply on each agent", false)
+    .option("--upgrade-cli [version]", "Upgrade fleetmind CLI on each instance before applying. Defaults to 'latest' if no version is specified. Use a semver string to pin (e.g. --upgrade-cli 0.4.13).")
     .option("--dry-run", "Package locally and compute manifest, but skip upload and SSM", false)
     .option("--no-apply", "Upload to S3 but skip SSM trigger")  // Commander's --no-* sets opts.apply=true by default; --no-apply flips to false. Do NOT pass a default value here (would shadow Commander's inverse-flag semantics).
     .addHelpText('after', `
+Upgrade behaviour:
+  pull-self (running on the instance) auto-upgrades the CLI when the deploy
+  manifest specifies a different version than what is installed (Option B).
+  Use --upgrade-cli to force an upgrade to a specific version regardless
+  of the manifest (Option A — useful when bootstrapping new instances).
+
 Examples:
+  # Standard push with restart
+  $ fleetmind push fleet --restart
+
+  # Push AND upgrade CLI to latest on all instances
+  $ fleetmind push fleet --restart --upgrade-cli
+
+  # Push AND upgrade CLI to a specific version
+  $ fleetmind push fleet --restart --upgrade-cli 0.4.13
+
   # Dry-run: package workspaces and compute manifests, but skip upload and SSM
   $ fleetmind push fleet --dry-run
 
-  # Full push: upload to S3 and trigger pull-self + restart on all agents (most common)
-  $ fleetmind push fleet --restart
-
   # Push to one agent only (e.g. after a targeted skill change)
   $ fleetmind push fleet --agent pm-bot
-
-  # Push with a custom region
-  $ fleetmind push fleet --region us-east-1 --restart
 
   # Upload artifacts to S3 but skip the SSM trigger (manual pull-self later)
   $ fleetmind push fleet --no-apply
@@ -487,15 +506,21 @@ Examples:
       agent: string[];
       region: string;
       restart: boolean;
+      upgradeCli?: string | boolean;
       dryRun: boolean;
       apply: boolean;  // commander --no-apply sets opts.apply = false
     }) => {
       try {
+        // --upgrade-cli with no value → true (boolean); resolve to 'latest'
+        const upgradeCli = opts.upgradeCli === true ? 'latest'
+          : typeof opts.upgradeCli === 'string' ? opts.upgradeCli
+          : undefined;
         await runPushFleet({
           fleet: opts.fleet,
           agents: opts.agent,
           region: opts.region,
           restart: opts.restart,
+          upgradeCli,
           dryRun: opts.dryRun,
           noApply: opts.apply === false,
         });
