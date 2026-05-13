@@ -348,10 +348,19 @@ export function applyDiff(
   for (const f of diff.deleted) {
     const target = path.join(workspaceDir, f.path);
     if (fs.existsSync(target)) {
-      fs.unlinkSync(target);
-      log.info(`  - ${f.path}`);
-      // Remove empty parent dirs
-      tryRemoveEmptyDir(path.dirname(target), workspaceDir);
+      try {
+        fs.unlinkSync(target);
+        log.info(`  - ${f.path}`);
+        // Remove empty parent dirs
+        tryRemoveEmptyDir(path.dirname(target), workspaceDir);
+      } catch (err: unknown) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'EACCES' || code === 'EPERM') {
+          log.warn(`  ! ${f.path} (skipped — permission denied, run as owner to clean up)`);
+        } else {
+          throw err;
+        }
+      }
     }
   }
 }
