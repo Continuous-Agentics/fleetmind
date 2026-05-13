@@ -436,7 +436,7 @@ export function registerPushFleet(pushCmd: Command): void {
     .option("--region <region>", "AWS region", "us-west-2")
     .option("--restart", "Restart gateway after apply on each agent", false)
     .option("--dry-run", "Package locally and compute manifest, but skip upload and SSM", false)
-    .option("--no-apply", "Upload to S3 but skip SSM trigger", false)
+    .option("--no-apply", "Upload to S3 but skip SSM trigger")  // Commander's --no-* sets opts.apply=true by default; --no-apply flips to false. Do NOT pass a default value here (would shadow Commander's inverse-flag semantics).
     .action(async (opts: {
       fleet?: string;
       agent: string[];
