@@ -77,6 +77,17 @@ export function registerInit(program: Command): void {
     .option("-n, --name <name>", "Fleet name", "my-fleet")
     .option("-c, --client <client>", "Client name")
     .option("-o, --output <file>", "Output file", "fleet.yaml")
+    .addHelpText('after', `
+Examples:
+  # Scaffold a fleet.yaml with defaults in the current directory
+  $ fleetmind init
+
+  # Scaffold with a specific fleet name
+  $ fleetmind init --name acme-bots
+
+  # Scaffold with fleet name and client, writing to a custom file
+  $ fleetmind init --name acme-bots --client acme --output my-fleet.yaml
+`)
     .action((opts) => {
       const output = opts.output as string;
       if (fs.existsSync(output)) {

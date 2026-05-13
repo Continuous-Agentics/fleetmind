@@ -367,7 +367,14 @@ export function printDiscoverResults(
 export function registerSlackDiscover(program: Command): void {
   const slack = program
     .command("slack")
-    .description("Slack utilities for fleet agents");
+    .description("Slack utilities for fleet agents")
+    .addHelpText('after', `
+Subcommands:
+  discover    Auto-populate bot_user_id in fleet.yaml from Slack auth.test
+  manifests   Generate per-agent Slack App manifest YAMLs
+
+Run \`fleetmind slack <subcommand> --help\` for examples.
+`);
 
   slack
     .command("discover")
@@ -389,6 +396,20 @@ export function registerSlackDiscover(program: Command): void {
       "overwrite existing bot_user_id values (default: skip agents that already have one)",
       false
     )
+    .addHelpText('after', `
+Examples:
+  # Auto-fill bot_user_id for all agents (reads tokens from Secrets Manager)
+  $ fleetmind slack discover
+
+  # Discover for a single agent only
+  $ fleetmind slack discover --agent pm-bot
+
+  # Dry-run: show what would be written to fleet.yaml without writing
+  $ fleetmind slack discover --dry-run
+
+  # Force overwrite even when bot_user_id is already set in fleet.yaml
+  $ fleetmind slack discover --force
+`)
     .action(async (opts: {
       fleet: string;
       region: string;
@@ -691,6 +712,17 @@ export function registerSlackManifests(program: Command): void {
       (val: string, prev: string[]) => [...prev, val],
       [] as string[]
     )
+    .addHelpText('after', `
+Examples:
+  # Generate Slack App manifests for all agents into ./rendered/slack-manifests/
+  $ fleetmind slack manifests
+
+  # Generate for a single agent only
+  $ fleetmind slack manifests --agent pm-bot
+
+  # Write manifests to a custom output directory
+  $ fleetmind slack manifests --out ./slack-app-configs
+`)
     .action(async (opts: { fleet?: string; out: string; agent: string[] }) => {
       try {
         const result = await generateManifests({

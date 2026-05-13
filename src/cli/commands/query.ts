@@ -59,7 +59,17 @@ function msAgo(ms: number): string {
 export function registerQuery(program: Command): void {
   const query = program
     .command("query")
-    .description("Query the task ledger (pending, shipped, merged, stale, all)");
+    .description("Query the task ledger (pending, shipped, merged, stale, all)")
+    .addHelpText('after', `
+Subcommands:
+  pending   List delegated (in-flight) tasks
+  shipped   List shipped tasks awaiting signoff
+  merged    List merged tasks
+  stale     List tasks that haven't progressed past an age threshold
+  all       Query all tasks with optional filters
+
+Run \`fleetmind query <subcommand> --help\` for examples.
+`);
 
   // ── pending ──────────────────────────────────────────────────────────────
 
@@ -72,6 +82,20 @@ export function registerQuery(program: Command): void {
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--region <region>", "AWS region override")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # List all pending tasks across all projects
+  $ fleetmind query pending
+
+  # List pending tasks for a specific worker
+  $ fleetmind query pending --worker forge
+
+  # List pending tasks in a specific project
+  $ fleetmind query pending --project website-rewrite
+
+  # Output as JSON for scripting
+  $ fleetmind query pending --json
+`)
     .action(async (opts: {
       worker?: string;
       project?: string;
@@ -107,6 +131,17 @@ export function registerQuery(program: Command): void {
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--region <region>", "AWS region override")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # List all recently shipped tasks
+  $ fleetmind query shipped
+
+  # List shipped tasks for a specific project
+  $ fleetmind query shipped --project website-rewrite
+
+  # Output as JSON
+  $ fleetmind query shipped --json
+`)
     .action(async (opts: {
       project?: string;
       limit: string;
@@ -137,6 +172,17 @@ export function registerQuery(program: Command): void {
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--region <region>", "AWS region override")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # List all merged tasks
+  $ fleetmind query merged
+
+  # List merged tasks for a specific project
+  $ fleetmind query merged --project website-rewrite
+
+  # Output as JSON
+  $ fleetmind query merged --json
+`)
     .action(async (opts: {
       project?: string;
       limit: string;
@@ -167,6 +213,20 @@ export function registerQuery(program: Command): void {
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--region <region>", "AWS region override")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # Find tasks that haven't progressed in more than 24 hours (default)
+  $ fleetmind query stale
+
+  # Find tasks stale for more than 2 hours
+  $ fleetmind query stale --older-than 2h
+
+  # Find tasks stale for more than 30 minutes
+  $ fleetmind query stale --older-than 30m
+
+  # Output as JSON for alerting scripts
+  $ fleetmind query stale --older-than 1h --json
+`)
     .action(async (opts: {
       olderThan: string;
       limit: string;
@@ -214,6 +274,20 @@ export function registerQuery(program: Command): void {
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--region <region>", "AWS region override")
     .option("--json", "Output JSON")
+    .addHelpText('after', `
+Examples:
+  # List all tasks in a project across every status
+  $ fleetmind query all --project website-rewrite
+
+  # List all blocked tasks across the fleet
+  $ fleetmind query all --status blocked
+
+  # List blocked tasks in a specific project
+  $ fleetmind query all --project api-refactor --status blocked
+
+  # Output as JSON for downstream processing
+  $ fleetmind query all --project website-rewrite --json
+`)
     .action(async (opts: {
       project?: string;
       status?: string;

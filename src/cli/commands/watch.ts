@@ -8,6 +8,17 @@ export function registerWatch(program: Command): void {
     .command("watch [fleet]")
     .description("GitOps watcher — auto-push skill updates from the skills repo")
     .option("--interval <interval>", "Poll interval (e.g. 30s, 5m)")
+    .addHelpText('after', `
+Examples:
+  # Watch the default fleet.yaml and auto-push skill changes
+  $ fleetmind watch
+
+  # Watch a specific fleet file
+  $ fleetmind watch acme-fleet.yaml
+
+  # Override the poll interval to every 2 minutes
+  $ fleetmind watch --interval 2m
+`)
     .action(async (fleetArg: string | undefined, opts) => {
       const fleetFile = fleetArg ?? "fleet.yaml";
       try {

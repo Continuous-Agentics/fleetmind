@@ -11,6 +11,20 @@ export function registerDeploy(program: Command): void {
     .description("Render per-agent workspaces + openclaw.json locally to ./rendered/ (does not push to EC2 — use `push fleet` for that)")
     .option("--dry-run", "Show what would happen without doing it")
     .option("--no-render", "Skip rendering openclaw.json")
+    .addHelpText('after', `
+Examples:
+  # Render workspaces for the default fleet.yaml into ./rendered/ (local only)
+  $ fleetmind deploy
+
+  # Render a specific fleet file
+  $ fleetmind deploy acme-fleet.yaml
+
+  # Preview what would happen without writing anything
+  $ fleetmind deploy --dry-run
+
+Note: deploy writes files locally. To push rendered workspaces to EC2 instances, run:
+  $ fleetmind push fleet
+`)
     .action((fleetArg: string | undefined, opts) => {
       const fleetFile = fleetArg ?? "fleet.yaml";
       try {

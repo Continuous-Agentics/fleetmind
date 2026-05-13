@@ -186,6 +186,26 @@ export function registerGithubApp(program: Command): void {
       "--no-overwrite",
       "Fail if a parameter already exists (default: overwrite)"
     )
+    .addHelpText('after', `
+Examples:
+  # Store GitHub App credentials for a specific agent
+  $ fleetmind github-app store \\
+      --fleet acme-bots --agent pm-bot \\
+      --app-id 123456 --installation-id 78901234 \\
+      --pem-file ./github-app.pem
+
+  # Store credentials in a different AWS region
+  $ fleetmind github-app store \\
+      --fleet acme-bots --agent forge \\
+      --app-id 123456 --installation-id 78901234 \\
+      --pem-file ./github-app.pem --region us-east-1
+
+  # Dry-run: show what SSM parameters would be written
+  $ fleetmind github-app store \\
+      --fleet acme-bots --agent pm-bot \\
+      --app-id 123456 --installation-id 78901234 \\
+      --pem-file ./github-app.pem --dry-run
+`)
     .action(async (opts) => {
       try {
         const result = await storeGithubApp({

@@ -323,6 +323,23 @@ export function registerSelfUpgrade(program: Command): void {
     )
     .option("--restart", "After successful install, restart openclaw-<AGENT_ID>", false)
     .option("--region <region>", "AWS region for SSM PAT lookup", "us-west-2")
+    .addHelpText('after', `
+Examples:
+  # Dry-run: preview what would happen (no changes made)
+  $ sudo fleetmind self-upgrade --version 0.5.0
+
+  # Install a specific version
+  $ sudo fleetmind self-upgrade --version 0.5.0 --apply
+
+  # Install the latest version
+  $ sudo fleetmind self-upgrade --latest --apply
+
+  # Install latest and restart the gateway in one shot
+  $ sudo fleetmind self-upgrade --latest --apply --restart
+
+Note: this command must run as root (sudo). It fetches the GitHub Packages token
+from SSM, installs via npm, then scrubs the .npmrc immediately after.
+`)
     .action(async (opts: {
       version?: string;
       latest: boolean;

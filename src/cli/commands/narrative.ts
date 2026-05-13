@@ -51,7 +51,14 @@ async function readStdin(): Promise<string> {
 export function registerNarrative(program: Command): void {
   const narrative = program
     .command("narrative")
-    .description("Read or write task narrative content (S3)");
+    .description("Read or write task narrative content (S3)")
+    .addHelpText('after', `
+Subcommands:
+  get   Print the narrative markdown for a task to stdout
+  put   Write a narrative from stdin
+
+Run \`fleetmind narrative <subcommand> --help\` for examples.
+`);
 
   // ── get ──────────────────────────────────────────────────────────────────
 
@@ -62,6 +69,14 @@ export function registerNarrative(program: Command): void {
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--region <region>", "AWS region override")
     .option("--json", "Output JSON object with task_id, project, narrative, last_modified")
+    .addHelpText('after', `
+Examples:
+  # Print the narrative for a task to stdout
+  $ fleetmind narrative get --task-id a1b2c3d4
+
+  # Get narrative as JSON (includes task_id, project, last_modified)
+  $ fleetmind narrative get --task-id a1b2c3d4 --json
+`)
     .action(async (opts: { taskId: string; fleet?: string; region?: string; json?: boolean }) => {
       if (opts.region) process.env["AWS_REGION"] = opts.region;
       const fleet = resolveAndLoadFleet(opts.fleet);
@@ -101,6 +116,17 @@ export function registerNarrative(program: Command): void {
     .requiredOption("--event <event>", "Event type: shipped|blocked|update")
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--region <region>", "AWS region override")
+    .addHelpText('after', `
+Examples:
+  # Write a narrative from a markdown file (pipe into stdin)
+  $ cat narrative.md | fleetmind narrative put --task-id a1b2c3d4 --event shipped
+
+  # Write a narrative for a blocked task
+  $ cat blocked-note.md | fleetmind narrative put --task-id a1b2c3d4 --event blocked
+
+  # Write a progress update narrative
+  $ echo "## Progress\\nCompleted auth module" | fleetmind narrative put --task-id a1b2c3d4 --event update
+`)
     .action(async (opts: { taskId: string; event: string; fleet?: string; region?: string }) => {
       // Validate event value
       const validEvents = ["shipped", "blocked", "update"];
