@@ -180,6 +180,10 @@ export const AgentSchema = z.object({
   agent_to_agent: AgentToAgentSchema.default({}),
   /** Optional per-agent delegation config. */
   delegation: DelegationAgentSchema.optional(),
+  /** Optional per-agent workspace_base override. Falls back to
+   *  agents.defaults.workspace_base. Useful for bots on custom AMIs that
+   *  install openclaw in a non-default path. */
+  workspace_base: z.string().optional(),
 });
 
 export const AgentDefaultsSchema = z.object({

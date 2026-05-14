@@ -161,7 +161,9 @@ Examples:
         // ── Pre-flight diagnostics ─────────────────────────────────────────
         let preflightResult: PreflightResult = { dashboardUrl: null, authMode: null, authSecret: null };
         if (!opts.skipPreflight) {
-          preflightResult = await runPreflight(instanceId, agentId, region, fleet.agents.defaults.workspace_base);
+          // Per-agent workspace_base override falls back to fleet defaults.
+          const agentWorkspaceBase = declared.workspace_base ?? fleet.agents.defaults.workspace_base;
+          preflightResult = await runPreflight(instanceId, agentId, region, agentWorkspaceBase);
           if (!opts.yes) {
             // Tiny inline confirm (avoid pulling in prompts dep). Skip
             // confirmation if not a TTY (CI / scripted).

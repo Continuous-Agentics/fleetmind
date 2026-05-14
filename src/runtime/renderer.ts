@@ -37,8 +37,10 @@ export function renderAgentOpenClawJson(
   }
 
   // Agent list — single entry for this agent only
-  const workspace = `${defaults.workspace_base}/${agent.id}`;
-  const agentDir = `${defaults.workspace_base}/agents/${agent.id}/agent`;
+  // Per-agent workspace_base override falls back to fleet defaults.
+  const agentWorkspaceBase = agent.workspace_base ?? defaults.workspace_base;
+  const workspace = `${agentWorkspaceBase}/${agent.id}`;
+  const agentDir = `${agentWorkspaceBase}/agents/${agent.id}/agent`;
   const agentListEntry = {
     id: agent.id,
     name: agent.name,
@@ -202,8 +204,9 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
   // Agent list
   const agentList = agents.list.map((agent) => {
     const model = agent.model ?? defaults.model;
-    const workspace = `${defaults.workspace_base}/${agent.id}`;
-    const agentDir = `${defaults.workspace_base}/agents/${agent.id}/agent`;
+    const agentWorkspaceBase = agent.workspace_base ?? defaults.workspace_base;
+    const workspace = `${agentWorkspaceBase}/${agent.id}`;
+    const agentDir = `${agentWorkspaceBase}/agents/${agent.id}/agent`;
     return {
       id: agent.id,
       name: agent.name,
