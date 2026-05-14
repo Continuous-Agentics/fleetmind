@@ -22,13 +22,9 @@ required:
 ```
 
 - **`role`** must match a value in the agent schema's `role` enum (`src/config/schema.ts`). One manifest per role.
-- **`required`** is the minimum skill set that defines this bot type's identity. Operators *can't* sync-template a bot of this role without these skills landing in `fleet.yaml`.
+- **`required`** is the minimum skill set that defines this bot type's identity. Operators can't run a bot of this role without these skills landing in `fleet.yaml`.
 
-### Why no `recommended` tier
-
-An earlier draft included a `recommended:` section for skills that are "useful for many but not strictly required." That category proved fuzzy in practice (e.g. a `linear` skill only helps teams that use Linear). We dropped it — manifests express *required identity only*, and optional skills are operator choice, added directly in `fleet.yaml` per fleet.
-
-A future *skill catalog* (separate doc) can enumerate available skills with notes on when each is useful — that's discoverability without prescription.
+Manifests express *required identity only*. Optional skills are operator choice, added per-fleet via `fleetmind skill add` or by editing `fleet.yaml` directly.
 
 ## Adding a new bot type
 
