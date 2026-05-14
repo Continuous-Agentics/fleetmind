@@ -283,7 +283,13 @@ async function runPreflight(
   // operator already has SSM exec on the bot, so reading this file isn't a
   // privilege escalation — it's the same access they had before, just
   // proxied through the wrapper for ergonomics.
-  const configFile = `/home/ec2-user/.openclaw/openclaw.json`;
+  //
+  // Path: per the fleetmind agent_bootstrap.sh, the workspace lives at
+  //   /opt/openclaw/workspace/<agent_id>/
+  // and the gateway config is at <workspace>/.openclaw/openclaw.json,
+  // owned by ec2-user. SSM Run Command runs as root by default, so no
+  // sudo is needed to read the file.
+  const configFile = `/opt/openclaw/workspace/${agentId}/.openclaw/openclaw.json`;
   const commands = [
     `set +e`,
     `echo "::SERVICE::"`,
@@ -297,12 +303,12 @@ async function runPreflight(
     `echo "::DASHBOARD::"`,
     `sudo -u ec2-user openclaw dashboard --no-open 2>&1 | grep -oE 'http[s]?://[^[:space:]]+' | head -1 || true`,
     `echo "::AUTH_MODE::"`,
-    `sudo cat "${configFile}" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("gateway",{}).get("auth",{}).get("mode","none"))' 2>/dev/null || true`,
+    `cat "${configFile}" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("gateway",{}).get("auth",{}).get("mode","none"))' 2>/dev/null || true`,
     `echo "::AUTH_SECRET::"`,
     // Extract the auth secret matching the configured mode. Password lives at
     // gateway.auth.password; token lives at gateway.auth.token. We try both;
     // whichever is non-null on the bot is what we print.
-    `sudo cat "${configFile}" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); a=d.get("gateway",{}).get("auth",{}); print(a.get("password") or a.get("token") or "")' 2>/dev/null || true`,
+    `cat "${configFile}" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); a=d.get("gateway",{}).get("auth",{}); print(a.get("password") or a.get("token") or "")' 2>/dev/null || true`,
     `echo "::END::"`,
   ];
 
