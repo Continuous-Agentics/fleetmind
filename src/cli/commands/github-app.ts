@@ -461,7 +461,7 @@ Examples:
     .requiredOption("--fleet <name>", "Fleet name (used as SSM path namespace)")
     .requiredOption("--agent <id>", "Agent ID within the fleet")
     .requiredOption("--repo <owner/repo>", "Target repo for App installation, e.g. 'acme-corp/their-fleet'")
-    .option("--org", "Create as org-owned App (default: yes; pass --no-org for user-owned)", true)
+    .option("--no-org", "Create as user-owned App instead of org-owned (default: org-owned)")
     .option("--app-name <name>", "Human-readable App name (default: '<fleet>-<agent>')")
     .option("--callback-port <port>", "Local callback port for the manifest redirect (default: auto-pick)", (v) => parseInt(v, 10), 0)
     .option("--region <region>", "AWS region", "us-west-2")
