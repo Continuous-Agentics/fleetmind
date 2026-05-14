@@ -1,0 +1,20 @@
+# GitHub App permission manifest for the pm-bot template.
+#
+# Read by `fleetmind github-app create` to set the default permission scope
+# for any agent declared with `role: pm`. Per-agent overrides in fleet.yaml's
+# `agents.<agent>.github_app` block take precedence on a per-key basis.
+#
+# PM bots delegate, orchestrate, and report — they don't write code or merge
+# PRs directly. Read-only scopes for repo contents + PRs are sufficient for
+# linking + summarizing. Issue write is needed for tracking work.
+
+role: pm
+
+permissions:
+  contents: read
+  pull_requests: read
+  issues: write
+  checks: read
+  metadata: read
+
+events: []

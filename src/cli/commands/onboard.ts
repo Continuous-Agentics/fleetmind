@@ -369,6 +369,8 @@ export async function runOnboard(
       await createGithubApp({
         fleet: fleetName,
         agent: agent.id,
+        role: agent.role,
+        githubAppConfig: agent.github_app,
         owner: ghOwner!,
         org: ghOrgOwned,
         callbackPort: 0,

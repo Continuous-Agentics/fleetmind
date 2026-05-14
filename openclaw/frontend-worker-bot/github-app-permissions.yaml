@@ -1,0 +1,17 @@
+# GitHub App permission manifest for the frontend-worker-bot template.
+#
+# Same baseline as worker-bot — frontend workers do code contributions, open
+# PRs, run Actions. No deployments scope by default (frontends typically
+# deploy via CI rather than triggering deploys from the bot).
+
+role: frontend-worker
+
+permissions:
+  contents: write
+  pull_requests: write
+  issues: write
+  actions: write
+  checks: read
+  metadata: read
+
+events: []

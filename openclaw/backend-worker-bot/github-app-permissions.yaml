@@ -1,0 +1,18 @@
+# GitHub App permission manifest for the backend-worker-bot template.
+#
+# Same baseline as worker-bot — backend workers do code contributions, open
+# PRs, run Actions. The 'deployments: write' scope is added so backend bots
+# can trigger / annotate deployments (handy for CI/CD integration).
+
+role: backend-worker
+
+permissions:
+  contents: write
+  pull_requests: write
+  issues: write
+  actions: write
+  checks: read
+  metadata: read
+  deployments: write
+
+events: []
