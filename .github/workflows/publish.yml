@@ -1,26 +1,25 @@
-# publish.yml — Release-on-tag skeleton
+# publish.yml — Release-on-tag publish to GitHub Packages.
 #
-# STATUS: MANUAL-ONLY (workflow_dispatch)
+# Triggers:
+#   - push of any tag matching `vMAJOR.MINOR.PATCH` (strict semver)
+#   - manual `workflow_dispatch` from the GitHub Actions UI for reruns/debug
 #
-# This workflow is intentionally NOT triggered automatically on tag push.
-# To enable automatic publish-on-tag:
-#   1. Validate the flow once via "Run workflow" in GitHub Actions UI.
-#   2. Change the trigger below from `workflow_dispatch` to:
-#        push:
-#          tags:
-#            - 'v*'
-#   3. Remove or update this comment block.
+# Strict semver regex on the tag prevents typo'd tags (e.g. `v0.5.2.` or
+# `v0.5-prefix`) from triggering an accidental publish.
 #
-# Until then, tagging a release (git push --tags) will NOT auto-publish.
-# Publish manually with `npm publish` per RELEASING.md.
+# After a successful publish, the workflow also creates a GitHub Release for
+# the same tag with release notes extracted from CHANGELOG.md.
 
 name: Publish to GitHub Packages
 
 on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
     inputs:
       confirm:
-        description: "Type 'publish' to confirm you want to publish to GitHub Packages"
+        description: "Type 'publish' to confirm manual republish (push-tag flow runs automatically)"
         required: true
         default: ""
 
@@ -28,12 +27,14 @@ jobs:
   publish-to-github-packages:
     name: Publish
     runs-on: ubuntu-latest
-    # Extra guard: only run when the manual confirmation input matches.
-    # When this workflow is eventually switched to push-on-tags, remove this condition.
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'publish' }}
+    # Auto-run on tag push. For manual workflow_dispatch reruns, require the
+    # 'confirm' input (defence in depth — a manual rerun should be deliberate).
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'publish')
 
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -62,3 +63,39 @@ jobs:
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Auto-create GitHub Release with CHANGELOG-extracted notes ────────
+      # Skipped on workflow_dispatch reruns (the release usually already
+      # exists for the tag).
+      - name: Extract release notes from CHANGELOG
+        if: github.event_name == 'push'
+        id: changelog
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          # Extract the section between `## [VERSION]` and the next `## [` header.
+          # Trims leading/trailing blank lines.
+          NOTES=$(awk -v ver="${VERSION}" '
+            $0 ~ "^## \\[" ver "\\]" { flag=1; next }
+            flag && /^## \[/ { exit }
+            flag { print }
+          ' CHANGELOG.md | sed -e '/./,$!d' -e :a -e '/^$/{$d;N;ba' -e '}')
+          if [ -z "$NOTES" ]; then
+            echo "::warning::No CHANGELOG entry found for [${VERSION}]; release will use auto-generated notes"
+            NOTES="(No CHANGELOG entry found for ${VERSION}. See commit history for changes.)"
+          fi
+          # Multi-line output for actions
+          {
+            echo "notes<<RELEASE_NOTES_EOF"
+            echo "$NOTES"
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.notes }}
