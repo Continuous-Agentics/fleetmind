@@ -6,6 +6,13 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-05-14
+
+### Added
+
+- **`fleetmind agent connect`** now prints the gateway dashboard URL + auth secret alongside the port-forward output. The wrapper extracts `gateway.auth.mode` + the corresponding password/token from the bot's openclaw config via the existing pre-flight SSM call, displays it with a clear 'credential visible in terminal' note. Auth-mode-aware: handles password / token / no-auth distinctly. ([#153](https://github.com/Continuous-Agentics/fleetmind/pull/153))
+- **Per-agent `workspace_base` override** in `AgentSchema`. Bots on custom AMIs that install OpenClaw in a non-default path can declare `workspace_base: /custom/path` per agent; falls back to `agents.defaults.workspace_base`. `agent connect` + the renderer both consult the override consistently.
+
 ## [0.5.0] — 2026-05-14
 
 ### Added
