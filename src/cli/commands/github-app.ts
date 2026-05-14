@@ -163,11 +163,15 @@ export async function storeGithubApp(options: GithubAppStoreOptions): Promise<Gi
 export interface GithubAppCreateOptions {
   fleet: string;
   agent: string;
-  /** `<owner>/<repo>` — used to derive the install target + post-install lookup. */
-  repo: string;
-  /** If set, the manifest is posted to /organizations/<owner>/settings/apps/new
-   * (org-owned App). If false, the manifest goes to /settings/apps/new and
-   * the App is created under the operator's personal GitHub account. */
+  /** GitHub owner under which the App is registered. For org-owned Apps
+   * (default) this is the org name; for user-owned Apps it's a personal
+   * username. The operator picks the install target separately in the
+   * GitHub UI — fleetmind doesn't constrain whether the App lands on one
+   * repo, several, or all repos. */
+  owner: string;
+  /** If true, manifest posts to /organizations/<owner>/settings/apps/new
+   * (org-owned App). If false, posts to /settings/apps/new and the App is
+   * created under the operator's personal GitHub account. */
   org: boolean;
   /** Optional human-readable App name. Default: `<fleet>-<agent>`. */
   appName?: string;
@@ -195,16 +199,17 @@ interface ManifestConversionResponse {
   html_url: string;
 }
 
-interface RepoInstallationResponse {
+interface AppInstallation {
   id: number;
-  account: { login: string };
+  account: { login: string; type: "User" | "Organization" };
+  created_at: string;
 }
 
 export async function createGithubApp(options: GithubAppCreateOptions): Promise<GithubAppStoreResult> {
-  const [owner, repo] = options.repo.split("/");
-  if (!owner || !repo) {
-    throw new Error(`--repo must be in '<owner>/<repo>' format; got '${options.repo}'`);
+  if (!options.owner || options.owner.includes("/")) {
+    throw new Error(`--owner must be a bare GitHub owner name (no slashes); got '${options.owner}'`);
   }
+  const owner = options.owner;
 
   // ─── Pick callback port + state nonce ──────────────────────────────────────
   const callbackPort = options.callbackPort > 0 ? options.callbackPort : await findFreePort(8765);
@@ -259,14 +264,12 @@ export async function createGithubApp(options: GithubAppCreateOptions): Promise<
   // ─── Print install URL + wait for operator to install ──────────────────────
   const installUrl = `https://github.com/apps/${conversion.slug}/installations/new`;
   log.info("");
-  log.bold("Step 3 — install the App on the target repo:");
+  log.bold("Step 3 — install the App:");
   console.log(`  ${chalk.cyan(installUrl)}`);
-  log.info(`Select '${owner}/${repo}' (or 'All repositories') and click 'Install'.`);
+  log.info(`Select one repo, several, or 'All repositories' under ${owner} and click 'Install'.`);
   log.info("");
 
-  const installationId = await pollForRepoInstallation({
-    owner,
-    repo,
+  const installationId = await pollForAppInstallation({
     appId: conversion.id,
     pem: conversion.pem,
     timeoutMs: options.installPollTimeoutMs ?? 5 * 60 * 1000,
@@ -391,20 +394,18 @@ async function exchangeManifestCode(code: string): Promise<ManifestConversionRes
 }
 
 interface PollOptions {
-  owner: string;
-  repo: string;
   appId: number;
   pem: string;
   timeoutMs: number;
 }
 
-async function pollForRepoInstallation(opts: PollOptions): Promise<number> {
+async function pollForAppInstallation(opts: PollOptions): Promise<number> {
   const deadline = Date.now() + opts.timeoutMs;
   const jwt = mintAppJwt(opts.pem, String(opts.appId));
   let lastStatus = 0;
 
   while (Date.now() < deadline) {
-    const resp = await fetch(`https://api.github.com/repos/${opts.owner}/${opts.repo}/installation`, {
+    const resp = await fetch(`https://api.github.com/app/installations`, {
       headers: {
         Authorization: `Bearer ${jwt}`,
         Accept: "application/vnd.github+json",
@@ -413,15 +414,17 @@ async function pollForRepoInstallation(opts: PollOptions): Promise<number> {
     });
     lastStatus = resp.status;
     if (resp.ok) {
-      const data = (await resp.json()) as RepoInstallationResponse;
-      return data.id;
-    }
-    if (resp.status === 404) {
-      // Not installed yet — wait + retry
+      const installations = (await resp.json()) as AppInstallation[];
+      if (installations.length > 0) {
+        // App is freshly-created and should have at most 1 installation.
+        // If there are multiple, pick the most recent.
+        const sorted = [...installations].sort((a, b) => b.created_at.localeCompare(a.created_at));
+        return sorted[0]!.id;
+      }
+      // App created but not yet installed — wait + retry
       await new Promise((r) => setTimeout(r, 3000));
       continue;
     }
-    // 401 → JWT expired or wrong; non-404 errors → bail with detail
     if (resp.status === 401) {
       throw new Error(`GitHub rejected the App JWT (401). The PEM may be malformed.`);
     }
@@ -429,8 +432,8 @@ async function pollForRepoInstallation(opts: PollOptions): Promise<number> {
     throw new Error(`Installation lookup failed: ${resp.status} ${resp.statusText}\n${body}`);
   }
   throw new Error(
-    `Timed out after ${opts.timeoutMs / 1000}s waiting for App to be installed on ${opts.owner}/${opts.repo}.\n` +
-      `Last GitHub response code: ${lastStatus}. Install the App via the URL above and re-run.`,
+    `Timed out after ${opts.timeoutMs / 1000}s waiting for the App to be installed.\n` +
+      `Last GitHub response code: ${lastStatus}. Install via the URL above and re-run.`,
   );
 }
 
@@ -518,7 +521,7 @@ Examples:
     .description("Create a GitHub App via the manifest flow, then store its credentials in SSM")
     .requiredOption("--fleet <name>", "Fleet name (used as SSM path namespace)")
     .requiredOption("--agent <id>", "Agent ID within the fleet")
-    .requiredOption("--repo <owner/repo>", "Target repo for App installation, e.g. 'acme-corp/their-fleet'")
+    .requiredOption("--owner <name>", "GitHub owner where the App is registered (org name for org-owned Apps, username for user-owned)")
     .option("--no-org", "Create as user-owned App instead of org-owned (default: org-owned)")
     .option("--app-name <name>", "Human-readable App name (default: '<fleet>-<agent>')")
     .option("--homepage-url <url>", "Homepage URL for the GitHub App (defaults to the fleetmind repo URL — GitHub rejects localhost here)")
@@ -538,27 +541,27 @@ The flow has 4 steps:
      /fleetmind/<fleet>/agents/<agent>/github-app/*.
 
 Examples:
-  # Create + install + store for a client's backend worker:
+  # Create + install + store for an org-owned App:
   $ fleetmind github-app create \\
       --fleet acme-bots --agent backend-worker \\
-      --repo acme-corp/api-service
+      --owner acme-corp
 
   # User-owned App (rare; default is org-owned):
   $ fleetmind github-app create --no-org \\
       --fleet acme-bots --agent pm \\
-      --repo my-username/my-repo
+      --owner my-username
 
   # Dry-run: complete the GitHub side but skip the SSM write
   $ fleetmind github-app create \\
       --fleet acme-bots --agent pm \\
-      --repo acme-corp/api-service --dry-run
+      --owner acme-corp --dry-run
 `)
     .action(async (opts) => {
       try {
         const result = await createGithubApp({
           fleet: opts.fleet as string,
           agent: opts.agent as string,
-          repo: opts.repo as string,
+          owner: opts.owner as string,
           org: opts.org as boolean,
           appName: opts.appName as string | undefined,
           homepageUrl: opts.homepageUrl as string | undefined,
