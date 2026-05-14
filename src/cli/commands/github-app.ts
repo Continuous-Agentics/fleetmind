@@ -171,6 +171,9 @@ export interface GithubAppCreateOptions {
   org: boolean;
   /** Optional human-readable App name. Default: `<fleet>-<agent>`. */
   appName?: string;
+  /** Optional homepage URL for the App (defaults to the fleetmind repo URL
+   * — GitHub rejects localhost here). */
+  homepageUrl?: string;
   /** Local callback port. 0 = pick free. */
   callbackPort: number;
   region: string;
@@ -213,6 +216,7 @@ export async function createGithubApp(options: GithubAppCreateOptions): Promise<
     name: options.appName ?? `${options.fleet}-${options.agent}`,
     redirectUrl,
     description: `Fleetmind agent: ${options.agent} (fleet: ${options.fleet})`,
+    homepageUrl: options.homepageUrl,
   };
   const manifest = buildManifest(manifestOpts);
 
@@ -517,6 +521,7 @@ Examples:
     .requiredOption("--repo <owner/repo>", "Target repo for App installation, e.g. 'acme-corp/their-fleet'")
     .option("--no-org", "Create as user-owned App instead of org-owned (default: org-owned)")
     .option("--app-name <name>", "Human-readable App name (default: '<fleet>-<agent>')")
+    .option("--homepage-url <url>", "Homepage URL for the GitHub App (defaults to the fleetmind repo URL — GitHub rejects localhost here)")
     .option("--callback-port <port>", "Local callback port for the manifest redirect (default: auto-pick)", (v) => parseInt(v, 10), 0)
     .option("--region <region>", "AWS region", "us-west-2")
     .option("--dry-run", "Run the flow but skip the SSM write at the end", false)
@@ -556,6 +561,7 @@ Examples:
           repo: opts.repo as string,
           org: opts.org as boolean,
           appName: opts.appName as string | undefined,
+          homepageUrl: opts.homepageUrl as string | undefined,
           callbackPort: opts.callbackPort as number,
           region: opts.region as string,
           dryRun: opts.dryRun as boolean,

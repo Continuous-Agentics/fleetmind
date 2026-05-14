@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildManifest } from "../runtime/github-app-manifest.js";
+import { buildManifest, DEFAULT_HOMEPAGE_URL } from "../runtime/github-app-manifest.js";
 
 describe("buildManifest", () => {
   it("uses the requested name, description, and redirect_url verbatim", () => {
@@ -14,9 +14,13 @@ describe("buildManifest", () => {
     assert.equal(m.description, "PM bot for Acme fleet");
   });
 
-  it("falls back to <protocol>://<host> for homepage when not provided", () => {
+  it("falls back to the fleetmind repo URL for homepage when not provided", () => {
+    // GitHub rejects localhost URLs in the manifest's 'url' field with the
+    // counter-intuitive error 'url wasn't supplied'. Default must be public.
     const m = buildManifest({ name: "x", redirectUrl: "http://localhost:8765/callback" });
-    assert.equal(m.url, "http://localhost:8765");
+    assert.equal(m.url, DEFAULT_HOMEPAGE_URL);
+    assert.ok(m.url.startsWith("https://"), "default homepage must be https:// for GitHub");
+    assert.ok(!m.url.includes("localhost"), "default homepage must not be a localhost URL");
   });
 
   it("respects an explicit homepage URL", () => {

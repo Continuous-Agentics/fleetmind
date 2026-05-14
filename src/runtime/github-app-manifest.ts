@@ -26,9 +26,18 @@ export interface ManifestOptions {
   redirectUrl: string;
   /** Human description (shows in App settings + on install screen). */
   description?: string;
-  /** Optional homepage URL (defaults to the redirect host). */
+  /** Homepage URL for the GitHub App.
+   *
+   * GitHub validates this field on manifest submission and **rejects
+   * localhost / non-public URLs** with 'url wasn't supplied' (counter-intuitive
+   * error). Default is the fleetmind repo URL — it's just App metadata,
+   * operators can edit it in the GitHub App settings page after creation. */
   homepageUrl?: string;
 }
+
+/** Default homepage URL when the caller doesn't supply one. GitHub requires
+ * a publicly-resolvable URL here; we use the fleetmind project page. */
+export const DEFAULT_HOMEPAGE_URL = "https://github.com/Continuous-Agentics/fleetmind";
 
 /** The wire-format manifest GitHub expects. */
 export interface GitHubAppManifest {
@@ -43,18 +52,9 @@ export interface GitHubAppManifest {
 }
 
 export function buildManifest(opts: ManifestOptions): GitHubAppManifest {
-  const fallbackHome = (() => {
-    try {
-      const u = new URL(opts.redirectUrl);
-      return `${u.protocol}//${u.host}`;
-    } catch {
-      return opts.redirectUrl;
-    }
-  })();
-
   return {
     name: opts.name,
-    url: opts.homepageUrl ?? fallbackHome,
+    url: opts.homepageUrl ?? DEFAULT_HOMEPAGE_URL,
     description: opts.description ?? `Fleetmind agent App: ${opts.name}`,
     hook_attributes: { active: false },
     redirect_url: opts.redirectUrl,
