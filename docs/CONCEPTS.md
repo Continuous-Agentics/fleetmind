@@ -177,6 +177,20 @@ With `--restart`, also restarts each agent's gateway after apply.
 
 You usually don't run `pull-self` directly: `push fleet` triggers it via SSM. But you can also run it manually (SSH/SSM session) when iterating on a single agent.
 
+### `openclaw.json` three-way merge
+
+One file gets special treatment: `.openclaw/openclaw.json`. Instead of an atomic overwrite, `pull-self` performs a three-way merge so that operator patches applied with `openclaw config patch` survive pushes:
+
+```
+merged = deepMerge(incoming, live − base)
+```
+
+- `incoming` — the freshly-rendered config from the new tarball
+- `live`     — the current on-disk config (may have operator patches)
+- `base`     — the previous render's config, snapshotted at `.openclaw/openclaw.base.json`
+
+Keys in `live` that differ from `base` are treated as operator patches and re-applied on top of `incoming`. When patches are preserved, `pull-self --apply` logs a dim line: `ℹ live config patches preserved`. If `base` is missing (first push, or deliberately removed), the merge short-circuits and `incoming` wins. See [TROUBLESHOOTING § openclaw.json operator-patch handling](./TROUBLESHOOTING.md#openclawjson-operator-patch-handling-and-drift) for the recovery path.
+
 ## Manifest
 
 A JSON file produced by `push fleet` alongside each tarball:

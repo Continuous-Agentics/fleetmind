@@ -34,7 +34,7 @@
     "README.md",
     "LICENSE",
     "docs/*.md",
-    "docs/integration/*.md"
+    "docs/integration/delegation.md"
   ],
   "engines": {
     "node": ">=20"

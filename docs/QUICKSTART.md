@@ -1,6 +1,6 @@
 # FleetMind Quickstart
 
-This is the narrative happy-path for bringing up a working 2-bot fleet. If you've already done the one-time AWS/Slack/Terraform setup, you'll finish in ~10 minutes and the last step is *"DM your PM bot in Slack and ask it to delegate a task."*
+This is the narrative happy-path for bringing up a working 2-bot fleet. First-time bring-up realistically takes *~20–30 minutes* end-to-end — of which roughly half is clicking through the Slack UI to create two apps and copy four tokens. Once Slack is set up and AWS bootstrap is done, the iteration loop drops to about a minute (`render` + `push fleet --restart`). The last step is *"DM your PM bot in Slack and ask it to delegate a task."*
 
 If anything is unfamiliar, see [CONCEPTS.md](./CONCEPTS.md) for the vocabulary. For the comprehensive reference with every option, see [SETUP-A-FLEET.md](./SETUP-A-FLEET.md). When something breaks, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
 
@@ -314,6 +314,14 @@ aws s3api create-bucket \
 aws s3api put-bucket-versioning \
   --bucket <YOUR-TFSTATE-BUCKET> \
   --versioning-configuration Status=Enabled
+
+aws s3api put-public-access-block \
+  --bucket <YOUR-TFSTATE-BUCKET> \
+  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+aws s3api put-bucket-encryption \
+  --bucket <YOUR-TFSTATE-BUCKET> \
+  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
 
 aws dynamodb create-table \
   --table-name fleetmind-tf-state-lock \

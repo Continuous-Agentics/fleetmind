@@ -220,27 +220,41 @@ terraform apply -var-file=workspaces/<fleet>.tfvars -var-file=workspaces/<fleet>
 3. Confirm the instance's IAM role has `AmazonSSMManagedInstanceCore` attached (the Terraform module attaches this by default).
 4. Re-run `fleetmind push fleet --fleet fleet-<name>.yaml --restart`.
 
-### `openclaw.json` merge conflict on the bot
+### `openclaw.json` operator-patch handling and drift
 
-**Symptom:** Somebody hand-edited `.openclaw/openclaw.json` on the EC2; the next `pull-self --apply` either reverts the edit or fails to apply cleanly.
+**Symptom:** Somebody hand-edited `.openclaw/openclaw.json` on the EC2; subsequent `pull-self --apply` runs surprise people about whether the edit survives, gets overwritten, or interacts unexpectedly with the next `fleet.yaml`-driven render of the same key.
 
-**Cause:** `openclaw.json` is a *rendered* artifact — fleetmind treats it as fully owned by `fleet.yaml`. There's no merge semantics. `pull-self` writes it directly (without the `.new` rename other files use) on the assumption that OpenClaw's config reload handles partial writes.
+**Cause:** `pull-self` performs a **three-way merge** on `.openclaw/openclaw.json`:
 
-**Fix:** Don't hand-edit `openclaw.json` on the bot. Make the change in `fleet.yaml` (or the fleet-level `openclaw:` block) and re-push:
+```
+merged = deepMerge(incoming, live − base)
+```
+
+where `incoming` is the freshly-rendered config from the tarball, `live` is the current on-disk config, and `base` is the snapshot of what fleetmind last rendered (`.openclaw/openclaw.base.json`). Operator patches applied via `openclaw config patch` (i.e. live keys that differ from base) are deliberately preserved on top of `incoming` on every push. When patches are preserved you'll see a dim log line in the `pull-self --apply` output:
+
+```
+ℹ live config patches preserved (see .openclaw/openclaw.base.json for base)
+```
+
+Hand-edits made directly to `openclaw.json` (without going through `openclaw config patch`) *are* picked up by the merge — because anything in `live` that differs from `base` is considered a patch — but they aren't tracked, so when the same key later changes in `fleet.yaml` and re-renders, you can get a confusing resolution.
+
+**Fix:** For persistent local overrides, use `openclaw config patch` so the override is explicit and survives pushes cleanly. If you've already drifted via direct edits, the safest recovery is to translate the edit into either a `fleet.yaml` change (preferred) or an `openclaw config patch` invocation, then re-push:
 
 ```bash
 fleetmind push fleet --fleet fleet-<name>.yaml --restart
 ```
 
-If the on-bot copy has drifted and you need to force a clean state:
+To force an *incoming-wins* clean slate (destructive — drops every operator patch on this agent):
 
 ```bash
-# On the bot via SSM session
-sudo rm /opt/openclaw/workspace/<agent_id>/.openclaw/openclaw.json
-sudo systemctl stop openclaw-<agent_id>
+# On the bot via SSM session — remove the BASE, not the live config.
+# With no base, pull-self's merge short-circuits and uses `incoming` as-is.
+sudo rm /opt/openclaw/workspace/<agent_id>/.openclaw/openclaw.base.json
 # Then from operator
 fleetmind push fleet --fleet fleet-<name>.yaml --agent <agent_id> --restart
 ```
+
+Note: removing `openclaw.json` itself (the *live* file) does **not** reset the merge — `pull-self` rebuilds it from `incoming` + the diff between `live` (which would now be missing) and `base`, which fails the existence check and falls back to `incoming` anyway, but you lose the patch audit trail in the process. Removing `openclaw.base.json` is the correct destructive lever.
 
 ### Old tarball still being applied after a push
 
@@ -331,9 +345,9 @@ fleetmind deploy fleet-<name>.yaml
 
 ### `task create` fails with "already exists"
 
-**Cause:** Task ID collision (8 hex bytes — collisions are rare but possible if you set the ID manually).
+**Cause:** Task ID collision (4 random bytes / 8 hex chars — collisions are rare but possible if you set the ID manually).
 
-**Fix:** Regenerate the task ID (8 fresh hex bytes) and retry. Don't hand-set IDs unless you really need to.
+**Fix:** Regenerate the task ID (8 fresh hex chars) and retry. Don't hand-set IDs unless you really need to.
 
 ---
 
