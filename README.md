@@ -4,6 +4,8 @@ Deploy and manage OpenClaw multi-agent fleets. One config file, multiple AI bots
 
 Built with TypeScript. Requires Node.js 20+.
 
+**New to fleetmind?** Start with [docs/QUICKSTART.md](docs/QUICKSTART.md) (10-minute happy path) and [docs/CONCEPTS.md](docs/CONCEPTS.md) (vocabulary). When things break, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md). For the comprehensive bring-up reference, see [docs/SETUP-A-FLEET.md](docs/SETUP-A-FLEET.md).
+
 ## Architecture
 
 *One EC2 instance per agent. One OpenClaw gateway per EC2.* fleetmind renders per-agent workspaces from `fleet.yaml` and pushes each to its respective host. Agents coordinate over Slack threads, the optional delegation task ledger, and a shared DynamoDB ContextStore — never via shared process state.
