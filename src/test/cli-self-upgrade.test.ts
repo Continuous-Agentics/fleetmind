@@ -194,15 +194,15 @@ describe("runSelfUpgrade — happy path (--apply)", () => {
     );
     // .npmrc written then removed
     assert.ok(
-      "/root/.npmrc" in deps.written,
+      "/tmp/fleetmind-upgrade.npmrc" in deps.written,
       ".npmrc should have been written"
     );
     assert.ok(
-      deps.removed.includes("/root/.npmrc"),
+      deps.removed.includes("/tmp/fleetmind-upgrade.npmrc"),
       ".npmrc should be scrubbed after install"
     );
     // npmrc content checks
-    const npmrc = deps.written["/root/.npmrc"]!;
+    const npmrc = deps.written["/tmp/fleetmind-upgrade.npmrc"]!;
     assert.ok(npmrc.includes("ghp_test_token"), ".npmrc should contain PAT");
     assert.ok(npmrc.includes("npm.pkg.github.com"), ".npmrc should reference GitHub Packages");
     // No restart triggered
@@ -274,7 +274,7 @@ describe("runSelfUpgrade — failure paths", () => {
     );
     assert.equal(code, 2, "should exit 2 on npm install failure");
     assert.ok(
-      deps.removed.includes("/root/.npmrc"),
+      deps.removed.includes("/tmp/fleetmind-upgrade.npmrc"),
       ".npmrc should be scrubbed even when npm fails"
     );
   });
@@ -297,7 +297,7 @@ describe("runSelfUpgrade — failure paths", () => {
     assert.equal(code, 3, "should exit 3 on post-install version mismatch");
     // .npmrc should be scrubbed even on version mismatch
     assert.ok(
-      deps.removed.includes("/root/.npmrc"),
+      deps.removed.includes("/tmp/fleetmind-upgrade.npmrc"),
       ".npmrc should be scrubbed even on version mismatch"
     );
   });
@@ -323,7 +323,7 @@ describe("runSelfUpgrade — failure paths", () => {
       runSelfUpgrade(baseOpts({ version: "0.4.3", apply: true }), deps)
     );
     assert.ok(
-      lifecycleLog.indexOf("write:/root/.npmrc") < lifecycleLog.indexOf("remove:/root/.npmrc"),
+      lifecycleLog.indexOf("write:/tmp/fleetmind-upgrade.npmrc") < lifecycleLog.indexOf("remove:/tmp/fleetmind-upgrade.npmrc"),
       ".npmrc should be written before being removed"
     );
   });

@@ -16,6 +16,8 @@
  */
 
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import type { Command } from "commander";
 import { SSMClient, GetParameterCommand } from "@aws-sdk/client-ssm";
@@ -23,7 +25,10 @@ import { log } from "../../utils/log.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const NPMRC_PATH = "/root/.npmrc";
+// npmrc is written to a temp file and passed via --userconfig so self-upgrade
+// works regardless of which user invokes it (root, ec2-user, ssm-user, etc.).
+import os from "node:os";
+const NPMRC_PATH = os.tmpdir() + "/fleetmind-upgrade.npmrc";
 const SSM_PAT_PATH = "/fleetmind/shared/github-packages-token";
 const AGENT_ENV_PATH = "/etc/fleetmind/agent.env";
 const PACKAGE_NAME = "@continuous-agentics/fleetmind";
@@ -85,9 +90,34 @@ function defaultReadCurrentVersion(): string {
   }
 }
 
-function defaultRunNpmInstall(pkg: string): NpmInstallResult {
+/**
+ * Resolve the npm global prefix used by the currently installed fleetmind binary.
+ * This ensures the upgrade installs to the same location as the running binary
+ * rather than the current user's home-dir npm prefix (which would diverge
+ * when self-upgrade is invoked as ec2-user but the system install lives under
+ * the root npm prefix, e.g. /usr).
+ */
+function resolveNpmPrefix(): string {
   try {
-    const stdout = execFileSync("npm", ["install", "-g", pkg], {
+    // Walk up from the running module to find the npm prefix:
+    // <prefix>/lib/node_modules/@continuous-agentics/fleetmind/dist/...
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    // dist/cli/commands -> dist/cli -> dist -> package root -> node_modules -> lib -> prefix
+    const pkgRoot = path.resolve(here, "..", "..", "..");
+    const nodeModules = path.dirname(pkgRoot);   // @continuous-agentics
+    const scopeParent  = path.dirname(nodeModules); // node_modules
+    const lib          = path.dirname(scopeParent);  // lib
+    const prefix       = path.dirname(lib);          // /usr or /usr/local etc.
+    return prefix;
+  } catch {
+    return "/usr"; // safe fallback for Amazon Linux 2023
+  }
+}
+
+function defaultRunNpmInstall(pkg: string): NpmInstallResult {
+  const prefix = resolveNpmPrefix();
+  try {
+    const stdout = execFileSync("npm", ["install", "-g", "--prefix", prefix, "--userconfig", NPMRC_PATH, pkg], {
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -186,7 +216,7 @@ export async function runSelfUpgrade(
   // ── Step 5: Dry-run / no-apply path ──────────────────────────────────────
   if (!opts.apply) {
     console.log(`\n[dry-run] Would run: npm install -g ${targetPkg}`);
-    console.log(`[dry-run] .npmrc would be written to ${NPMRC_PATH} (mode 600), then scrubbed`);
+    console.log(`[dry-run] temp .npmrc would be written to ${NPMRC_PATH}, then scrubbed`);
     if (opts.restart) {
       console.log(`[dry-run] Would restart: openclaw-<AGENT_ID>`);
     }
@@ -248,8 +278,8 @@ export async function runSelfUpgrade(
       process.exit(1);
     }
 
-    // ── Step 8: Write /root/.npmrc ─────────────────────────────────────────
-    log.step(`Writing ${NPMRC_PATH}...`);
+    // ── Step 8: Write temp .npmrc (--userconfig) ────────────────────────────────
+    log.step(`Writing temp npmrc at ${NPMRC_PATH}...`);
     const npmrcContent =
       `${NPM_REGISTRY_PREFIX}:_authToken=${pat}\n` +
       `@continuous-agentics:registry=${NPM_REGISTRY}\n`;
