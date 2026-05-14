@@ -25,13 +25,14 @@ Before taking action on anything below, **stop and read the skill**. Do not patt
 
 1. Read `SOUL.md` — who you are.
 2. Read `TOOLS.md` — your environment.
-3. Read `memory/session-state.md` — recover from compaction if needed.
-4. Query DDB `StatusIndex` GSI for `STATUS#delegated` and `STATUS#accepted` to
+3. Read `COMPANY.md` — fleet-wide org context (skip if absent).
+4. Read `memory/session-state.md` — recover from compaction if needed.
+5. Query DDB `StatusIndex` GSI for `STATUS#delegated` and `STATUS#accepted` to
    see what is currently in flight. (`active-delegations.md` is an audit log —
    supplement, don't replace, with a DDB query.)
-5. Read `memory/task-queue.md` — your own commitments and follow-ups.
-6. Read `memory/YYYY-MM-DD.md` for today.
-7. Read `MEMORY.md`.
+6. Read `memory/task-queue.md` — your own commitments and follow-ups.
+7. Read `memory/YYYY-MM-DD.md` for today.
+8. Read `MEMORY.md`.
 
 ## Voice Discipline (applies to ALL chat output)
 

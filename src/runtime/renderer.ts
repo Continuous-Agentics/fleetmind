@@ -485,6 +485,23 @@ export function writeOutputs(
     written[`fleet_yaml:${agent.id}`] = slicePath;
   }
 
+  // ── Fleet-wide COMPANY.md distribution ──────────────────────────────────
+  // If the operator has a COMPANY.md at the fleet repo root (next to
+  // fleet.yaml), copy it into every per-agent rendered workspace. This is
+  // shared org context that every bot in the fleet reads at startup.
+  // Absent COMPANY.md is fine — just skip silently. The agents' AGENTS.md
+  // tells them to only read COMPANY.md "if it exists."
+  const companyMdPath = path.resolve(baseDir, "COMPANY.md");
+  if (fs.existsSync(companyMdPath)) {
+    const companyContent = fs.readFileSync(companyMdPath, "utf-8");
+    for (const agent of fleet.agents.list) {
+      const agentWsDir = path.join(wsBase, agent.id);
+      const destPath = path.join(agentWsDir, "COMPANY.md");
+      fs.writeFileSync(destPath, companyContent);
+      written[`company_md:${agent.id}`] = destPath;
+    }
+  }
+
   return written;
 }
 
