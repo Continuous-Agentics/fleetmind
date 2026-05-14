@@ -644,8 +644,11 @@ export async function runPushFleet(
           results.push({ agent_id: agentId, status: "pushed", reason: "instance not in SSM" });
         } else {
           const restartFlag = opts.restart ? " --restart" : "";
+          // Non-fatal: a timeout or auth failure during upgrade must not
+          // block pull-self. '|| true' ensures the command continues even
+          // if self-upgrade hangs or errors.
           const upgradeStep = opts.upgradeCli
-            ? `fleetmind self-upgrade --version ${opts.upgradeCli} --apply && `
+            ? `timeout 120 fleetmind self-upgrade --version ${opts.upgradeCli} --apply || true && `
             : "";
           const cmd = `${upgradeStep}sudo -u ec2-user fleetmind pull-self --apply${restartFlag} --region ${region}`;
           log.step(`    sending SSM command to ${instanceId}...`);
