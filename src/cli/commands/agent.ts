@@ -159,8 +159,9 @@ Examples:
         log.dim(`  instance: ${instanceId}`);
 
         // ── Pre-flight diagnostics ─────────────────────────────────────────
+        let preflightResult: PreflightResult = { dashboardUrl: null };
         if (!opts.skipPreflight) {
-          await runPreflight(instanceId, agentId, region);
+          preflightResult = await runPreflight(instanceId, agentId, region);
           if (!opts.yes) {
             // Tiny inline confirm (avoid pulling in prompts dep). Skip
             // confirmation if not a TTY (CI / scripted).
@@ -185,6 +186,25 @@ Examples:
         // ── Spawn aws ssm start-session as foreground child ────────────────
         log.bold(`Opening port-forward...`);
         log.ok(`Gateway available at ws://localhost:${localPort}  (Ctrl+C to disconnect)`);
+
+        // Print the tokenized dashboard URL when pre-flight captured one.
+        // Rewrite the host to localhost:<local-port> so the operator can
+        // copy-paste straight into a browser.
+        if (preflightResult.dashboardUrl) {
+          const rewritten = rewriteDashboardUrlForLocalhost(preflightResult.dashboardUrl, localPort);
+          if (rewritten) {
+            log.ok(`Dashboard:         ${chalk.cyan(rewritten.url)}`);
+            if (rewritten.botPort !== remotePort) {
+              log.warn(`  ⚠ Bot dashboard uses port ${rewritten.botPort} but we forwarded ${remotePort}.`);
+              log.warn(`    Either re-run with --port ${rewritten.botPort}, or open a second port-forward.`);
+            } else {
+              log.dim(`  → token baked in; paste this URL in your browser`);
+            }
+          } else {
+            log.dim(`  dashboard URL (could not rewrite for localhost): ${preflightResult.dashboardUrl}`);
+          }
+        }
+
         log.dim(`  → aws ssm start-session --target ${instanceId} --document-name AWS-StartPortForwardingSession ...`);
 
         const child = spawn(
@@ -226,12 +246,27 @@ Examples:
 // agent connect helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function runPreflight(instanceId: string, agentId: string, region: string): Promise<void> {
+/** Optional return value from preflight — surfaces the bot's dashboard URL
+ *  so the caller can rewrite the host to localhost and print it alongside
+ *  the port-forward output. dashboardUrl is null when the dashboard command
+ *  failed or wasn't available on the bot. */
+interface PreflightResult {
+  dashboardUrl: string | null;
+}
+
+async function runPreflight(
+  instanceId: string,
+  agentId: string,
+  region: string,
+): Promise<PreflightResult> {
   log.bold(`Pre-flight diagnostics...`);
   const ssm = new SSMClient({ region });
 
-  // Bundle four shell snippets in one SSM Run Command for round-trip efficiency.
+  // Bundle shell snippets in one SSM Run Command for round-trip efficiency.
   // Output is parsed by markers so we can format each section.
+  // 'openclaw dashboard --no-open' is run as ec2-user (the gateway's user) so
+  // it picks up the gateway auth token from the gateway's own config and
+  // embeds it in the printed URL.
   const commands = [
     `set +e`,
     `echo "::SERVICE::"`,
@@ -242,6 +277,8 @@ async function runPreflight(instanceId: string, agentId: string, region: string)
     `openclaw --version 2>/dev/null | head -1 || echo "<openclaw CLI not on PATH>"`,
     `echo "::LOG::"`,
     `journalctl -u openclaw-${agentId} -n 5 --no-pager 2>/dev/null || true`,
+    `echo "::DASHBOARD::"`,
+    `sudo -u ec2-user openclaw dashboard --no-open 2>&1 | grep -oE 'http[s]?://[^[:space:]]+' | head -1 || true`,
     `echo "::END::"`,
   ];
 
@@ -254,7 +291,7 @@ async function runPreflight(instanceId: string, agentId: string, region: string)
     const cmdId = send.Command?.CommandId;
     if (!cmdId) {
       log.warn(`  pre-flight: no SSM CommandId returned; skipping diagnostics`);
-      return;
+      return { dashboardUrl: null };
     }
 
     // Poll up to 15s; pre-flight should be fast.
@@ -272,13 +309,13 @@ async function runPreflight(instanceId: string, agentId: string, region: string)
 
     if (!inv) {
       log.warn(`  pre-flight: timed out waiting for SSM response; proceeding to port-forward anyway`);
-      return;
+      return { dashboardUrl: null };
     }
 
     if (inv.Status !== "Success") {
       log.warn(`  pre-flight: SSM Run Command ${inv.Status}; proceeding to port-forward anyway`);
       if (inv.StandardErrorContent) log.dim(`    ${inv.StandardErrorContent.trim().split("\n").join("\n    ")}`);
-      return;
+      return { dashboardUrl: null };
     }
 
     const out = inv.StandardOutputContent ?? "";
@@ -307,20 +344,44 @@ async function runPreflight(instanceId: string, agentId: string, region: string)
     } else {
       log.dim(`  recent log: <empty>`);
     }
+
+    return { dashboardUrl: sections.dashboard.trim() || null };
   } catch (err) {
     log.warn(`  pre-flight: ${String(err)}; proceeding to port-forward anyway`);
+    return { dashboardUrl: null };
   }
 }
 
-function parsePreflightOutput(raw: string): { service: string; since: string; version: string; log: string } {
-  const sections = { service: "", since: "", version: "", log: "" };
-  const markers = ["::SERVICE::", "::SINCE::", "::VERSION::", "::LOG::", "::END::"];
+function parsePreflightOutput(raw: string): { service: string; since: string; version: string; log: string; dashboard: string } {
+  const sections = { service: "", since: "", version: "", log: "", dashboard: "" };
+  const markers = ["::SERVICE::", "::SINCE::", "::VERSION::", "::LOG::", "::DASHBOARD::", "::END::"];
   const indices = markers.map((m) => raw.indexOf(m)).map((i) => (i < 0 ? raw.length : i));
   sections.service = raw.slice(indices[0] + markers[0].length, indices[1]);
   sections.since = raw.slice(indices[1] + markers[1].length, indices[2]);
   sections.version = raw.slice(indices[2] + markers[2].length, indices[3]);
   sections.log = raw.slice(indices[3] + markers[3].length, indices[4]);
+  sections.dashboard = raw.slice(indices[4] + markers[4].length, indices[5]);
   return sections;
+}
+
+/** Rewrite a bot-side dashboard URL (e.g. http://127.0.0.1:18789/chat?...&token=...)
+ *  so the host points at the operator's local-forwarded port. Returns the
+ *  rewritten URL + the bot's original port (so the caller can warn on port
+ *  mismatch), or null if the input doesn't look like a localhost URL. */
+function rewriteDashboardUrlForLocalhost(
+  botUrl: string,
+  localPort: number,
+): { url: string; botPort: number } | null {
+  try {
+    const parsed = new URL(botUrl);
+    if (parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") return null;
+    const botPort = parsed.port ? parseInt(parsed.port, 10) : parsed.protocol === "https:" ? 443 : 80;
+    parsed.hostname = "localhost";
+    parsed.port = String(localPort);
+    return { url: parsed.toString(), botPort };
+  } catch {
+    return null;
+  }
 }
 
 /** Find an available local TCP port starting at `start`, scanning forward. */
