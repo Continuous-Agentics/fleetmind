@@ -30,3 +30,7 @@ infra/terraform/backend.hcl
 # auto-loaded regardless of workspace — multi-fleet contamination footgun.
 # Per-workspace files under workspaces/ are passed explicitly via -var-file.
 infra/terraform/*.auto.tfvars
+
+
+# Grace notes
+docs/grace/
