@@ -159,7 +159,7 @@ Examples:
         log.dim(`  instance: ${instanceId}`);
 
         // ── Pre-flight diagnostics ─────────────────────────────────────────
-        let preflightResult: PreflightResult = { dashboardUrl: null };
+        let preflightResult: PreflightResult = { dashboardUrl: null, authMode: null, authSecret: null };
         if (!opts.skipPreflight) {
           preflightResult = await runPreflight(instanceId, agentId, region);
           if (!opts.yes) {
@@ -187,9 +187,8 @@ Examples:
         log.bold(`Opening port-forward...`);
         log.ok(`Gateway available at ws://localhost:${localPort}  (Ctrl+C to disconnect)`);
 
-        // Print the tokenized dashboard URL when pre-flight captured one.
-        // Rewrite the host to localhost:<local-port> so the operator can
-        // copy-paste straight into a browser.
+        // Print the dashboard URL + appropriate auth hint based on the
+        // gateway's configured auth mode.
         if (preflightResult.dashboardUrl) {
           const rewritten = rewriteDashboardUrlForLocalhost(preflightResult.dashboardUrl, localPort);
           if (rewritten) {
@@ -197,8 +196,18 @@ Examples:
             if (rewritten.botPort !== remotePort) {
               log.warn(`  ⚠ Bot dashboard uses port ${rewritten.botPort} but we forwarded ${remotePort}.`);
               log.warn(`    Either re-run with --port ${rewritten.botPort}, or open a second port-forward.`);
+            }
+            if (preflightResult.authMode === "password" && preflightResult.authSecret) {
+              log.dim(`  → gateway uses password auth. Paste at the login form:`);
+              log.info(`    ⚠ ${chalk.bold.yellow("password:")} ${chalk.yellow(preflightResult.authSecret)}`);
+              log.dim(`      (visible in this terminal only — same SSM access lets you read it anyway)`);
+            } else if (preflightResult.authMode === "token" && preflightResult.authSecret) {
+              log.dim(`  → gateway uses token auth. Paste at the login form:`);
+              log.info(`    ⚠ ${chalk.bold.yellow("token:")} ${chalk.yellow(preflightResult.authSecret)}`);
+            } else if (preflightResult.authMode === "none") {
+              log.dim(`  → no gateway auth configured; URL works as-is`);
             } else {
-              log.dim(`  → token baked in; paste this URL in your browser`);
+              log.dim(`  → paste this URL in your browser (auth method unknown — follow the form)`);
             }
           } else {
             log.dim(`  dashboard URL (could not rewrite for localhost): ${preflightResult.dashboardUrl}`);
@@ -246,12 +255,16 @@ Examples:
 // agent connect helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Optional return value from preflight — surfaces the bot's dashboard URL
- *  so the caller can rewrite the host to localhost and print it alongside
- *  the port-forward output. dashboardUrl is null when the dashboard command
- *  failed or wasn't available on the bot. */
+/** Optional return values from preflight — surfaces the bot's dashboard URL
+ *  and (when password-auth is configured) the gateway password so the caller
+ *  can print actionable auth instructions next to the port-forward. Both are
+ *  null when their respective fetch failed. */
 interface PreflightResult {
   dashboardUrl: string | null;
+  /** Gateway auth mode: 'password' | 'token' | 'none' | null (unknown). */
+  authMode: string | null;
+  /** Gateway auth secret (password OR token, depending on mode). Sensitive. */
+  authSecret: string | null;
 }
 
 async function runPreflight(
@@ -264,9 +277,13 @@ async function runPreflight(
 
   // Bundle shell snippets in one SSM Run Command for round-trip efficiency.
   // Output is parsed by markers so we can format each section.
-  // 'openclaw dashboard --no-open' is run as ec2-user (the gateway's user) so
-  // it picks up the gateway auth token from the gateway's own config and
-  // embeds it in the printed URL.
+  //
+  // The auth-mode + auth-secret extraction reads the gateway's own openclaw.json
+  // config file directly (the CLI's `config get` redacts the secret). The
+  // operator already has SSM exec on the bot, so reading this file isn't a
+  // privilege escalation — it's the same access they had before, just
+  // proxied through the wrapper for ergonomics.
+  const configFile = `/home/ec2-user/.openclaw/openclaw.json`;
   const commands = [
     `set +e`,
     `echo "::SERVICE::"`,
@@ -279,6 +296,13 @@ async function runPreflight(
     `journalctl -u openclaw-${agentId} -n 5 --no-pager 2>/dev/null || true`,
     `echo "::DASHBOARD::"`,
     `sudo -u ec2-user openclaw dashboard --no-open 2>&1 | grep -oE 'http[s]?://[^[:space:]]+' | head -1 || true`,
+    `echo "::AUTH_MODE::"`,
+    `sudo cat "${configFile}" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("gateway",{}).get("auth",{}).get("mode","none"))' 2>/dev/null || true`,
+    `echo "::AUTH_SECRET::"`,
+    // Extract the auth secret matching the configured mode. Password lives at
+    // gateway.auth.password; token lives at gateway.auth.token. We try both;
+    // whichever is non-null on the bot is what we print.
+    `sudo cat "${configFile}" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); a=d.get("gateway",{}).get("auth",{}); print(a.get("password") or a.get("token") or "")' 2>/dev/null || true`,
     `echo "::END::"`,
   ];
 
@@ -291,7 +315,7 @@ async function runPreflight(
     const cmdId = send.Command?.CommandId;
     if (!cmdId) {
       log.warn(`  pre-flight: no SSM CommandId returned; skipping diagnostics`);
-      return { dashboardUrl: null };
+      return { dashboardUrl: null, authMode: null, authSecret: null };
     }
 
     // Poll up to 15s; pre-flight should be fast.
@@ -309,13 +333,13 @@ async function runPreflight(
 
     if (!inv) {
       log.warn(`  pre-flight: timed out waiting for SSM response; proceeding to port-forward anyway`);
-      return { dashboardUrl: null };
+      return { dashboardUrl: null, authMode: null, authSecret: null };
     }
 
     if (inv.Status !== "Success") {
       log.warn(`  pre-flight: SSM Run Command ${inv.Status}; proceeding to port-forward anyway`);
       if (inv.StandardErrorContent) log.dim(`    ${inv.StandardErrorContent.trim().split("\n").join("\n    ")}`);
-      return { dashboardUrl: null };
+      return { dashboardUrl: null, authMode: null, authSecret: null };
     }
 
     const out = inv.StandardOutputContent ?? "";
@@ -345,22 +369,31 @@ async function runPreflight(
       log.dim(`  recent log: <empty>`);
     }
 
-    return { dashboardUrl: sections.dashboard.trim() || null };
+    return {
+      dashboardUrl: sections.dashboard.trim() || null,
+      authMode: sections.authMode.trim() || null,
+      authSecret: sections.authSecret.trim() || null,
+    };
   } catch (err) {
     log.warn(`  pre-flight: ${String(err)}; proceeding to port-forward anyway`);
-    return { dashboardUrl: null };
+    return { dashboardUrl: null, authMode: null, authSecret: null };
   }
 }
 
-function parsePreflightOutput(raw: string): { service: string; since: string; version: string; log: string; dashboard: string } {
-  const sections = { service: "", since: "", version: "", log: "", dashboard: "" };
-  const markers = ["::SERVICE::", "::SINCE::", "::VERSION::", "::LOG::", "::DASHBOARD::", "::END::"];
+function parsePreflightOutput(raw: string): {
+  service: string; since: string; version: string; log: string;
+  dashboard: string; authMode: string; authSecret: string;
+} {
+  const sections = { service: "", since: "", version: "", log: "", dashboard: "", authMode: "", authSecret: "" };
+  const markers = ["::SERVICE::", "::SINCE::", "::VERSION::", "::LOG::", "::DASHBOARD::", "::AUTH_MODE::", "::AUTH_SECRET::", "::END::"];
   const indices = markers.map((m) => raw.indexOf(m)).map((i) => (i < 0 ? raw.length : i));
   sections.service = raw.slice(indices[0] + markers[0].length, indices[1]);
   sections.since = raw.slice(indices[1] + markers[1].length, indices[2]);
   sections.version = raw.slice(indices[2] + markers[2].length, indices[3]);
   sections.log = raw.slice(indices[3] + markers[3].length, indices[4]);
   sections.dashboard = raw.slice(indices[4] + markers[4].length, indices[5]);
+  sections.authMode = raw.slice(indices[5] + markers[5].length, indices[6]);
+  sections.authSecret = raw.slice(indices[6] + markers[6].length, indices[7]);
   return sections;
 }
 
