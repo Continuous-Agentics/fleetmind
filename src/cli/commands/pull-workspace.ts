@@ -75,7 +75,7 @@ async function sendSsmAndWait(
   throw new Error(`SSM command ${cmdId} timed out after ${timeoutMs}ms`);
 }
 
-async function lookupInstanceId(
+export async function lookupInstanceId(
   fleetName: string,
   agentId: string,
   region: string
