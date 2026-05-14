@@ -85,8 +85,11 @@ jobs:
           fi
           echo "Tarball contents look clean."
 
-          # Positive assertion: the three new top-level docs MUST ship.
-          for required in docs/CONCEPTS.md docs/QUICKSTART.md docs/TROUBLESHOOTING.md; do
+          # Positive assertion: the surviving CLI-side docs MUST ship.
+          # Operator-facing docs (QUICKSTART, SETUP-A-FLEET, MULTI-FLEET,
+          # OPERATING, TROUBLESHOOTING, GITHUB-APPS, CONCEPTS) now live in
+          # the fleetmind-template repo and are no longer expected here.
+          for required in docs/WHERE.md docs/protocol.md docs/integration/delegation.md; do
             if ! echo "$FILES" | grep -qx "$required"; then
               echo "ERROR: required doc missing from tarball: $required"
               FAIL=1

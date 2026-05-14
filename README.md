@@ -4,7 +4,23 @@ Deploy and manage OpenClaw multi-agent fleets. One config file, multiple AI bots
 
 Built with TypeScript. Requires Node.js 20+.
 
-**New to fleetmind?** Start with [docs/QUICKSTART.md](docs/QUICKSTART.md) (10-minute happy path) and [docs/CONCEPTS.md](docs/CONCEPTS.md) (vocabulary). When things break, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md). For the comprehensive bring-up reference, see [docs/SETUP-A-FLEET.md](docs/SETUP-A-FLEET.md).
+## 📦 Where did the operator docs go?
+
+fleet bring-up, day-2 ops, and troubleshooting now live in the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) repo, alongside the Terraform that calls the module. Module-level concerns live in [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind).
+
+| Looking for... | Now lives at |
+|---|---|
+| Bring-up (QUICKSTART) | [`fleetmind-template/docs/QUICKSTART.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/QUICKSTART.md) |
+| Comprehensive setup reference | [`fleetmind-template/docs/SETUP-A-FLEET.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/SETUP-A-FLEET.md) |
+| Multi-fleet patterns | [`fleetmind-template/docs/MULTI-FLEET.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/MULTI-FLEET.md) |
+| Day-to-day ops (push, pull-self, restart) | [`fleetmind-template/docs/OPERATING.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/OPERATING.md) |
+| Troubleshooting (Slack, deploy, runtime) | [`fleetmind-template/docs/TROUBLESHOOTING.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/TROUBLESHOOTING.md) |
+| GitHub Apps per agent | [`fleetmind-template/docs/GITHUB-APPS.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/GITHUB-APPS.md) |
+| Vocabulary (CONCEPTS) | [`fleetmind-template/docs/CONCEPTS.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/CONCEPTS.md) |
+| BYO VPC, module troubleshooting, migrations | [`terraform-aws-fleetmind/docs/`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind#docs) |
+| Standalone task-ledger consumption | [`terraform-aws-fleetmind/docs/TASK-LEDGER-STANDALONE.md`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/blob/main/docs/TASK-LEDGER-STANDALONE.md) |
+
+This repo (`fleetmind`) ships the CLI itself — commands, runtime, and the delegation protocol spec. See [`docs/protocol.md`](docs/protocol.md) and [`docs/integration/delegation.md`](docs/integration/delegation.md).
 
 ## Architecture
 
@@ -58,49 +74,12 @@ npm install -g @continuous-agentics/fleetmind
 
 ## Quick Start
 
-```bash
-# 1. Scaffold a new fleet
-fleetmind init --name acme-fleet --client "Acme Corp"
+fleet bring-up happens from a [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) clone, not from this repo. Two paths:
 
-# 2. Edit fleet.yaml — add agents, Slack tokens, skills
-# 3. Generate Slack app manifests, create the apps in the Slack UI
-fleetmind slack manifests --out ./rendered/slack-manifests/
-# ... create each app at https://api.slack.com/apps → "From a manifest" ...
-# ... install each app, grab bot/app tokens, create channels, capture channel IDs ...
+- *Guided:* `fleetmind onboard` (interactive wizard — [README § Guided onboarding](https://github.com/Continuous-Agentics/fleetmind-template#guided-onboarding-recommended))
+- *Manual:* [`docs/QUICKSTART.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/QUICKSTART.md) — ~20–30 min, narrative walkthrough
 
-# 4. Fill in the channel IDs in fleet.yaml under each agent's slack.channels
-
-# 5. Render workspace artifacts + derived tfvars
-fleetmind render acme-fleet.yaml
-
-# 6. Apply Terraform (provisions EC2 hosts, IAM, DDB, S3, networking)
-#    Run from the root of your fleet repo (created from fleetmind-template).
-#    See docs/QUICKSTART.md and docs/SETUP-A-FLEET.md for the full first-time
-#    sequence, including one-time backend setup and Terraform workspace creation.
-terraform workspace select acme-fleet
-terraform apply \
-  -var-file=workspaces/acme-fleet.tfvars \
-  -var-file=workspaces/acme-fleet.derived.tfvars
-
-# 7. Push per-agent Slack + Anthropic tokens into AWS Secrets Manager
-fleetmind secrets populate --fleet acme-fleet.yaml --interactive --region us-west-2
-
-# 8. Auto-fill each bot's Slack user_id via auth.test
-fleetmind slack discover --fleet acme-fleet.yaml
-
-# 9. Re-render (now with bot_user_ids so per-channel users allowlists are complete)
-fleetmind render acme-fleet.yaml
-
-# 10. Package workspaces, upload to S3, trigger pull-self + restart on every bot
-fleetmind push fleet --fleet acme-fleet.yaml --restart
-```
-
-**Day-to-day:** after changing `fleet.yaml` or workspace files, re-push:
-```bash
-fleetmind push fleet --restart
-```
-
-For the full first-time fleet setup walkthrough, see [`docs/SETUP-A-FLEET.md`](docs/SETUP-A-FLEET.md).
+This repo ships the fleetmind CLI itself — see [CLI Reference](#cli-reference) below for the commands the template drives.
 
 ## fleet.yaml Overview
 
@@ -299,22 +278,7 @@ Unpinned skills (`- name: coding`) auto-update. Pinned skills (`version: "2.1.0"
 
 ## Terraform Integration
 
-The Terraform module lives in a separate repo, [`Continuous-Agentics/terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) (currently `v0.1.6`). Operators consume it via the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) GitHub template repo, whose `main.tf` already contains the `module "fleetmind" { source = "github.com/Continuous-Agentics/terraform-aws-fleetmind?ref=v0.1.6" ... }` call. You don't fork the module — you bump `?ref=` in `main.tf` to upgrade.
-
-`fleetmind render` writes derived tfvars to `workspaces/<fleet>.derived.tfvars` at your template repo's root — specifically `fleet_name`, `agent_names`, `agent_models`, `agent_orchestrators`, and `wake_target_session_key` (the latter derived from the PM's first Slack channel). Operators pass this file alongside their hand-edited `workspaces/<fleet>.tfvars` (infrastructure-only knobs like `aws_region`, `instance_type`, `agent_ports`) via `-var-file`:
-
-```bash
-terraform workspace select <fleet-name>
-terraform apply \
-  -var-file=workspaces/<fleet>.tfvars \
-  -var-file=workspaces/<fleet>.derived.tfvars
-```
-
-*Note*: the `.derived.tfvars` suffix is intentional — these files are *not* auto-loaded by Terraform. They must be passed explicitly. This prevents cross-workspace contamination when multiple fleets share an account.
-
-The per-agent EC2 hosts, IAM roles, VPC, NAT, S3 ledger bucket, DynamoDB ContextStore, and (when `delegation_enabled = true`) the task-ledger substrate are all created by the module. The task-ledger substrate lives in the [`modules/task-ledger`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/tree/v0.1.6/modules/task-ledger) submodule; the ContextStore DynamoDB table is provisioned by [`dynamodb.tf`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/blob/v0.1.6/dynamodb.tf) directly (no separate module).
-
-Multiple fleets in one AWS account: use Terraform workspaces, one per fleet. See [`docs/MULTI-FLEET.md`](docs/MULTI-FLEET.md).
+The Terraform module is in a separate repo: [`Continuous-Agentics/terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind). Operators consume it via [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template), whose `main.tf` already calls the module. `fleetmind render` writes derived tfvars (`fleet_name`, `agent_names`, `agent_orchestrators`, `wake_target_session_key`) into the template repo's `workspaces/<fleet>.derived.tfvars`; the operator passes that file + their hand-edited `<fleet>.tfvars` to `terraform apply -var-file=...`. For the full module surface, BYO VPC, troubleshooting, and per-version migration notes, see the [terraform-aws-fleetmind docs](https://github.com/Continuous-Agentics/terraform-aws-fleetmind#docs).
 
 ## CI
 
