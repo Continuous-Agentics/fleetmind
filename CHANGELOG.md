@@ -6,6 +6,26 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-14
+
+### Added
+
+- **`fleetmind doctor`** — read-only validation of `fleet.yaml` against per-bot-type skill manifests. Reports missing required skills per agent; non-zero exit on errors. ([#142](https://github.com/Continuous-Agentics/fleetmind/pull/142))
+- **`fleetmind agent connect <agent>`** — SSM port-forward to a bot's gateway, with pre-flight diagnostics (service status, last-restart time, gateway version, recent log tail) before the tunnel opens. `--skip-preflight` fast-path for when SSM Run Command is the thing being debugged. ([#147](https://github.com/Continuous-Agentics/fleetmind/pull/147))
+- **`fleetmind github-app create`** — GitHub App manifest flow: spins up a local HTTPS callback, prints a one-click URL, exchanges the manifest code for App credentials, polls for installation, writes everything to SSM. PEM never lands on operator disk. ([#148](https://github.com/Continuous-Agentics/fleetmind/pull/148))
+- **`fleetmind onboard`** Step 5 now uses the `github-app create` manifest flow by default. `--legacy-github-apps` flag falls back to the prompt-driven manual path for headless/CI contexts. ([#148](https://github.com/Continuous-Agentics/fleetmind/pull/148))
+- **`fleetmind pull-workspace --bucket <name>`** — override the default `<fleetName>-ledger` snapshot-staging bucket. Useful for audit buckets, cross-account migrations, or dedicated debug-snapshot buckets. Also adds `download-workspace` as a Commander alias. ([#145](https://github.com/Continuous-Agentics/fleetmind/pull/145))
+- **Per-bot-type skill manifests** under `openclaw/<bot-type>/skills.yaml`. Each bot type declares the skills required to stand up a bot of that role. Data-only — consumed by `doctor` and `render`. ([#141](https://github.com/Continuous-Agentics/fleetmind/pull/141))
+- **`fleetmind render --check` / `--dry-run`** — validate fleet.yaml against manifests without mutating or rendering. CI-friendly. ([#142](https://github.com/Continuous-Agentics/fleetmind/pull/142))
+- **`docs/WHERE.md`** in the npm tarball pointing operators at the canonical doc homes after the doc reorg. ([#139](https://github.com/Continuous-Agentics/fleetmind/pull/139))
+
+### Changed
+
+- **`fleetmind render` now mutates `fleet.yaml`** by default to append missing required skills (per each agent's role manifest). Append-only — never removes or modifies existing entries. *Operators running `render` in CI should add `--check`* (read-only) to avoid surprise diffs in the repo. Fully-compliant fleet.yaml = no mutation. ([#142](https://github.com/Continuous-Agentics/fleetmind/pull/142))
+- **License**: relicensed from MIT to Apache 2.0 to align with `terraform-aws-fleetmind`. ([#137](https://github.com/Continuous-Agentics/fleetmind/pull/137))
+- **Documentation reorg**: operator-facing docs (`QUICKSTART`, `SETUP-A-FLEET`, `MULTI-FLEET`, `OPERATING`, `TROUBLESHOOTING`, `GITHUB-APPS`, `CONCEPTS`) moved out of this repo into [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template). Module-level docs (BYO VPC, standalone task-ledger, migrations) moved into [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind). fleetmind keeps CLI runtime + protocol docs only. ([#138](https://github.com/Continuous-Agentics/fleetmind/pull/138), [#139](https://github.com/Continuous-Agentics/fleetmind/pull/139))
+- **`agent connect` error message** uses the correct `fleetmind:fleet_name` / `fleetmind:agent_id` tag keys (was unprefixed in the initial draft).
+
 ### Changed (potentially breaking for existing fleets)
 
 - **Per-agent EBS workspace volume removed.** Workspace files now live on the
