@@ -28,7 +28,7 @@ import { loadFleet } from "../../config/loader.js";
 import { log } from "../../utils/log.js";
 import { generateManifests } from "./slack.js";
 import { discoverSlackBotUserIds } from "./slack.js";
-import { storeGithubApp } from "./github-app.js";
+import { storeGithubApp, createGithubApp } from "./github-app.js";
 import {
   SecretsManagerClient,
   GetSecretValueCommand,
@@ -154,7 +154,12 @@ async function putSecret(secretId: string, value: Record<string, string>, region
 
 // ── Main wizard ───────────────────────────────────────────────────────────────
 
-export async function runOnboard(fleetFile: string, region: string): Promise<void> {
+export async function runOnboard(
+  fleetFile: string,
+  region: string,
+  opts: { legacyGithubApps?: boolean } = {},
+): Promise<void> {
+  let legacyGithubApps = opts.legacyGithubApps ?? false;
   console.log("\n\x1b[1mfleetmind onboard\x1b[0m — guided fleet setup wizard\n");
 
   // ── Load fleet ──────────────────────────────────────────────────────────────
@@ -204,6 +209,9 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
   // In-memory credential store (collected during the wizard, used later)
   const slackCreds: Record<string, { botToken: string; signingSecret: string; appToken: string }> = {};
   const ghAppCreds: Record<string, { appId: string; installationId: string; pemFile: string }> = {};
+  /** Agent IDs whose GitHub App was created via the manifest flow in Step 5.
+   * These already have credentials in SSM; Step 10 doesn't need to re-store. */
+  const ghAppManifestHandled = new Set<string>();
 
   // ── Step 2: Slack manifests ─────────────────────────────────────────────────
   if (!manifestsExist) {
@@ -300,9 +308,34 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
   // ── Step 5: GitHub Apps ─────────────────────────────────────────────────────
   header("Step 5 / 12 — GitHub Apps");
   console.log("  Each bot needs its own GitHub App for repo access (PRs, issues, etc.)");
-  console.log("  → Go to https://github.com/organizations/YOUR-ORG/settings/apps/new");
-  console.log("  → Create one app per agent, generate a private key (.pem), install it");
-  console.log("  → Capture: App ID (from app settings page) + Installation ID (from install URL)\n");
+  if (legacyGithubApps) {
+    console.log("  Legacy mode: you'll be prompted for App ID + Installation ID + PEM path per agent.");
+    console.log("  → Create each App manually at https://github.com/organizations/YOUR-ORG/settings/apps/new\n");
+  } else {
+    console.log("  Using the manifest flow: fleetmind opens a one-click URL per agent;");
+    console.log("  you click 'Create App' + 'Install' in your browser. The PEM never lands on this laptop —");
+    console.log("  it's fetched from the GitHub API and written directly to SSM.\n");
+  }
+
+  // For the manifest flow we need a GitHub owner. Ask once — same owner for
+  // all agents in this fleet (per the canonical client-org delivery model).
+  let ghOwner: string | null = null;
+  let ghOrgOwned = true;
+  if (!legacyGithubApps) {
+    const ownerInput = await prompt(`  GitHub owner for all bots (org name, or 'username:<user>' for user-owned): `);
+    const trimmed = ownerInput.trim();
+    if (trimmed.startsWith("username:")) {
+      ghOwner = trimmed.slice("username:".length).trim();
+      ghOrgOwned = false;
+    } else {
+      ghOwner = trimmed;
+      ghOrgOwned = true;
+    }
+    if (!ghOwner) {
+      log.warn("  No owner provided — falling back to legacy manual flow for this step.");
+      legacyGithubApps = true;
+    }
+  }
 
   for (const agent of agents) {
     const ssmKey = `/fleetmind/${fleetName}/agents/${agent.id}/github-app/app-id`;
@@ -318,10 +351,41 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
       console.log(`\n\x1b[1m  ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
     }
 
-    const appId = await prompt(`    App ID:          `);
-    const installationId = await prompt(`    Installation ID: `);
-    const pemFile = await prompt(`    PEM file path:   `);
-    ghAppCreds[agent.id] = { appId: appId.trim(), installationId: installationId.trim(), pemFile: pemFile.trim() };
+    if (legacyGithubApps) {
+      const appId = await prompt(`    App ID:          `);
+      const installationId = await prompt(`    Installation ID: `);
+      const pemFile = await prompt(`    PEM file path:   `);
+      ghAppCreds[agent.id] = { appId: appId.trim(), installationId: installationId.trim(), pemFile: pemFile.trim() };
+      continue;
+    }
+
+    // Manifest flow path — createGithubApp writes to SSM directly.
+    const doIt = await confirm(`    Set up GitHub App for ${agent.id} now?`, true);
+    if (!doIt) {
+      log.warn(`    ${agent.id}: skipped — run 'fleetmind github-app create' later for this bot`);
+      continue;
+    }
+    try {
+      await createGithubApp({
+        fleet: fleetName,
+        agent: agent.id,
+        owner: ghOwner!,
+        org: ghOrgOwned,
+        callbackPort: 0,
+        region,
+        dryRun: false,
+        overwrite: true,
+      });
+      // Mark as manifest-handled so Step 10 knows there's nothing left to do.
+      ghAppManifestHandled.add(agent.id);
+    } catch (err) {
+      log.error(`    ${agent.id}: createGithubApp failed — ${String(err)}`);
+      log.warn(`    Falling back to manual prompts for this agent.`);
+      const appId = await prompt(`    App ID:          `);
+      const installationId = await prompt(`    Installation ID: `);
+      const pemFile = await prompt(`    PEM file path:   `);
+      ghAppCreds[agent.id] = { appId: appId.trim(), installationId: installationId.trim(), pemFile: pemFile.trim() };
+    }
   }
   console.log();
 
@@ -450,10 +514,15 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
 
   // ── Step 10: GitHub App credentials ─────────────────────────────────────────
   header("Step 10 / 12 — Store GitHub App Credentials in SSM");
+  if (ghAppManifestHandled.size > 0) {
+    log.ok(`Step 10: ${ghAppManifestHandled.size} agent${ghAppManifestHandled.size === 1 ? "" : "s"} already stored via manifest flow in Step 5`);
+  }
   const agentsWithNewCreds = Object.keys(ghAppCreds);
   if (agentsWithNewCreds.length === 0) {
-    log.ok("Step 10: no new GitHub App credentials to store — skipping");
-  } else if (await confirm("  Store GitHub App credentials?")) {
+    if (ghAppManifestHandled.size === 0) {
+      log.ok("Step 10: no new GitHub App credentials to store — skipping");
+    }
+  } else if (await confirm(`  Store ${agentsWithNewCreds.length} legacy-flow GitHub App credential set${agentsWithNewCreds.length === 1 ? "" : "s"}?`)) {
     for (const [agentId, creds] of Object.entries(ghAppCreds)) {
       if (!creds.appId || !creds.installationId || !creds.pemFile) {
         log.warn(`  ${agentId}: incomplete credentials — skipping`);
@@ -507,6 +576,7 @@ export function registerOnboard(program: Command): void {
     .description("Interactive guided wizard to deploy a new fleet from start to finish")
     .option("-f, --fleet <path>", "fleet.yaml path", "./fleet.yaml")
     .option("--region <region>", "AWS region", "us-west-2")
+    .option("--legacy-github-apps", "Use the manual GitHub App flow (prompts for App ID + Installation ID + PEM path) instead of the manifest flow. Use this in headless/CI contexts where a browser callback isn't possible.", false)
     .addHelpText('after', `
 Steps guided by this wizard:
   1.  Validate fleet.yaml
@@ -524,9 +594,9 @@ Steps guided by this wizard:
 
 Re-running onboard is safe — completed steps are skipped automatically.
 `)
-    .action(async (opts: { fleet: string; region: string }) => {
+    .action(async (opts: { fleet: string; region: string; legacyGithubApps: boolean }) => {
       try {
-        await runOnboard(opts.fleet, opts.region);
+        await runOnboard(opts.fleet, opts.region, { legacyGithubApps: opts.legacyGithubApps });
       } catch (err) {
         log.error(String(err));
         process.exit(1);
