@@ -152,7 +152,7 @@ Examples:
         const instanceId = await lookupInstanceId(fleetName, agentId, region);
         if (!instanceId) {
           throw new Error(
-            `No SSM-registered instance found with tags fleet_name=${fleetName} agent_id=${agentId}. ` +
+            `No SSM-registered instance found with tags fleetmind:fleet_name=${fleetName} fleetmind:agent_id=${agentId}. ` +
               `Either the bot hasn't bootstrapped, SSM agent isn't running, or the tags are wrong.`,
           );
         }
