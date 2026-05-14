@@ -32,7 +32,9 @@
     "dist/utils",
     "openclaw",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "docs/*.md",
+    "docs/integration/delegation.md"
   ],
   "engines": {
     "node": ">=20"

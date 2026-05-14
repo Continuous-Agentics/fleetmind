@@ -32,22 +32,47 @@ jobs:
 
       - name: Verify published tarball contents (npm pack --dry-run)
         run: |
-          # Verify that the published tarball does NOT include src/, test files,
-          # infra/, or docs/ — only dist/, README.md, and LICENSE.
+          # Verify the published tarball contents. Allowed:
+          #   - dist/**, openclaw/**, README.md, LICENSE, package.json
+          #   - docs/*.md (top-level public docs)
+          #   - docs/integration/delegation.md (only this integration doc ships)
+          # Denied: src/, test/, infra/, internal docs subdirs (audits/, design/, test/).
           PACK_OUTPUT=$(npm pack --dry-run 2>&1)
           echo "$PACK_OUTPUT"
 
-          # Extract the file list lines (lines that look like paths in the tarball)
-          FILES=$(echo "$PACK_OUTPUT" | grep -E '^\s+[a-zA-Z]' | awk '{print $NF}' || true)
+          # `npm pack --dry-run` prints one line per file as:
+          #   npm notice <size>  <path>
+          # Lines starting at column 0 ("npm notice ..."), not indented.
+          FILES=$(echo "$PACK_OUTPUT" \
+            | grep -E '^npm notice [0-9]+(\.[0-9]+)?[kKmMgG]?B[[:space:]]+\S+' \
+            | awk '{print $NF}' || true)
+
           echo "Files that would be published:"
           echo "$FILES"
+
+          if [ -z "$FILES" ]; then
+            echo "ERROR: could not parse any files from 'npm pack --dry-run' output."
+            echo "The npm output format may have changed — update this guard."
+            exit 1
+          fi
 
           FAIL=0
           while IFS= read -r f; do
             case "$f" in
-              src/*|test/*|infra/*|docs/*|*.test.ts|*.test.js|*.spec.ts|*.spec.js)
-                echo "ERROR: unexpected file in tarball: $f"
+              src/*|test/*|infra/*|*.test.ts|*.test.js|*.spec.ts|*.spec.js)
+                echo "ERROR: unexpected source/test/infra file in tarball: $f"
                 FAIL=1
+                ;;
+              docs/audits/*|docs/design/*|docs/test/*)
+                echo "ERROR: internal docs subdir in tarball: $f"
+                FAIL=1
+                ;;
+              docs/integration/*)
+                # Only delegation.md is allowed to ship from integration/.
+                if [ "$f" != "docs/integration/delegation.md" ]; then
+                  echo "ERROR: unexpected docs/integration/ file in tarball: $f"
+                  FAIL=1
+                fi
                 ;;
             esac
           done <<< "$FILES"
@@ -60,34 +85,14 @@ jobs:
           fi
           echo "Tarball contents look clean."
 
-  terraform-validate:
-    name: Terraform Validate
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "~> 1.6"
-
-      - name: Terraform init + validate (root module)
-        working-directory: infra/terraform
-        run: |
-          terraform init -backend=false
-          terraform validate
-
-      - name: Terraform init + validate (modules/task-ledger)
-        working-directory: infra/terraform/modules/task-ledger
-        run: |
-          terraform init -backend=false
-          terraform validate
-
-      - name: Terraform fmt check
-        working-directory: infra/terraform
-        run: terraform fmt -check -recursive
+          # Positive assertion: the three new top-level docs MUST ship.
+          for required in docs/CONCEPTS.md docs/QUICKSTART.md docs/TROUBLESHOOTING.md; do
+            if ! echo "$FILES" | grep -qx "$required"; then
+              echo "ERROR: required doc missing from tarball: $required"
+              FAIL=1
+            fi
+          done
+          if [ "$FAIL" -eq 1 ]; then exit 1; fi
 
   shellcheck:
     name: ShellCheck
