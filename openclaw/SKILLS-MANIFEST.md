@@ -36,7 +36,23 @@ A future *skill catalog* (separate doc) can enumerate available skills with note
 2. Add the new role to the `role` enum in `src/config/schema.ts`.
 3. Create the corresponding workspace bundle at `openclaw/<new-bot-type>/workspace/{AGENTS,SOUL,IDENTITY,PATCHES}.md`.
 
-`fleetmind doctor` and `sync-template` then pick it up automatically.
+`fleetmind doctor` and `fleetmind render` (with skill injection) then pick it up automatically.
+
+## Commenting out unbuilt skills
+
+Manifests may reference skills that don't exist yet — typically when planning a slate of skills before they're built. The convention is to *comment them out* and uncomment each entry as the corresponding `openclaw/skills/<name>/SKILL.md` ships:
+
+```yaml
+required:
+  - name: bot-delegation
+    source: fleetmind
+
+  # Future skills, uncomment when built:
+  # - name: fleet-context
+  #   source: fleetmind
+```
+
+This keeps the manifest as a forward-looking design document without breaking `fleetmind render` (which would try to inject the missing skill into `fleet.yaml`) or `fleetmind doctor` (which would error on an unresolvable skill).
 
 ## Updating an existing manifest
 

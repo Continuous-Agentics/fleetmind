@@ -10,12 +10,13 @@ required:
   - name: bot-reception
     source: fleetmind
 
-  # Universal bundled skills (not yet built — see openclaw/pm-bot/skills.yaml note)
-  - name: fleet-context
-    source: fleetmind
-  - name: task-ledger-query
-    source: fleetmind
-  - name: bot-self-update
-    source: fleetmind
-  - name: agent-status
-    source: fleetmind
+  # Universal bundled skills (every bot type gets these once built).
+  # Commented out until each SKILL.md ships in openclaw/skills/.
+  # - name: fleet-context
+  #   source: fleetmind
+  # - name: task-ledger-query
+  #   source: fleetmind
+  # - name: bot-self-update
+  #   source: fleetmind
+  # - name: agent-status
+  #   source: fleetmind
