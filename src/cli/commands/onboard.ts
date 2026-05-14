@@ -28,7 +28,6 @@ import { loadFleet } from "../../config/loader.js";
 import { log } from "../../utils/log.js";
 import { generateManifests } from "./slack.js";
 import { discoverSlackBotUserIds } from "./slack.js";
-import { populateSecrets } from "./populate.js";
 import { storeGithubApp } from "./github-app.js";
 import {
   SecretsManagerClient,
@@ -54,6 +53,7 @@ function prompt(question: string): Promise<string> {
   return new Promise((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     rl.question(question, (answer) => {
+      rl.close();
       resolve(answer);
     });
   });
@@ -127,6 +127,29 @@ function isRealUserId(id: string | undefined): boolean {
 
 function isRealChannelId(id: string | undefined): boolean {
   return /^C[A-Z0-9]+$/.test(id ?? "");
+}
+
+// ── AWS helpers ──────────────────────────────────────────────────────────────
+
+async function ssmExists(name: string, region: string): Promise<boolean> {
+  const ssm = new SSMClient({ region });
+  try { await ssm.send(new SsmGetCommand({ Name: name })); return true; } catch { return false; }
+}
+
+async function getSecret(secretId: string, region: string): Promise<string | null> {
+  const sm = new SecretsManagerClient({ region });
+  try {
+    const r = await sm.send(new GetSecretValueCommand({ SecretId: secretId }));
+    return r.SecretString ?? null;
+  } catch { return null; }
+}
+
+async function putSecret(secretId: string, value: Record<string, string>, region: string): Promise<void> {
+  const sm = new SecretsManagerClient({ region });
+  await sm.send(new PutSecretValueCommand({
+    SecretId: secretId,
+    SecretString: JSON.stringify(value),
+  }));
 }
 
 // ── Main wizard ───────────────────────────────────────────────────────────────
@@ -245,39 +268,8 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
       log.ok("  fleet.yaml updated with channel IDs");
     }
   } else {
-    log.ok("Step 3: Slack credentials already populated — collecting for secrets populate");
-    // Still need to collect for secrets populate later
-    for (const agent of agents) {
-      console.log(`\x1b[1m  Agent: ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
-      const botToken = await hiddenPrompt(`    Bot Token (xoxb-...): `);
-      const signingSecret = await hiddenPrompt(`    Signing Secret:       `);
-      const appToken = await hiddenPrompt(`    App Token (xapp-...): `);
-      slackCreds[agent.id] = { botToken, signingSecret, appToken };
-    }
-  }
-
-  // ── Helper: check if SSM param exists ────────────────────────────────────
-  async function ssmExists(name: string): Promise<boolean> {
-    const ssm = new SSMClient({ region });
-    try { await ssm.send(new SsmGetCommand({ Name: name })); return true; } catch { return false; }
-  }
-
-  // ── Helper: get existing SM secret value ─────────────────────────────────
-  async function getSecret(secretId: string): Promise<string | null> {
-    const sm = new SecretsManagerClient({ region });
-    try {
-      const r = await sm.send(new GetSecretValueCommand({ SecretId: secretId }));
-      return r.SecretString ?? null;
-    } catch { return null; }
-  }
-
-  // ── Helper: write SM secret ───────────────────────────────────────────────
-  async function putSecret(secretId: string, value: Record<string, string>): Promise<void> {
-    const sm = new SecretsManagerClient({ region });
-    await sm.send(new PutSecretValueCommand({
-      SecretId: secretId,
-      SecretString: JSON.stringify(value),
-    }));
+    log.ok("Step 3: Slack apps already configured — skipping credential collection");
+    log.dim("  Step 9 will check Secrets Manager and offer override if needed.");
   }
 
   // ── Step 4: Discover bot_user_ids ───────────────────────────────────────────
@@ -314,7 +306,7 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
 
   for (const agent of agents) {
     const ssmKey = `/fleetmind/${fleetName}/agents/${agent.id}/github-app/app-id`;
-    const alreadyInSsm = await ssmExists(ssmKey);
+    const alreadyInSsm = await ssmExists(ssmKey, region);
 
     if (alreadyInSsm) {
       const override = await confirm(`  ${agent.emoji} ${agent.name}: GitHub App already in SSM. Override?`, false);
@@ -338,7 +330,7 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
   console.log("  Bots install the fleetmind CLI from GitHub Packages at bootstrap.");
   console.log(`  SSM path: /fleetmind/shared/github-packages-token  (region: ${region})`);
 
-  if (await ssmExists("/fleetmind/shared/github-packages-token")) {
+  if (await ssmExists("/fleetmind/shared/github-packages-token", region)) {
     log.ok("  PAT already set in SSM — skipping");
   } else {
     const pat = await hiddenPrompt("  GitHub Packages PAT (ghp_...): ");
@@ -366,14 +358,21 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
 
   // ── Step 8: Terraform ───────────────────────────────────────────────────────
   header("Step 8 / 12 — Terraform");
+  // Detect tfvars filenames from what render actually produced
+  const fleetDir = path.dirname(fleetFile);
+  const derivedTfvarsPath = path.join(fleetDir, `workspaces/${fleetName}.derived.tfvars`);
+  const infraTfvarsPath = (() => {
+    // Look for <fleet>.tfvars, default.tfvars, or any .tfvars that isn't derived
+    const candidates = [`workspaces/${fleetName}.tfvars`, "workspaces/default.tfvars"];
+    return candidates.find(f => fs.existsSync(path.join(fleetDir, f))) ?? `workspaces/${fleetName}.tfvars`;
+  })();
   const tfvarsFile = `workspaces/${fleetName}.derived.tfvars`;
-  const infraTfvars = `workspaces/${fleetName}.tfvars`;
 
-  console.log("  Run these commands in your fleet repo:\n");
+  console.log("  Run these commands in your fleet repo (run from the repo root):\n");
   console.log(`  \x1b[36mterraform init -backend-config=backend.hcl\x1b[0m`);
   console.log(`  \x1b[36mterraform workspace new ${fleetName}\x1b[0m`);
   console.log(`  \x1b[36mterraform apply \\`);
-  console.log(`    -var-file=${infraTfvars} \\`);
+  console.log(`    -var-file=${infraTfvarsPath} \\`);
   console.log(`    -var-file=${tfvarsFile}\x1b[0m\n`);
   console.log("  Instances will boot but agents crash-loop until secrets are populated.\n");
   await confirm("  Terraform apply complete?", false);
@@ -390,7 +389,7 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
 
       // ── Slack tokens ────────────────────────────────────────────────────────
       const collected = slackCreds[agent.id];
-      const existingSlack = await getSecret(slackSecretId);
+      const existingSlack = await getSecret(slackSecretId, region);
       const slackIsPlaceholder = !existingSlack || existingSlack.includes("REPLACE_ME");
 
       let writeSlack = false;
@@ -424,13 +423,13 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
       }
 
       if (writeSlack && slackPayload) {
-        await putSecret(slackSecretId, slackPayload);
+        await putSecret(slackSecretId, slackPayload, region);
         log.ok("    Slack tokens written");
       }
 
       // ── Anthropic API key ────────────────────────────────────────────────────
       const anthropicSecretId = `${fleetName}/agents/${agent.id}/anthropic`;
-      const existingAnthropicRaw = await getSecret(anthropicSecretId);
+      const existingAnthropicRaw = await getSecret(anthropicSecretId, region);
       const anthropicIsPlaceholder = !existingAnthropicRaw || existingAnthropicRaw.includes("REPLACE_ME");
 
       let writeAnthropicKey = anthropicIsPlaceholder;
@@ -440,7 +439,7 @@ export async function runOnboard(fleetFile: string, region: string): Promise<voi
       if (writeAnthropicKey) {
         const apiKey = await hiddenPrompt("    Anthropic API key (sk-ant-...): ");
         if (apiKey.trim()) {
-          await putSecret(anthropicSecretId, { ANTHROPIC_API_KEY: apiKey.trim() });
+          await putSecret(anthropicSecretId, { ANTHROPIC_API_KEY: apiKey.trim() }, region);
           log.ok("    Anthropic key written");
         }
       } else {
