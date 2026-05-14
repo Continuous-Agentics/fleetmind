@@ -215,25 +215,31 @@ export async function createGithubApp(options: GithubAppCreateOptions): Promise<
     description: `Fleetmind agent: ${options.agent} (fleet: ${options.fleet})`,
   };
   const manifest = buildManifest(manifestOpts);
-  const encodedManifest = encodeURIComponent(JSON.stringify(manifest));
 
-  const newAppUrl = options.org
-    ? `https://github.com/organizations/${owner}/settings/apps/new?manifest=${encodedManifest}&state=${state}`
-    : `https://github.com/settings/apps/new?manifest=${encodedManifest}&state=${state}`;
+  // GitHub's manifest flow requires a POST with the manifest in the form body,
+  // not a GET with manifest as a query param. We serve a tiny HTML page at
+  // GET / that auto-POSTs to GitHub. The operator opens http://localhost:<port>/
+  // and the page submits itself to https://github.com/.../settings/apps/new.
+  const githubPostUrl = options.org
+    ? `https://github.com/organizations/${owner}/settings/apps/new?state=${state}`
+    : `https://github.com/settings/apps/new?state=${state}`;
+
+  const operatorEntryUrl = `http://localhost:${callbackPort}/`;
 
   log.bold(`GitHub App manifest flow for ${options.fleet}/${options.agent}`);
   log.info("");
-  log.ok(`Local callback ready at ${redirectUrl}`);
+  log.ok(`Local server ready at http://localhost:${callbackPort}`);
   log.info("");
   log.bold("Step 1 — open this URL in your browser:");
-  console.log(`  ${chalk.cyan(newAppUrl)}`);
+  console.log(`  ${chalk.cyan(operatorEntryUrl)}`);
   log.info("");
-  log.info(`In the browser: name the App (default '${manifestOpts.name}') and click 'Create GitHub App'.`);
-  log.info(`GitHub will redirect to your local callback to complete the exchange.`);
+  log.info(`The page will auto-submit the manifest to GitHub.`);
+  log.info(`Confirm the App name (default '${manifestOpts.name}') and click 'Create GitHub App'.`);
+  log.info(`GitHub will redirect to ${redirectUrl} to complete the exchange.`);
   log.info("");
 
   // ─── Start local server, wait for redirect ─────────────────────────────────
-  const { code: manifestCode, state: returnedState } = await waitForCallback(callbackPort);
+  const { code: manifestCode, state: returnedState } = await waitForCallback(callbackPort, githubPostUrl, manifest);
 
   if (returnedState !== state) {
     throw new Error(`State mismatch — possible CSRF. Expected '${state}', got '${returnedState}'. Aborting.`);
@@ -283,7 +289,11 @@ export async function createGithubApp(options: GithubAppCreateOptions): Promise<
 
 // ── Helpers: callback server, manifest exchange, install polling ────────────
 
-function waitForCallback(port: number): Promise<{ code: string; state: string }> {
+function waitForCallback(
+  port: number,
+  githubPostUrl: string,
+  manifest: object,
+): Promise<{ code: string; state: string }> {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
       if (!req.url) {
@@ -292,29 +302,73 @@ function waitForCallback(port: number): Promise<{ code: string; state: string }>
         return;
       }
       const url = new URL(req.url, `http://localhost:${port}`);
-      if (url.pathname !== "/callback") {
-        res.writeHead(404);
-        res.end("Not Found");
+
+      // GET / — serve the auto-submit form page. This is the operator's
+      // entry point. The form POSTs to GitHub with the manifest as a form
+      // field per https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest
+      if (url.pathname === "/" || url.pathname === "/index.html") {
+        const manifestJson = JSON.stringify(manifest);
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(renderAutoSubmitPage(githubPostUrl, manifestJson));
         return;
       }
-      const code = url.searchParams.get("code");
-      const state = url.searchParams.get("state");
-      if (!code || !state) {
-        res.writeHead(400);
-        res.end("Missing code or state");
+
+      // GET /callback — receive GitHub's redirect after the operator clicks Create
+      if (url.pathname === "/callback") {
+        const code = url.searchParams.get("code");
+        const state = url.searchParams.get("state");
+        if (!code || !state) {
+          res.writeHead(400);
+          res.end("Missing code or state");
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end(
+          "<html><body style=\"font-family: sans-serif; padding: 2em;\">" +
+            "<h2>✓ fleetmind: manifest code received</h2>" +
+            "<p>You can close this tab and return to the terminal.</p></body></html>",
+        );
+        server.close();
+        resolve({ code, state });
         return;
       }
-      res.writeHead(200, { "Content-Type": "text/html" });
-      res.end(
-        "<html><body><h2>fleetmind: manifest code received</h2>" +
-          "<p>You can close this tab and return to the terminal.</p></body></html>",
-      );
-      server.close();
-      resolve({ code, state });
+
+      res.writeHead(404);
+      res.end("Not Found");
     });
     server.on("error", reject);
     server.listen(port, "127.0.0.1");
   });
+}
+
+/**
+ * Render a tiny HTML page that auto-submits a hidden form to GitHub. This is
+ * the canonical entry point for the manifest flow per GitHub's docs. The
+ * manifest must be in the POST body — a GET with manifest as a query param is
+ * silently ignored by GitHub (shows the plain Create-App form instead).
+ */
+function renderAutoSubmitPage(githubPostUrl: string, manifestJson: string): string {
+  // HTML-escape the manifest JSON so embedded quotes/angle-brackets are safe
+  // inside the <input value="..."> attribute.
+  const escaped = manifestJson
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>fleetmind — redirecting to GitHub…</title></head>
+<body style="font-family: -apple-system, sans-serif; padding: 2em; max-width: 36em;">
+  <h2>fleetmind: redirecting to GitHub…</h2>
+  <p>Submitting the App manifest. If your browser doesn't redirect automatically,
+     click the button below.</p>
+  <form id="manifest-form" method="post" action="${githubPostUrl}">
+    <input type="hidden" name="manifest" value="${escaped}">
+    <button type="submit">Continue to GitHub</button>
+  </form>
+  <script>document.getElementById('manifest-form').submit();</script>
+</body></html>`;
 }
 
 async function exchangeManifestCode(code: string): Promise<ManifestConversionResponse> {
