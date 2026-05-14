@@ -1,0 +1,21 @@
+# Skill manifest for the worker-bot template.
+#
+# Read by `fleetmind doctor` and `fleetmind sync-template worker-bot`.
+# See openclaw/pm-bot/skills.yaml for the manifest format details.
+
+role: worker
+
+required:
+  # Delegation protocol — worker side
+  - name: bot-reception
+    source: fleetmind
+
+  # Universal bundled skills (not yet built — see openclaw/pm-bot/skills.yaml note)
+  - name: fleet-context
+    source: fleetmind
+  - name: task-ledger-query
+    source: fleetmind
+  - name: bot-self-update
+    source: fleetmind
+  - name: agent-status
+    source: fleetmind
