@@ -591,9 +591,13 @@ export async function runPullSelf(
 
   log.dim(`  incoming: ${incomingManifest.files.length} files (rendered ${incomingManifest.rendered_at})`);
 
-  // Step 3b: Auto-upgrade CLI if manifest specifies a different version
+  // Step 3b: Auto-upgrade CLI if manifest specifies a different version.
+  // Guarded by FLEETMIND_UPGRADED env var to prevent infinite re-exec loops
+  // that occur when the upgraded binary is installed to a user-local npm prefix
+  // but process.argv[1] still points to the system binary (old version).
   const manifestVersion = incomingManifest.fleetmind_version;
-  if (manifestVersion && manifestVersion !== 'unknown') {
+  const alreadyUpgraded = process.env['FLEETMIND_UPGRADED'] === '1';
+  if (!alreadyUpgraded && manifestVersion && manifestVersion !== 'unknown') {
     const installedVersion = (() => {
       try {
         const here = path.dirname(fileURLToPath(import.meta.url));
@@ -606,9 +610,11 @@ export async function runPullSelf(
       try {
         execSync(`fleetmind self-upgrade --version ${manifestVersion} --apply`, { stdio: 'inherit' });
         log.ok(`  fleetmind upgraded to ${manifestVersion} — re-exec to pick up new binary`);
-        // Re-exec this process with the upgraded binary so the new version handles the apply
+        // Set sentinel before re-exec to prevent infinite loop if the upgraded
+        // binary resolves to the same old path (e.g. user-local vs system npm prefix).
+        const env = { ...process.env, FLEETMIND_UPGRADED: '1' };
         const args = process.argv.slice(1);
-        execFileSync(process.execPath, args, { stdio: 'inherit' });
+        execFileSync(process.execPath, args, { stdio: 'inherit', env });
         return { changed: true, applied: true, diff: { added: [], modified: [], deleted: [] } };
       } catch (err) {
         log.warn(`  self-upgrade failed: ${String(err)} — continuing with installed version`);
