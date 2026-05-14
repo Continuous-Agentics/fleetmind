@@ -2,7 +2,7 @@
 
 > **Role:** frontend-worker
 > **Specialty:** frontend
-> **Fleet config:** `agents.list[].role = worker` with `delegation.specialty = frontend`
+> **Fleet config:** `agents.list[].role = frontend-worker`
 
 ## What You Do
 

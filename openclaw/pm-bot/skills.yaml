@@ -1,0 +1,28 @@
+# Skill manifest for the pm-bot template.
+#
+# Read by `fleetmind doctor` (validation — errors if any agent with
+# role: pm is missing a required skill) and `fleetmind sync-template
+# pm-bot` (scaffolds these entries into a fleet.yaml agent block).
+#
+# The manifest is *data*, not behavior — the renderer does not inject
+# skills from here. Operators see exactly what's declared in their
+# fleet.yaml at apply time.
+
+role: pm
+
+required:
+  # Delegation protocol — PM side
+  - name: bot-delegation
+    source: fleetmind
+
+  # Universal bundled skills (every bot type gets these once built).
+  # Commented out until the corresponding SKILL.md ships in
+  # openclaw/skills/. Uncomment each entry as the skill lands.
+  # - name: fleet-context
+  #   source: fleetmind
+  # - name: task-ledger-query
+  #   source: fleetmind
+  # - name: bot-self-update
+  #   source: fleetmind
+  # - name: agent-status
+  #   source: fleetmind
