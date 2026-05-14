@@ -161,7 +161,7 @@ Examples:
         // ── Pre-flight diagnostics ─────────────────────────────────────────
         let preflightResult: PreflightResult = { dashboardUrl: null, authMode: null, authSecret: null };
         if (!opts.skipPreflight) {
-          preflightResult = await runPreflight(instanceId, agentId, region);
+          preflightResult = await runPreflight(instanceId, agentId, region, fleet.agents.defaults.workspace_base);
           if (!opts.yes) {
             // Tiny inline confirm (avoid pulling in prompts dep). Skip
             // confirmation if not a TTY (CI / scripted).
@@ -271,6 +271,7 @@ async function runPreflight(
   instanceId: string,
   agentId: string,
   region: string,
+  workspaceBase: string,
 ): Promise<PreflightResult> {
   log.bold(`Pre-flight diagnostics...`);
   const ssm = new SSMClient({ region });
@@ -284,12 +285,13 @@ async function runPreflight(
   // privilege escalation — it's the same access they had before, just
   // proxied through the wrapper for ergonomics.
   //
-  // Path: per the fleetmind agent_bootstrap.sh, the workspace lives at
-  //   /opt/openclaw/workspace/<agent_id>/
-  // and the gateway config is at <workspace>/.openclaw/openclaw.json,
-  // owned by ec2-user. SSM Run Command runs as root by default, so no
-  // sudo is needed to read the file.
-  const configFile = `/opt/openclaw/workspace/${agentId}/.openclaw/openclaw.json`;
+  // Path derived from fleet.yaml's agents.defaults.workspace_base (typically
+  // /opt/openclaw/workspace per the fleetmind agent_bootstrap.sh.tpl), with
+  // the per-agent dir appended:
+  //   <workspaceBase>/<agent_id>/.openclaw/openclaw.json
+  // SSM Run Command runs as root by default, so no sudo needed to read
+  // ec2-user-owned files.
+  const configFile = `${workspaceBase}/${agentId}/.openclaw/openclaw.json`;
   const commands = [
     `set +e`,
     `echo "::SERVICE::"`,
