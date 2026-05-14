@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   loadPermissionsManifestForRole,
   resolveGitHubAppConfig,
+  findUnknownPermissionKeys,
 } from "../runtime/github-app-permissions.js";
 
 let tmpRoot: string;
@@ -53,6 +54,28 @@ describe("loadPermissionsManifestForRole", () => {
   it("throws on invalid permission level via Zod", () => {
     writeManifest("pm-bot", `role: pm\npermissions:\n  issues: bogus\n`);
     assert.throws(() => loadPermissionsManifestForRole("pm", tmpRoot), /failed validation/);
+  });
+});
+
+describe("findUnknownPermissionKeys", () => {
+  it("returns keys not in the known-scopes list", () => {
+    const unknown = findUnknownPermissionKeys({
+      contents: "write",       // known
+      foobar: "write",         // unknown
+      issues: "write",         // known
+      contens: "write",        // typo (unknown)
+    });
+    assert.deepEqual(unknown.sort(), ["contens", "foobar"]);
+  });
+
+  it("returns empty array when all keys are known", () => {
+    const unknown = findUnknownPermissionKeys({
+      contents: "write",
+      pull_requests: "write",
+      issues: "write",
+      metadata: "read",
+    });
+    assert.deepEqual(unknown, []);
   });
 });
 
@@ -112,6 +135,24 @@ describe("resolveGitHubAppConfig", () => {
   it("falls back to empty permissions when no manifest + no override", () => {
     const resolved = resolveGitHubAppConfig("worker", undefined, tmpRoot);
     assert.deepEqual(resolved.permissions, {});
+  });
+
+  it("populates unknownKeys when permission key isn't in the known-scopes list", () => {
+    const resolved = resolveGitHubAppConfig(
+      "pm",
+      { permissions: { foobar: "write", contens: "read" }, events: [] },
+      tmpRoot,
+    );
+    assert.deepEqual(resolved.source.unknownKeys.sort(), ["contens", "foobar"]);
+  });
+
+  it("unknownKeys is empty when all keys are documented GitHub scopes", () => {
+    const resolved = resolveGitHubAppConfig(
+      "pm",
+      { permissions: { contents: "write", deployments: "read" }, events: [] },
+      tmpRoot,
+    );
+    assert.deepEqual(resolved.source.unknownKeys, []);
   });
 
   it("events override entirely (not merged)", () => {

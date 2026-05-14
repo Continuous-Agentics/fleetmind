@@ -81,6 +81,52 @@ export function loadPermissionsManifestForRole(
 }
 
 // ---------------------------------------------------------------------------
+// Known GitHub App permission scopes (best-effort, warn-not-fail validation)
+// ---------------------------------------------------------------------------
+
+/**
+ * Best-effort list of documented GitHub App permission scope names.
+ * Used by resolveGitHubAppConfig to warn (NOT fail) when a permission key
+ * doesn't look like a real scope — catches typos like `contens: write` before
+ * the manifest reaches GitHub.
+ *
+ * GitHub adds scopes occasionally; an unknown key here doesn't mean it's
+ * invalid — just that we don't recognize it. The warning helps operators
+ * catch typos in their fleet.yaml without locking out new scopes.
+ *
+ * Source: https://docs.github.com/en/apps/creating-github-apps/setting-permissions-for-github-apps
+ */
+const KNOWN_GITHUB_PERMISSION_KEYS = new Set([
+  // Repository scopes
+  "actions", "administration", "attestations", "checks", "codespaces",
+  "codespaces_lifecycle_admin", "codespaces_metadata", "codespaces_secrets",
+  "contents", "dependabot_secrets", "deployments", "discussions", "environments",
+  "issues", "members", "merge_queues", "metadata", "packages", "pages",
+  "pull_requests", "repository_advisories", "repository_custom_properties",
+  "repository_hooks", "repository_projects", "secret_scanning_alerts",
+  "secrets", "security_events", "single_file", "statuses", "variables",
+  "vulnerability_alerts", "workflows",
+  // Organization scopes
+  "organization_administration", "organization_announcement_banners",
+  "organization_codespaces", "organization_codespaces_secrets",
+  "organization_codespaces_settings", "organization_copilot_seat_management",
+  "organization_custom_org_roles", "organization_custom_properties",
+  "organization_custom_roles", "organization_events", "organization_hooks",
+  "organization_packages", "organization_personal_access_token_requests",
+  "organization_personal_access_tokens", "organization_plan",
+  "organization_projects", "organization_secrets",
+  "organization_self_hosted_runners", "organization_user_blocking",
+  // Account scopes (less common in this context)
+  "blocking", "email_addresses", "followers", "gpg_keys", "interaction_limits",
+  "keys", "profile", "starring", "watching",
+]);
+
+/** Returns the subset of the input keys that aren't in the known-scopes set. */
+export function findUnknownPermissionKeys(permissions: Record<string, unknown>): string[] {
+  return Object.keys(permissions).filter((k) => !KNOWN_GITHUB_PERMISSION_KEYS.has(k));
+}
+
+// ---------------------------------------------------------------------------
 // Resolution
 // ---------------------------------------------------------------------------
 
@@ -96,6 +142,9 @@ export interface ResolvedGitHubAppConfig {
     permissionsFromOverride: number;
     permissionsDropped: number;
     eventsFrom: "agent" | "manifest" | "none";
+    /** Permission keys not in the bundled known-scopes list. May be typos or
+     *  newer GitHub scopes the bundled list hasn't been updated to know about. */
+    unknownKeys: string[];
   };
 }
 
@@ -155,6 +204,18 @@ export function resolveGitHubAppConfig(
     else if (key in baseline) permissionsFromManifest += 1;
   }
 
+  // Warn on unknown permission keys — catches typos like `contens: write`
+  // before the manifest reaches GitHub. Don't fail — GitHub adds scopes
+  // occasionally and we don't want to block valid-but-new keys.
+  const unknown = findUnknownPermissionKeys(merged);
+  if (unknown.length > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[github-app-permissions] Unknown permission key${unknown.length === 1 ? "" : "s"} ` +
+        `(not in the bundled known-scopes list — may be a typo or a newer GitHub scope): ${unknown.join(", ")}`,
+    );
+  }
+
   return {
     permissions: final,
     events,
@@ -163,6 +224,7 @@ export function resolveGitHubAppConfig(
       permissionsFromOverride,
       permissionsDropped: dropped,
       eventsFrom,
+      unknownKeys: unknown,
     },
   };
 }
