@@ -16,6 +16,10 @@ import { z } from "zod";
  */
 export const SkillSourceSchema = z.enum(["clawhub", "private", "client", "fleetmind"]).default("client");
 
+/** Agent role enum — also indexes the openclaw/<role>-bot/ directory. */
+export const AgentRoleSchema = z.enum(["pm", "backend-worker", "frontend-worker", "worker"]);
+export type AgentRole = z.infer<typeof AgentRoleSchema>;
+
 export const SkillRefSchema = z.union([
   // shorthand string → defaults to client source
   z.string().transform((s) => ({
@@ -165,7 +169,7 @@ export const AgentSchema = z.object({
   emoji: z.string().default("🤖"),
   description: z.string().default(""),
   orchestrator: z.boolean().default(false),
-  role: z.enum(["pm", "backend-worker", "frontend-worker", "worker"]).default("worker"),
+  role: AgentRoleSchema.default("worker"),
   model: z.string().optional(),
   persona: PersonaSchema.default({}),
   slack: SlackAccountSchema,

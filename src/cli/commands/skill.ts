@@ -55,41 +55,78 @@ function buildSkillNode(skill: SkillRef): string | YAMLMap {
 export function addSkillToFleetYaml(
   fleetPath: string,
   targetIds: string[],
-  skill: SkillRef
+  skill: SkillRef,
 ): { added: string[]; skipped: string[] } {
+  const result = addSkillsToFleetYaml(
+    fleetPath,
+    targetIds.map((agentId) => ({ agentId, skill })),
+  );
+  return {
+    added: result.added.map((a) => a.agentId),
+    skipped: result.skipped.map((s) => s.agentId),
+  };
+}
+
+/**
+ * Batched: add multiple (agent, skill) pairs in one read+write of fleet.yaml.
+ *
+ * Each pair is applied left-to-right against the same Document instance, then
+ * the doc is written back once. Drastically reduces I/O when injecting many
+ * required skills across many agents (e.g. `fleetmind render` against a fresh
+ * fleet.yaml).
+ *
+ * Returns the flat list of (agentId, skillName) actually added, and the list
+ * of those skipped because the agent already had the skill.
+ */
+export interface SkillAdditionResult {
+  added: Array<{ agentId: string; skillName: string }>;
+  skipped: Array<{ agentId: string; skillName: string }>;
+}
+
+export function addSkillsToFleetYaml(
+  fleetPath: string,
+  additions: ReadonlyArray<{ agentId: string; skill: SkillRef }>,
+): SkillAdditionResult {
   const raw = fs.readFileSync(fleetPath, "utf-8");
   const doc = parseDocument(raw);
 
   const agentsList = doc.getIn(["agents", "list"]);
   if (!isSeq(agentsList)) throw new Error("fleet.yaml: agents.list is not a sequence");
 
-  const added: string[] = [];
-  const skipped: string[] = [];
-
+  // Build a map of agentId -> index for O(1) lookup.
+  const idToIndex = new Map<string, number>();
   agentsList.items.forEach((item, i) => {
     if (!isMap(item)) return;
     const agentId = item.get("id") as string;
-    if (!targetIds.includes(agentId)) return;
+    if (agentId) idToIndex.set(agentId, i);
+  });
 
-    // Get or create the skills sequence
+  const added: SkillAdditionResult["added"] = [];
+  const skipped: SkillAdditionResult["skipped"] = [];
+
+  for (const { agentId, skill } of additions) {
+    const i = idToIndex.get(agentId);
+    if (i === undefined) continue; // unknown agent; silently ignore
+
+    const item = agentsList.items[i];
+    if (!isMap(item)) continue;
+
     let skillsSeq = item.get("skills") as YAMLSeq | undefined;
     if (!skillsSeq || !isSeq(skillsSeq)) {
       skillsSeq = new YAMLSeq();
       doc.setIn(["agents", "list", i, "skills"], skillsSeq);
-      // Re-read after set
       skillsSeq = doc.getIn(["agents", "list", i, "skills"]) as YAMLSeq;
     }
 
-    // Check if already present
-    const alreadyHas = skillsSeq.items.some(e => skillMatches(e, skill.name));
+    const alreadyHas = skillsSeq.items.some((e) => skillMatches(e, skill.name));
     if (alreadyHas) {
-      skipped.push(agentId);
-      return;
+      skipped.push({ agentId, skillName: skill.name });
+      continue;
     }
 
     skillsSeq.add(buildSkillNode(skill));
-    added.push(agentId);
-  });
+    added.push({ agentId, skillName: skill.name });
+  }
 
   fs.writeFileSync(fleetPath, doc.toString(), "utf-8");
   return { added, skipped };
