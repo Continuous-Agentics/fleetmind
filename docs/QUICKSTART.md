@@ -4,6 +4,8 @@ This is the narrative happy-path for bringing up a working 2-bot fleet. First-ti
 
 If anything is unfamiliar, see [CONCEPTS.md](./CONCEPTS.md) for the vocabulary. For the comprehensive reference with every option, see [SETUP-A-FLEET.md](./SETUP-A-FLEET.md). When something breaks, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
 
+> **Faster path:** `fleetmind onboard` is an interactive wizard that drives every step below automatically — see [fleetmind-template § Guided onboarding](https://github.com/Continuous-Agentics/fleetmind-template#guided-onboarding-recommended). The manual flow below exists so you can see what's happening under the hood when something goes wrong.
+
 ---
 
 ## Prerequisites
@@ -12,21 +14,20 @@ This fast-path assumes you have:
 
 - **fleetmind CLI** installed locally (`npm install -g @continuous-agentics/fleetmind` — see [README.md](../README.md) for the `~/.npmrc` PAT setup if `npm install` 404s)
 - **AWS CLI v2** configured for your target account, with admin or equivalent permissions
-- **Terraform ≥ 1.5** (`tfenv` works fine — `.terraform-version` is committed)
+- **Terraform ≥ 1.5** (`tfenv` works fine — `.terraform-version` is committed in the template)
 - **Slack workspace** admin access (you'll create apps and channels)
 - **One-time AWS account setup done**: TF state S3 bucket, DynamoDB lock table, GitHub Packages PAT stored in SSM at `/fleetmind/shared/github-packages-token`. If not, jump to [§First-time setup](#first-time-setup-cold-start) at the bottom, then come back.
+- **Your fleet repo created from [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template)** (click **Use this template** in the GitHub UI, then `git clone` your new repo). The template ships `main.tf` (which calls [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind)), `variables.tf`, `outputs.tf`, `backend.example.hcl`, and a starter `fleet.yaml` + `workspaces/default.tfvars`. *All commands below run from the root of that repo.*
 
 Target region for this walkthrough: `us-west-2`.
 
 ---
 
-## 1. Scaffold the fleet (~30s)
+## 1. Edit fleet.yaml (~2 min)
 
-```bash
-fleetmind init --name acme --client "Acme Corp" --output fleet-acme.yaml
-```
+The template already ships a starter `fleet.yaml`. Replace its `agents.list[]` (and the `fleet` block at the top) with this minimal 2-bot definition:
 
-This writes `fleet-acme.yaml` in your current directory (default is `fleet.yaml` — the `--output` flag overrides it). Replace its `agents.list[]` with this minimal 2-bot definition:
+> **Starting outside the template?** `fleetmind init --name acme --client "Acme Corp" --output fleet-acme.yaml` scaffolds a standalone `fleet.yaml` you can drop into any repo — but the canonical path is to edit the template's existing `fleet.yaml` directly.
 
 ```yaml
 fleet:
@@ -104,7 +105,7 @@ agents:
 
 outputs:
   openclaw_json: ./rendered/openclaw-acme.json
-  terraform_vars: ./infra/terraform/workspaces/acme.derived.tfvars
+  terraform_vars: ./workspaces/acme.derived.tfvars
 
 openclaw:
   gateway:
@@ -174,11 +175,11 @@ slack:
 fleetmind render fleet-acme.yaml
 ```
 
-Writes `./rendered/openclaw-acme.json` and `./infra/terraform/workspaces/acme.derived.tfvars`.
+Writes `./rendered/openclaw-acme.json` and `./workspaces/acme.derived.tfvars` (both relative to the fleet-template repo root).
 
-## 5. Write the infra-only tfvars (~30s)
+## 5. Edit the infra-only tfvars (~30s)
 
-Create `infra/terraform/workspaces/acme.tfvars`:
+The template ships `workspaces/default.tfvars`. Copy it to `workspaces/acme.tfvars` and edit:
 
 ```hcl
 aws_region    = "us-west-2"
@@ -201,13 +202,17 @@ agent_instance_types = {}
 
 ## 6. Apply Terraform (~3 min)
 
+From the root of your fleet-template repo:
+
 ```bash
-cd infra/terraform
+terraform init -backend-config=backend.hcl
 terraform workspace new acme || terraform workspace select acme
 terraform apply \
   -var-file=workspaces/acme.tfvars \
   -var-file=workspaces/acme.derived.tfvars
 ```
+
+The template's `main.tf` calls [`module "fleetmind" { source = "github.com/Continuous-Agentics/terraform-aws-fleetmind?ref=v0.1.6" ... }`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) — bump `?ref=` in `main.tf` to upgrade the module.
 
 Expect ~60–80 resources to add (VPC, NAT, EC2, IAM, SSM params, S3, DynamoDB, EventBridge). Confirm with `yes`. Wait for completion, then for EC2 bootstrap to finish (~3–5 min more — the instances run a multi-stage bootstrap script on first launch).
 
@@ -331,10 +336,11 @@ aws dynamodb create-table \
   --region us-west-2
 ```
 
-### d. Terraform backend config (per operator clone)
+### d. Terraform backend config (per operator clone of fleetmind-template)
+
+From the root of your fleet-template repo:
 
 ```bash
-cd infra/terraform
 cp backend.example.hcl backend.hcl
 $EDITOR backend.hcl   # fill in: bucket, region, dynamodb_table
 terraform init -backend-config=backend.hcl
@@ -342,6 +348,6 @@ terraform init -backend-config=backend.hcl
 
 `backend.hcl` is gitignored.
 
-Once these are done, return to [§1](#1-scaffold-the-fleet-30s) above. Subsequent fleets in the same account reuse all of this.
+Once these are done, return to [§1](#1-edit-fleetyaml-2-min) above. Subsequent fleets in the same account reuse all of this.
 
 For the comprehensive bring-up reference (every variable, every gotcha, the full IAM model), see [SETUP-A-FLEET.md](./SETUP-A-FLEET.md).

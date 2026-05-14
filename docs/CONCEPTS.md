@@ -137,7 +137,7 @@ Worker UpdateItem (shipped|blocked|abandoned|merged)
   → openclaw agent --message "DDB_TERMINAL_WAKE: TASK#<id>"
 ```
 
-Provisioned by the [`task-ledger`](https://github.com/Continuous-Agentics/fleetmind/tree/main/infra/terraform/modules/task-ledger) Terraform module. The DLQ topology (`{prefix}ledger-pipe-dlq`, `{prefix}ledger-wake-dlq`) catches failures for forensics.
+Provisioned by the [`task-ledger`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/tree/v0.1.6/modules/task-ledger) submodule of [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind), activated automatically when `delegation_enabled = true`. The DLQ topology (`{prefix}ledger-pipe-dlq`, `{prefix}ledger-wake-dlq`) catches failures for forensics.
 
 ## Sweep
 
@@ -159,7 +159,7 @@ Both lifecycles can still transition to `merged` (e.g. when an associated PR mer
 `fleetmind render <fleet.yaml>` reads the fleet definition and writes:
 
 - `./rendered/openclaw-<fleet>.json` — per-agent `openclaw.json` slices
-- `infra/terraform/workspaces/<fleet>.derived.tfvars` — derived Terraform variables (`fleet_name`, `agent_names`, `agent_orchestrators`, `wake_target_session_key`)
+- `workspaces/<fleet>.derived.tfvars` — derived Terraform variables (`fleet_name`, `agent_names`, `agent_orchestrators`, `wake_target_session_key`), written inside your fleet-template repo for consumption by the [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) module
 
 Nothing is pushed to EC2. Render is idempotent and safe to re-run. It's what `push fleet` does first under the hood.
 

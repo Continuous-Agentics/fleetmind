@@ -1,6 +1,6 @@
 # Multi-Fleet Deployments
 
-fleetmind supports running multiple independent fleets in a single AWS account via Terraform workspaces. Each workspace has its own state file, VPC, EC2 instances, IAM roles, S3 ledger bucket, DDB tasks table, and Secrets Manager namespace. Resource names are auto-prefixed by `var.fleet_name`, so a fleet named `gg-sandbox` and a fleet named `test-fleet-2` co-exist cleanly.
+fleetmind supports running multiple independent fleets in a single AWS account via Terraform workspaces. The Terraform itself lives in the separate [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) module repo; operators consume it via the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) starter. Each fleet is typically its own clone of fleetmind-template *or* a shared template repo with multiple `workspaces/<fleet>.tfvars` files — either pattern works. Each workspace has its own state file, VPC, EC2 instances, IAM roles, S3 ledger bucket, DDB tasks table, and Secrets Manager namespace. Resource names are auto-prefixed by `var.fleet_name`, so a fleet named `gg-sandbox` and a fleet named `test-fleet-2` co-exist cleanly.
 
 ## One-time per AWS account: backend setup
 
@@ -34,7 +34,7 @@ aws dynamodb create-table \
 
 ### 3. Write your local `backend.hcl`
 
-In `infra/terraform/`, copy the example:
+From the root of your fleet repo (created from [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template)):
 
 ```bash
 cp backend.example.hcl backend.hcl
@@ -46,7 +46,6 @@ $EDITOR backend.hcl   # fill in bucket, region, etc.
 ### 4. Initialize Terraform with the backend config
 
 ```bash
-cd infra/terraform
 terraform init -backend-config=backend.hcl
 ```
 
@@ -65,11 +64,11 @@ State files land at `s3://<bucket>/env:/<workspace>/fleetmind/terraform.tfstate`
 
 ### 2. Per-fleet tfvars
 
-Each workspace needs its own `infra/terraform/workspaces/<fleet>.tfvars` file.
-Copy the example and adjust:
+Each workspace needs its own `workspaces/<fleet>.tfvars` file (at the repo root).
+Copy the template's starter and adjust:
 
 ```bash
-cp infra/terraform/workspaces/default.tfvars infra/terraform/workspaces/test-fleet-2.tfvars
+cp workspaces/default.tfvars workspaces/test-fleet-2.tfvars
 # Edit:
 #   - aws_region (if different)
 #   - agent_ports
@@ -133,7 +132,6 @@ All fleetmind CLI commands (push, pull-self, secrets, discover, etc.) accept `--
 If you've been deploying with local state (`terraform.tfstate` on disk) and want to migrate:
 
 ```bash
-cd infra/terraform
 terraform init -backend-config=backend.hcl -migrate-state
 # Terraform asks: "Do you want to copy existing state to the new backend?" — yes.
 ```

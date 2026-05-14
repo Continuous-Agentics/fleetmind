@@ -13,13 +13,14 @@ delegate tasks to worker bots and track them through the full lifecycle.
 
 ## Step 1: Apply the Terraform module
 
-The `infra/terraform/modules/task-ledger/` module creates the DynamoDB table,
-S3 bucket, IAM policies, and EventBridge wake pipeline.
+The task-ledger Terraform submodule (lives in [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/tree/v0.1.6/modules/task-ledger)) creates the DynamoDB table, S3 bucket, IAM policies, and EventBridge wake pipeline. The simplest way to consume it is via the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) starter repo, which calls the *root* `terraform-aws-fleetmind` module — the root module turns the task-ledger submodule on whenever you set `delegation_enabled = true` in your tfvars.
 
-Create a consuming Terraform root (or add to your existing fleet infra):
+The rest of this section shows how to call the task-ledger submodule **directly** from your own Terraform root, e.g. if you're integrating with a fleet that doesn't use fleetmind-template, or you want delegation infra without the rest of the fleetmind EC2/VPC/SG stack.
+
+Create a consuming Terraform root:
 
 ```hcl
-# infra/terraform/my-fleet/main.tf
+# my-fleet-infra/main.tf
 
 terraform {
   required_version = ">= 1.5.0"
@@ -44,7 +45,7 @@ provider "aws" {
 }
 
 module "task_ledger" {
-  source = "../../../infra/terraform/modules/task-ledger"
+  source = "github.com/Continuous-Agentics/terraform-aws-fleetmind//modules/task-ledger?ref=v0.1.6"
 
   name_prefix    = "my-fleet-"
   aws_region     = "us-east-1"
@@ -76,7 +77,7 @@ output "worker_policy"{ value = module.task_ledger.worker_policy_arn }
 Apply it:
 
 ```bash
-cd infra/terraform/my-fleet
+cd my-fleet-infra
 terraform init
 terraform plan
 terraform apply

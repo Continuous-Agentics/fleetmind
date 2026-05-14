@@ -41,7 +41,7 @@ Fleet-wide shared key/value state is available via the **ContextStore** — a Dy
 
 Isolation over efficiency. A misbehaving worker can't crash the orchestrator; a runaway skill on one bot doesn't starve another; each agent can be redeployed, restarted, or rolled back independently. The cost is more EC2 instances per fleet — deemed acceptable for the durability and blast-radius properties.
 
-Bot EC2 hosts are provisioned by the Terraform code in [`infra/terraform/`](infra/terraform/), driven by `fleet.yaml` via `fleetmind render`. Operators run `terraform apply -var-file=workspaces/<fleet>.tfvars -var-file=workspaces/<fleet>.derived.tfvars` per fleet. See [`docs/MULTI-FLEET.md`](docs/MULTI-FLEET.md) and [`docs/SETUP-A-FLEET.md`](docs/SETUP-A-FLEET.md) for the full workflow.
+Bot EC2 hosts are provisioned by the [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) module (currently `v0.1.6`). Operators don't write Terraform from scratch — they start from the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) GitHub template repo, which contains a `main.tf` that calls the module, plus `variables.tf`, `outputs.tf`, `backend.example.hcl`, and a `workspaces/default.tfvars` starter. `fleetmind render` writes the derived tfvars (`workspaces/<fleet>.derived.tfvars`) inside that repo, and `terraform apply -var-file=workspaces/<fleet>.tfvars -var-file=workspaces/<fleet>.derived.tfvars` provisions the fleet. See [`docs/QUICKSTART.md`](docs/QUICKSTART.md), [`docs/SETUP-A-FLEET.md`](docs/SETUP-A-FLEET.md), and [`docs/MULTI-FLEET.md`](docs/MULTI-FLEET.md) for the full workflow.
 
 ## Installation
 
@@ -74,9 +74,10 @@ fleetmind slack manifests --out ./rendered/slack-manifests/
 fleetmind render acme-fleet.yaml
 
 # 6. Apply Terraform (provisions EC2 hosts, IAM, DDB, S3, networking)
-#    See infra/terraform/ and docs/SETUP-A-FLEET.md for the full first-time sequence,
-#    including one-time backend setup and Terraform workspace creation.
-cd infra/terraform && terraform workspace select acme-fleet
+#    Run from the root of your fleet repo (created from fleetmind-template).
+#    See docs/QUICKSTART.md and docs/SETUP-A-FLEET.md for the full first-time
+#    sequence, including one-time backend setup and Terraform workspace creation.
+terraform workspace select acme-fleet
 terraform apply \
   -var-file=workspaces/acme-fleet.tfvars \
   -var-file=workspaces/acme-fleet.derived.tfvars
@@ -268,7 +269,7 @@ to list the worker IDs they can delegate to. Worker agents add
 `delegation.specialty: <label>` for routing. Wake-pipeline targeting (SSM
 session key, EC2 tag) is configured at the Terraform layer.
 
-Provision the substrate via the [`infra/terraform/modules/task-ledger/`](infra/terraform/modules/task-ledger) Terraform module. Add the `bot-delegation` skill to the PM bot and the `bot-reception` skill to each worker (both ship in `openclaw/skills/`). Full walkthrough: [`docs/integration/delegation.md`](docs/integration/delegation.md). Protocol details: [`docs/protocol.md`](docs/protocol.md).
+The substrate is provisioned by the [`task-ledger`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/tree/v0.1.6/modules/task-ledger) submodule inside [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) — it activates automatically when `delegation_enabled = true` in your fleet's tfvars. Add the `bot-delegation` skill to the PM bot and the `bot-reception` skill to each worker (both ship in `openclaw/skills/`). Full walkthrough: [`docs/integration/delegation.md`](docs/integration/delegation.md). Protocol details: [`docs/protocol.md`](docs/protocol.md).
 
 ## Skills Repo (GitOps)
 
@@ -298,10 +299,11 @@ Unpinned skills (`- name: coding`) auto-update. Pinned skills (`version: "2.1.0"
 
 ## Terraform Integration
 
-The Terraform code lives in [`infra/terraform/`](infra/terraform/). `fleetmind render` writes derived tfvars to `infra/terraform/workspaces/<fleet>.derived.tfvars` — specifically `fleet_name`, `agent_names`, `agent_models`, `agent_orchestrators`, and `wake_target_session_key` (the latter derived from the PM's first Slack channel). Operators pass this file alongside their hand-edited `workspaces/<fleet>.tfvars` (infrastructure-only knobs like `aws_region`, `instance_type`, `agent_ports`) via `-var-file`:
+The Terraform module lives in a separate repo, [`Continuous-Agentics/terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) (currently `v0.1.6`). Operators consume it via the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) GitHub template repo, whose `main.tf` already contains the `module "fleetmind" { source = "github.com/Continuous-Agentics/terraform-aws-fleetmind?ref=v0.1.6" ... }` call. You don't fork the module — you bump `?ref=` in `main.tf` to upgrade.
+
+`fleetmind render` writes derived tfvars to `workspaces/<fleet>.derived.tfvars` at your template repo's root — specifically `fleet_name`, `agent_names`, `agent_models`, `agent_orchestrators`, and `wake_target_session_key` (the latter derived from the PM's first Slack channel). Operators pass this file alongside their hand-edited `workspaces/<fleet>.tfvars` (infrastructure-only knobs like `aws_region`, `instance_type`, `agent_ports`) via `-var-file`:
 
 ```bash
-cd infra/terraform
 terraform workspace select <fleet-name>
 terraform apply \
   -var-file=workspaces/<fleet>.tfvars \
@@ -310,7 +312,7 @@ terraform apply \
 
 *Note*: the `.derived.tfvars` suffix is intentional — these files are *not* auto-loaded by Terraform. They must be passed explicitly. This prevents cross-workspace contamination when multiple fleets share an account.
 
-The per-agent EC2 hosts, IAM roles, VPC, NAT, S3 ledger bucket, DynamoDB ContextStore, and (when `delegation_enabled = true`) the task-ledger substrate are all created by `terraform apply`. The task-ledger substrate lives in [`infra/terraform/modules/task-ledger/`](infra/terraform/modules/task-ledger/); the ContextStore DynamoDB table is provisioned by [`infra/terraform/dynamodb.tf`](infra/terraform/dynamodb.tf) directly (no separate module).
+The per-agent EC2 hosts, IAM roles, VPC, NAT, S3 ledger bucket, DynamoDB ContextStore, and (when `delegation_enabled = true`) the task-ledger substrate are all created by the module. The task-ledger substrate lives in the [`modules/task-ledger`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/tree/v0.1.6/modules/task-ledger) submodule; the ContextStore DynamoDB table is provisioned by [`dynamodb.tf`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/blob/v0.1.6/dynamodb.tf) directly (no separate module).
 
 Multiple fleets in one AWS account: use Terraform workspaces, one per fleet. See [`docs/MULTI-FLEET.md`](docs/MULTI-FLEET.md).
 
@@ -320,8 +322,7 @@ GitHub Actions runs on every push to `main` and every pull request:
 
 | Job | What it does |
 |-----|--------------|
-| `build-and-test` | `npm ci` → `npm run build` (tsc) → `npm test` (320+ tests) → `npm pack --dry-run` (verifies published tarball contains only `dist/`, `README.md`, `LICENSE`) |
-| `terraform-validate` | `terraform init -backend=false` + `terraform validate` on root module and `modules/task-ledger/`; `terraform fmt -check -recursive` to catch formatting drift |
+| `build-and-test` | `npm ci` → `npm run build` (tsc) → `npm test` (320+ tests) → `npm pack --dry-run` (verifies published tarball contains `dist/`, `README.md`, `LICENSE`, and the public `docs/*.md` set; rejects `src/`, `test/`, internal `docs/{audits,design,test}/`, and unexpected `docs/integration/` files) |
 | `shellcheck` | Runs ShellCheck on all `infra/scripts/*.sh` standalone scripts |
 
 A `publish.yml` workflow skeleton is also present for release-on-tag — it is **manual-only** (`workflow_dispatch`) until the flow is validated. See [RELEASING.md](RELEASING.md) for publish instructions.

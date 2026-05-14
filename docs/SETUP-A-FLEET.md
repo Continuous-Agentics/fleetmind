@@ -43,6 +43,20 @@ This guide walks through bringing up a new fleet from scratch: defining agents, 
 - A repo that each bot will operate against (for code, PRs, issues)
 - A GitHub PAT with `read:packages` for installing fleetmind on EC2 instances (required for bootstrapping)
 
+### Your fleet repo (created from the template)
+
+Operators don't write Terraform from scratch. Create your fleet repo from the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) GitHub template (click **Use this template** in the GitHub UI, then `git clone` your new repo). The template ships:
+
+- `main.tf` — calls [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) via `module "fleetmind" { source = "github.com/Continuous-Agentics/terraform-aws-fleetmind?ref=v0.1.6" ... }`. Bump `?ref=` to upgrade the module.
+- `variables.tf`, `outputs.tf` — input/output surface, rarely edited.
+- `backend.example.hcl` — copy to `backend.hcl` (gitignored).
+- A starter `fleet.yaml` and `workspaces/default.tfvars`.
+- `skills/` — fleet-local skills.
+
+All commands in the rest of this guide run from the root of that repo.
+
+> **Faster path:** `fleetmind onboard` is an interactive wizard that drives every step below automatically — see [fleetmind-template § Guided onboarding](https://github.com/Continuous-Agentics/fleetmind-template#guided-onboarding-recommended). This guide is the manual reference.
+
 ---
 
 ## 2. Define Your Fleet (`fleet-<name>.yaml`)
@@ -65,7 +79,7 @@ The following is a real fleet definition — one orchestrator PM and one worker 
 #   fleetmind slack manifests --fleet fleet-acme-bots.yaml --out ./rendered/slack-manifests-acme-bots/
 #   # Create Slack apps from manifests. Fill in slack.channels[] per agent below.
 #   fleetmind render fleet-acme-bots.yaml
-#   cd infra/terraform && terraform workspace select acme-bots
+#   terraform workspace select acme-bots
 #   terraform apply -var-file=workspaces/acme-bots.tfvars -var-file=workspaces/acme-bots.derived.tfvars
 #   fleetmind secrets populate --fleet fleet-acme-bots.yaml --interactive --region us-west-2
 #   fleetmind slack discover --fleet fleet-acme-bots.yaml --region us-west-2
@@ -83,7 +97,7 @@ fleet:
 delegation:
   enabled: true
   aws_region: us-west-2
-  table_name: acme-bots-tasks        # created by TF module "task_ledger"
+  table_name: acme-bots-tasks        # created by the task-ledger submodule of terraform-aws-fleetmind
   s3_bucket: acme-bots-ledger        # S3 bucket for task artifacts (TF default: ${fleet_name}-ledger)
 
 agents:
@@ -178,7 +192,7 @@ agents:
 # These must be passed to terraform apply via -var-file.
 outputs:
   openclaw_json: ./rendered/openclaw-acme-bots.json
-  terraform_vars: ./infra/terraform/workspaces/acme-bots.derived.tfvars
+  terraform_vars: ./workspaces/acme-bots.derived.tfvars
 
 # Gateway and Slack behavior shared across the fleet.
 openclaw:
@@ -209,7 +223,7 @@ openclaw:
 Key points:
 - Exactly one agent has `orchestrator: true` (the PM). The renderer derives `wake_target_session_key` from the PM's first `slack.channels[]` entry — Slack must be created **before** the first render.
 - `delegation.table_name` and `delegation.s3_bucket` must match what Terraform will create (defaults are `${fleet_name}-tasks` and `${fleet_name}-ledger`).
-- `outputs.terraform_vars` is the auto.tfvars path — it must be in `infra/terraform/workspaces/`.
+- `outputs.terraform_vars` is the derived-tfvars path — it must be at `workspaces/<fleet>.derived.tfvars` inside your fleet-template repo, so `terraform apply -var-file=...` can find it.
 
 ---
 
@@ -260,8 +274,9 @@ aws ssm put-parameter \
 
 ### 3d. Configure the local Terraform backend
 
+From the root of your fleet repo (created from [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template)):
+
 ```bash
-cd infra/terraform
 cp backend.example.hcl backend.hcl
 $EDITOR backend.hcl   # fill in: bucket, region, dynamodb_table
 ```
@@ -288,10 +303,9 @@ terraform init -backend-config=backend.hcl
 
 ### 4a. Create a Terraform workspace
 
-Each fleet gets its own isolated Terraform workspace (and therefore its own state file):
+Each fleet gets its own isolated Terraform workspace (and therefore its own state file). From the root of your fleet-template repo:
 
 ```bash
-cd infra/terraform
 terraform workspace new acme-bots
 terraform workspace select acme-bots
 ```
@@ -300,7 +314,7 @@ State lands at `s3://<bucket>/env:/acme-bots/fleetmind/terraform.tfstate` automa
 
 ### 4b. Write the infra-only tfvars
 
-Create `infra/terraform/workspaces/acme-bots.tfvars` with infrastructure-only settings. **Do not set** `fleet_name`, `agent_names`, `agent_orchestrators`, or `wake_target_session_key` here — `fleetmind render` derives those and writes them to `acme-bots.derived.tfvars`.
+Create `workspaces/acme-bots.tfvars` (in your fleet-template repo root) with infrastructure-only settings. The template ships `workspaces/default.tfvars` you can copy as a starting point. **Do not set** `fleet_name`, `agent_names`, `agent_orchestrators`, or `wake_target_session_key` here — `fleetmind render` derives those and writes them to `acme-bots.derived.tfvars`.
 
 ```hcl
 # workspaces/acme-bots.tfvars — infra knobs only
@@ -388,7 +402,7 @@ fleetmind render fleet-acme-bots.yaml
 
 This writes:
 - `./rendered/openclaw-acme-bots.json` (per-agent config slices)
-- `./infra/terraform/workspaces/acme-bots.derived.tfvars` — **derived vars**, including `wake_target_session_key` (derived from the PM's first channel ID)
+- `./workspaces/acme-bots.derived.tfvars` — **derived vars**, including `wake_target_session_key` (derived from the PM's first channel ID)
 
 The auto.tfvars looks like:
 
@@ -403,13 +417,16 @@ wake_target_session_key = "CXXXXXXXXXX"   # PM's first channel
 
 ### 4g. Apply Terraform
 
+From the fleet-template repo root:
+
 ```bash
-cd infra/terraform
 terraform workspace select acme-bots
 terraform apply \
   -var-file=workspaces/acme-bots.tfvars \
   -var-file=workspaces/acme-bots.derived.tfvars
 ```
+
+The template's `main.tf` calls the [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) module (`v0.1.6`) which materializes the VPC, NAT, EC2 instances, IAM, SSM params, S3 bucket, DynamoDB tables, and EventBridge rules. To upgrade the module, bump `?ref=` in `main.tf`.
 
 Review the plan. Expect roughly 60–80 resources to add (VPC, subnets, NAT, EC2 instances, IAM roles, SSM parameters, S3 bucket, DynamoDB table, EventBridge rules). Confirm with `yes`.
 
