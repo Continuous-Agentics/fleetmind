@@ -6,6 +6,13 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-05-14
+
+### Added
+
+- **Fleet-wide `COMPANY.md` distribution.** Operators populate `COMPANY.md` once at their fleet repo root (next to `fleet.yaml`); `fleetmind render` copies it into every per-agent workspace. Bots read it on session boot (after `SOUL.md` + `TOOLS.md`, before `memory/`). The per-bot-type `AGENTS.md` templates reference it in their startup-read list. Absent COMPANY.md is silently skipped. ([#156](https://github.com/Continuous-Agentics/fleetmind/pull/156))
+- **Per-bot-type + per-agent GitHub App permission resolution.** `fleetmind github-app create` no longer hardcodes the permission scope. Each bot type ships an `openclaw/<bot-type>/github-app-permissions.yaml` declaring sensible defaults: PM bots are read-heavy, workers get the full code-contribution scope, backend additionally gets `deployments:write`. Per-agent `github_app.permissions` + `github_app.events` blocks in `fleet.yaml` override per-key (with `'none'` as an explicit drop). CLI logs the source breakdown (`N from manifest, M from override, K dropped`). Unknown permission keys (e.g. typos like `contens: write`) emit a warn-not-fail. ([#157](https://github.com/Continuous-Agentics/fleetmind/pull/157))
+
 ## [0.5.1] — 2026-05-14
 
 ### Added
