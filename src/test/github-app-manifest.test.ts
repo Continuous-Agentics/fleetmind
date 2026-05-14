@@ -42,9 +42,9 @@ describe("buildManifest", () => {
     assert.equal(m.default_permissions.metadata, "read");
   });
 
-  it("declares webhook inactive (no fleet bot needs GitHub webhooks)", () => {
+  it("omits hook_attributes entirely (GitHub's schema only documents .url; { active: false } fails validation)", () => {
     const m = buildManifest({ name: "x", redirectUrl: "http://localhost:8765/callback" });
-    assert.equal(m.hook_attributes?.active, false);
+    assert.equal((m as unknown as Record<string, unknown>).hook_attributes, undefined);
   });
 
   it("subscribes to no events by default", () => {
