@@ -25,6 +25,9 @@ import { SSMClient, PutParameterCommand, ParameterType } from "@aws-sdk/client-s
 import { log } from "../../utils/log.js";
 import { buildManifest, type ManifestOptions } from "../../runtime/github-app-manifest.js";
 import { mintAppJwt } from "../../runtime/github-app-jwt.js";
+import { resolveGitHubAppConfig } from "../../runtime/github-app-permissions.js";
+import { loadFleet } from "../../config/loader.js";
+import type { GitHubAppConfig } from "../../config/schema.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -163,6 +166,14 @@ export async function storeGithubApp(options: GithubAppStoreOptions): Promise<Gi
 export interface GithubAppCreateOptions {
   fleet: string;
   agent: string;
+  /** Agent's role (pm | worker | backend-worker | frontend-worker). Drives
+   *  per-bot-type permission defaults from
+   *  openclaw/<bot-type>/github-app-permissions.yaml. Falls back to 'worker'
+   *  if omitted (matches the schema default for unspecified agents). */
+  role?: string;
+  /** Optional per-agent github_app override from fleet.yaml. Merged on top of
+   *  the per-bot-type defaults. */
+  githubAppConfig?: GitHubAppConfig;
   /** GitHub owner under which the App is registered. For org-owned Apps
    * (default) this is the org name; for user-owned Apps it's a personal
    * username. The operator picks the install target separately in the
@@ -217,11 +228,22 @@ export async function createGithubApp(options: GithubAppCreateOptions): Promise<
   const redirectUrl = `http://localhost:${callbackPort}/callback`;
 
   // ─── Build manifest ────────────────────────────────────────────────────────
+  // ─── Resolve permissions (per-bot-type defaults + per-agent override) ────
+  const resolved = resolveGitHubAppConfig(options.role ?? "worker", options.githubAppConfig);
+  log.dim(
+    `  permissions: ${Object.keys(resolved.permissions).length} scopes` +
+      ` (${resolved.source.permissionsFromManifest} from <${options.role ?? "worker"}>-bot manifest` +
+      `, ${resolved.source.permissionsFromOverride} from per-agent override` +
+      `${resolved.source.permissionsDropped > 0 ? `, ${resolved.source.permissionsDropped} dropped via 'none'` : ""})`,
+  );
+
   const manifestOpts: ManifestOptions = {
     name: options.appName ?? `${options.fleet}-${options.agent}`,
     redirectUrl,
     description: `Fleetmind agent: ${options.agent} (fleet: ${options.fleet})`,
     homepageUrl: options.homepageUrl,
+    permissions: resolved.permissions,
+    events: resolved.events,
   };
   const manifest = buildManifest(manifestOpts);
 
@@ -556,11 +578,33 @@ Examples:
       --fleet acme-bots --agent pm \\
       --owner acme-corp --dry-run
 `)
+    .option("-c, --config <file>", "fleet.yaml path (used to resolve the agent's role + per-agent github_app override)", "fleet.yaml")
     .action(async (opts) => {
       try {
+        // Look up agent role + github_app override from fleet.yaml so the
+        // per-bot-type permission defaults + per-agent overrides flow through.
+        // This matches what 'fleetmind onboard' passes when it calls
+        // createGithubApp internally.
+        let agentRole: string | undefined;
+        let agentGithubApp: GitHubAppConfig | undefined;
+        try {
+          const fleet = loadFleet(opts.config as string);
+          const agent = fleet.agents.list.find((a) => a.id === opts.agent);
+          if (agent) {
+            agentRole = agent.role;
+            agentGithubApp = agent.github_app;
+          } else {
+            log.warn(`Agent '${opts.agent}' not found in ${opts.config}; falling back to default 'worker' role permissions.`);
+          }
+        } catch (err) {
+          log.warn(`Could not load ${opts.config}: ${String(err)}. Falling back to default 'worker' role permissions.`);
+        }
+
         const result = await createGithubApp({
           fleet: opts.fleet as string,
           agent: opts.agent as string,
+          role: agentRole,
+          githubAppConfig: agentGithubApp,
           owner: opts.owner as string,
           org: opts.org as boolean,
           appName: opts.appName as string | undefined,

@@ -50,3 +50,12 @@ export function skillsManifestPath(role: string): string | null {
   const botType = botTypeForRole(role);
   return botType ? `openclaw/${botType}/skills.yaml` : null;
 }
+
+/**
+ * Path of the github-app-permissions.yaml manifest relative to the package root.
+ * Used by github-app-permissions.ts for per-bot-type default permission lookup.
+ */
+export function githubAppPermissionsManifestPath(role: string): string | null {
+  const botType = botTypeForRole(role);
+  return botType ? `openclaw/${botType}/github-app-permissions.yaml` : null;
+}

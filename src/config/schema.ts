@@ -20,6 +20,20 @@ export const SkillSourceSchema = z.enum(["clawhub", "private", "client", "fleetm
 export const AgentRoleSchema = z.enum(["pm", "backend-worker", "frontend-worker", "worker"]);
 export type AgentRole = z.infer<typeof AgentRoleSchema>;
 
+/** GitHub App permission level. 'none' means explicitly omit the scope. */
+export const GitHubAppPermissionLevelSchema = z.enum(["read", "write", "admin", "none"]);
+export type GitHubAppPermissionLevel = z.infer<typeof GitHubAppPermissionLevelSchema>;
+
+/** Per-agent (or per-bot-type) GitHub App config. Permissions map to GitHub's
+ *  documented scope names (contents, pull_requests, issues, actions, checks,
+ *  metadata, administration, deployments, packages, pages, security_events, etc.).
+ *  Events are GitHub webhook event names; defaults to empty (no webhook events). */
+export const GitHubAppConfigSchema = z.object({
+  permissions: z.record(z.string(), GitHubAppPermissionLevelSchema).default({}),
+  events: z.array(z.string()).default([]),
+});
+export type GitHubAppConfig = z.infer<typeof GitHubAppConfigSchema>;
+
 export const SkillRefSchema = z.union([
   // shorthand string → defaults to client source
   z.string().transform((s) => ({
@@ -184,6 +198,13 @@ export const AgentSchema = z.object({
    *  agents.defaults.workspace_base. Useful for bots on custom AMIs that
    *  install openclaw in a non-default path. */
   workspace_base: z.string().optional(),
+  /** Optional per-agent GitHub App configuration. Permissions + events
+   *  declared here override the bot-type defaults from
+   *  openclaw/<bot-type>/github-app-permissions.yaml. Permissions are merged
+   *  key-by-key: the per-agent entry wins where it sets a key, and the
+   *  per-bot-type entry fills in the rest. Events are taken from per-agent
+   *  when present, else fall back to per-bot-type. */
+  github_app: GitHubAppConfigSchema.optional(),
 });
 
 export const AgentDefaultsSchema = z.object({

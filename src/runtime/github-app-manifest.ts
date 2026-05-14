@@ -33,7 +33,27 @@ export interface ManifestOptions {
    * error). Default is the fleetmind repo URL — it's just App metadata,
    * operators can edit it in the GitHub App settings page after creation. */
   homepageUrl?: string;
+  /** Permissions to declare on the App. If omitted, falls back to a
+   *  reasonable default set (contents/pull_requests/issues/actions:write,
+   *  checks/metadata:read). Callers typically derive this from the resolved
+   *  per-bot-type + per-agent permission config. */
+  permissions?: Record<string, "read" | "write" | "admin">;
+  /** Webhook events to subscribe to. Defaults to empty. */
+  events?: string[];
 }
+
+/** Fallback permission set when the caller doesn't supply one.
+ *  Matches the original hardcoded scope this module shipped with so existing
+ *  callers (and operators with no per-bot-type manifest) get the same
+ *  behavior they had before. */
+export const DEFAULT_PERMISSIONS: Record<string, "read" | "write" | "admin"> = {
+  contents: "write",
+  pull_requests: "write",
+  issues: "write",
+  actions: "write",
+  checks: "read",
+  metadata: "read",
+};
 
 /** Default homepage URL when the caller doesn't supply one. GitHub requires
  * a publicly-resolvable URL here; we use the fleetmind project page. */
@@ -69,14 +89,7 @@ export function buildManifest(opts: ManifestOptions): GitHubAppManifest {
     // GitHub creates the App with webhooks off by default; that's what we want.
     redirect_url: opts.redirectUrl,
     public: false,
-    default_permissions: {
-      contents: "write",
-      pull_requests: "write",
-      issues: "write",
-      actions: "write",
-      checks: "read",
-      metadata: "read",
-    },
-    default_events: [],
+    default_permissions: opts.permissions ?? DEFAULT_PERMISSIONS,
+    default_events: opts.events ?? [],
   };
 }
