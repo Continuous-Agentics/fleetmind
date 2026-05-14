@@ -11,79 +11,15 @@ delegate tasks to worker bots and track them through the full lifecycle.
 - fleetmind CLI installed (`npm install -g fleetmind`)
 - A `fleet.yaml` with at least one PM bot and one worker bot defined
 
-## Step 1: Apply the Terraform module
+## Step 1: Provision the task-ledger infrastructure
 
-The task-ledger Terraform submodule (lives in [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/tree/v0.1.6/modules/task-ledger)) creates the DynamoDB table, S3 bucket, IAM policies, and EventBridge wake pipeline. The simplest way to consume it is via the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) starter repo, which calls the *root* `terraform-aws-fleetmind` module — the root module turns the task-ledger submodule on whenever you set `delegation_enabled = true` in your tfvars.
+The task-ledger Terraform submodule lives in the separate [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) repo and provisions the DynamoDB table, S3 bucket, IAM policies, and EventBridge wake pipeline.
 
-The rest of this section shows how to call the task-ledger submodule **directly** from your own Terraform root, e.g. if you're integrating with a fleet that doesn't use fleetmind-template, or you want delegation infra without the rest of the fleetmind EC2/VPC/SG stack.
+**Canonical path:** consume it via [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template), which calls the root `terraform-aws-fleetmind` module from its `main.tf`. The submodule activates automatically when you set `delegation_enabled = true` in your tfvars. See [`fleetmind-template/docs/SETUP-A-FLEET.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/SETUP-A-FLEET.md) for the full setup.
 
-Create a consuming Terraform root:
+**Standalone path:** if you're integrating with a fleet that doesn't use fleetmind-template, or you want delegation infra without the rest of the fleetmind EC2/VPC/SG stack, call the submodule directly. See [`terraform-aws-fleetmind/docs/TASK-LEDGER-STANDALONE.md`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/blob/main/docs/TASK-LEDGER-STANDALONE.md) for the full root-module example.
 
-```hcl
-# my-fleet-infra/main.tf
-
-terraform {
-  required_version = ">= 1.5.0"
-
-  backend "s3" {
-    bucket  = "my-terraform-state"
-    key     = "my-fleet/task-ledger.tfstate"
-    region  = "us-east-1"
-    encrypt = true
-  }
-
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 6.0"
-    }
-  }
-}
-
-provider "aws" {
-  region = "us-east-1"
-}
-
-module "task_ledger" {
-  source = "github.com/Continuous-Agentics/terraform-aws-fleetmind//modules/task-ledger?ref=v0.1.6"
-
-  name_prefix    = "my-fleet-"
-  aws_region     = "us-east-1"
-
-  # Existing IAM role names (created by your bot EC2 module)
-  pm_role_names     = ["my-fleet-pm-bot-role"]
-  worker_role_names = ["my-fleet-worker-bot-role"]
-
-  # Wake signaling: SSM Run Command target
-  wake_target_instance_tag_key   = "Name"
-  wake_target_instance_tag_value = "my-fleet-pm-bot"
-  wake_target_session_key        = "agent:main:slack:channel:C123456789"
-
-  # Optional: email for DLQ alarm notifications
-  alert_email = "oncall@my-org.example.com"
-
-  tags = {
-    product = "my-fleet"
-    env     = "production"
-  }
-}
-
-output "table_name"   { value = module.task_ledger.table_name }
-output "s3_bucket"    { value = module.task_ledger.s3_bucket_name }
-output "pm_policy"    { value = module.task_ledger.pm_policy_arn }
-output "worker_policy"{ value = module.task_ledger.worker_policy_arn }
-```
-
-Apply it:
-
-```bash
-cd my-fleet-infra
-terraform init
-terraform plan
-terraform apply
-```
-
-Note the `table_name` and `s3_bucket` outputs — you'll need them in `fleet.yaml`.
+Either way, note the `table_name` and `s3_bucket` outputs — you'll need them in `fleet.yaml` (next step).
 
 ## Step 2: Configure `fleet.yaml`
 
