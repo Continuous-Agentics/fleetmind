@@ -15,34 +15,38 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { z } from "zod";
 import { parse as parseYaml } from "yaml";
 import { fleetmindPackageRoot } from "./resolver.js";
-import type { SkillRef, SkillSource } from "../config/schema.js";
+import { skillsManifestPath } from "./bot-types.js";
+import { AgentRoleSchema, SkillSourceSchema, type SkillRef } from "../config/schema.js";
 
 // ---------------------------------------------------------------------------
-// Role → bot-type directory mapping
+// Zod schema for skills.yaml
 // ---------------------------------------------------------------------------
 
-/**
- * Map agent `role` (from the schema enum) to the bot-type directory under
- * `openclaw/`. Mirrors `ROLE_TEMPLATE_DIR` in provisioner.ts so a single
- * convention drives both workspace bundling and skill manifests.
- */
-const ROLE_TO_BOT_TYPE: Record<string, string> = {
-  "pm": "pm-bot",
-  "backend-worker": "backend-worker-bot",
-  "frontend-worker": "frontend-worker-bot",
-  "worker": "worker-bot",
-};
+/** One entry in the manifest's `required` list. */
+const ManifestSkillEntrySchema = z.object({
+  name: z.string().min(1),
+  /** Defaults to "fleetmind" for manifest entries (different from fleet.yaml's
+   * shorthand default of "client" — manifests are opinionated about bundled
+   * origins). */
+  source: SkillSourceSchema.removeDefault().default("fleetmind"),
+  /** Required only when source is "clawhub". Not currently enforced at schema
+   * layer because some `private` skills also use author paths; relax for now. */
+  author: z.string().optional(),
+  version: z.string().optional(),
+});
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+export const SkillManifestSchema = z.object({
+  role: AgentRoleSchema,
+  /** Required skill set. Commented-out entries are absent at YAML-parse time;
+   * any nulls that slip through are filtered by ManifestSkillEntrySchema's
+   * object constraint. */
+  required: z.array(ManifestSkillEntrySchema).default([]),
+});
 
-export interface SkillManifest {
-  role: string;
-  required: SkillRef[];
-}
+export type SkillManifest = z.infer<typeof SkillManifestSchema>;
 
 // ---------------------------------------------------------------------------
 // Manifest loading
@@ -54,21 +58,33 @@ export interface SkillManifest {
  * Returns null if no manifest exists for that role (forward-compat: a role
  * can appear in the schema enum without a manifest yet; doctor/render simply
  * skip that agent in that case).
+ *
+ * Throws if the manifest exists but is malformed (invalid YAML, missing role,
+ * role mismatch, unknown skill source, etc.) — with Zod-shaped errors that
+ * point at the offending field.
  */
 export function loadManifestForRole(role: string, packageRoot?: string): SkillManifest | null {
-  const botType = ROLE_TO_BOT_TYPE[role];
-  if (!botType) return null;
+  const relPath = skillsManifestPath(role);
+  if (!relPath) return null;
 
   const root = packageRoot ?? fleetmindPackageRoot();
-  const manifestPath = path.join(root, "openclaw", botType, "skills.yaml");
+  const manifestPath = path.join(root, relPath);
   if (!fs.existsSync(manifestPath)) return null;
 
   const raw = fs.readFileSync(manifestPath, "utf-8");
-  const parsed = parseYaml(raw) as Partial<SkillManifest> | null;
+  const yamlParsed = parseYaml(raw);
 
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error(`skills.yaml at ${manifestPath} is empty or invalid`);
+  let parsed: SkillManifest;
+  try {
+    parsed = SkillManifestSchema.parse(yamlParsed);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issues = err.issues.map((i) => `  ${i.path.join(".") || "<root>"}: ${i.message}`).join("\n");
+      throw new Error(`skills.yaml at ${manifestPath} failed validation:\n${issues}`);
+    }
+    throw err;
   }
+
   if (parsed.role !== role) {
     throw new Error(
       `skills.yaml at ${manifestPath} declares role="${parsed.role}" but expected "${role}". ` +
@@ -76,31 +92,7 @@ export function loadManifestForRole(role: string, packageRoot?: string): SkillMa
     );
   }
 
-  // YAML parses commented-out list entries as absent (not as null).
-  // Still, defensively filter any null/undefined that may sneak in.
-  const required = Array.isArray(parsed.required)
-    ? parsed.required.filter((s): s is SkillRef => s != null && typeof s === "object" && typeof (s as SkillRef).name === "string")
-    : [];
-
-  return {
-    role: parsed.role,
-    required: required.map(normalizeSkillRef),
-  };
-}
-
-/**
- * Normalize a skill entry from the manifest into a fully-shaped SkillRef.
- * Default source is "fleetmind" for manifest entries — different from the
- * fleet.yaml shorthand default ("client") because the manifest is opinionated
- * about where bundled skills come from.
- */
-function normalizeSkillRef(raw: SkillRef): SkillRef {
-  return {
-    name: raw.name,
-    source: (raw.source ?? "fleetmind") as SkillSource,
-    author: raw.author,
-    version: raw.version,
-  };
+  return parsed;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,16 +125,45 @@ export interface AgentSkillGap {
   /** null when no manifest exists for this role (skipped). */
   manifest: SkillManifest | null;
   missing: SkillRef[];
+  sourceMismatches: SourceMismatch[];
 }
 
 export function computeFleetSkillGaps(
-  agents: ReadonlyArray<{ id: string; role?: string; skills?: ReadonlyArray<{ name: string }> }>,
+  agents: ReadonlyArray<{ id: string; role?: string; skills?: ReadonlyArray<SkillRef | { name: string; source?: string }> }>,
   packageRoot?: string,
 ): AgentSkillGap[] {
   return agents.map((agent) => {
     const role = agent.role ?? "worker";
     const manifest = loadManifestForRole(role, packageRoot);
     const missing = manifest ? findMissingRequiredSkills(agent.skills ?? [], manifest) : [];
-    return { agentId: agent.id, role, manifest, missing };
+    const sourceMismatches = manifest ? findSourceMismatches(agent.skills ?? [], manifest) : [];
+    return { agentId: agent.id, role, manifest, missing, sourceMismatches };
   });
+}
+
+/**
+ * For each required skill that's present-by-name but declared with a different
+ * source than the manifest expects, return a diagnostic record. Used by doctor
+ * to warn (without re-injecting — operator explicit declarations win).
+ */
+export interface SourceMismatch {
+  skillName: string;
+  declaredSource: string;
+  manifestSource: string;
+}
+
+export function findSourceMismatches(
+  agentSkills: ReadonlyArray<{ name: string; source?: string }>,
+  manifest: SkillManifest,
+): SourceMismatch[] {
+  const mismatches: SourceMismatch[] = [];
+  for (const req of manifest.required) {
+    const declared = agentSkills.find((s) => s.name === req.name);
+    if (!declared) continue; // it's a gap, not a mismatch — covered by findMissingRequiredSkills
+    const declaredSource = declared.source ?? "client";
+    if (declaredSource !== req.source) {
+      mismatches.push({ skillName: req.name, declaredSource, manifestSource: req.source });
+    }
+  }
+  return mismatches;
 }

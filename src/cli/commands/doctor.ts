@@ -73,10 +73,21 @@ role's manifest (openclaw/<bot-type>/skills.yaml). Fix with either:
             }
             errors += 1;
           }
+
+          // Surface source mismatches as warnings even when the skill is
+          // present-by-name. Operators may have declared a bundled skill with
+          // source=client (shorthand default), which works only if a
+          // same-named skill exists in their skills_repo.
+          if (gap.sourceMismatches.length > 0) {
+            for (const m of gap.sourceMismatches) {
+              log.warn(`    ⚠  ${gap.agentId}: '${m.skillName}' declared with source=${m.declaredSource}, manifest expects source=${m.manifestSource}. Did you mean the bundled version?`);
+              warnings += 1;
+            }
+          }
         }
 
         log.info("");
-        log.info(`Summary: ${ok} agent${ok === 1 ? "" : "s"} ok, ${errors} with missing skills, ${warnings} skipped.`);
+        log.info(`Summary: ${ok} agent${ok === 1 ? "" : "s"} ok, ${errors} with missing skills, ${warnings} warning${warnings === 1 ? "" : "s"}.`);
 
         if (errors > 0) {
           log.info("");

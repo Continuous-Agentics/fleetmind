@@ -13,17 +13,11 @@ import path from "node:path";
 import type { Fleet, AgentConfig, CronSweepConfig } from "../config/schema.js";
 import { installSkill } from "./resolver.js";
 import { log } from "../utils/log.js";
+import { workspaceTemplatePath } from "./bot-types.js";
 
 // =============================================================================
 // Role-template resolution
 // =============================================================================
-
-const ROLE_TEMPLATE_DIR: Record<string, string> = {
-  "pm": "openclaw/pm-bot/workspace",
-  "backend-worker": "openclaw/backend-worker-bot/workspace",
-  "frontend-worker": "openclaw/frontend-worker-bot/workspace",
-  "worker": "openclaw/worker-bot/workspace",
-};
 
 // =============================================================================
 // Fleet roster helpers
@@ -95,7 +89,7 @@ function applyPlaceholders(text: string, agent: AgentConfig, fleet?: Fleet): str
 }
 
 function readRoleTemplate(role: string, filename: string): string | null {
-  const dir = ROLE_TEMPLATE_DIR[role] ?? ROLE_TEMPLATE_DIR["worker"]!;
+  const dir = workspaceTemplatePath(role) ?? workspaceTemplatePath("worker")!;
   const filePath = path.resolve(process.cwd(), dir, filename);
   if (!fs.existsSync(filePath)) return null;
   return fs.readFileSync(filePath, "utf8");
