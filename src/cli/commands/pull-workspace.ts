@@ -100,6 +100,13 @@ export interface PullWorkspaceOptions {
   agents?: string[];
   out: string;
   region: string;
+  /** S3 bucket for staging the tarball. Defaults to <fleetName>-ledger (the
+   * fleet's standard ledger bucket). Override when the operator wants the
+   * snapshot to land in a different bucket — e.g. a dedicated debug-snapshot
+   * bucket, an audit bucket with longer retention, or a cross-account bucket
+   * during a migration. The bot's IAM role must have s3:PutObject on the
+   * chosen bucket; the operator's credentials must have s3:GetObject. */
+  bucket?: string;
   include: string[];
   diff: boolean;
 }
@@ -107,7 +114,8 @@ export interface PullWorkspaceOptions {
 export async function runPullWorkspace(opts: PullWorkspaceOptions): Promise<void> {
   const fleet = loadFleet(opts.fleet ?? "fleet.yaml");
   const fleetName = fleet.fleet.name;
-  const bucket = `${fleetName}-ledger`;
+  const bucket = opts.bucket ?? `${fleetName}-ledger`;
+  const usingCustomBucket = opts.bucket !== undefined && opts.bucket !== `${fleetName}-ledger`;
   const region = opts.region;
   const outDir = path.resolve(opts.out);
   const include = opts.include.length > 0 ? opts.include : DEFAULT_INCLUDE;
@@ -118,6 +126,11 @@ export async function runPullWorkspace(opts: PullWorkspaceOptions): Promise<void
 
   const s3 = new S3Client({ region });
   const tmpBase = os.tmpdir();
+
+  if (usingCustomBucket) {
+    log.info(`Using custom bucket: s3://${bucket}/ (override of ${fleetName}-ledger)`);
+    log.dim(`  → the bot's IAM role must grant s3:PutObject on this bucket; the operator must have s3:GetObject.`);
+  }
 
   for (const agentId of targetIds) {
     log.step(`Pulling workspace for ${agentId}...`);
@@ -211,12 +224,14 @@ export async function runPullWorkspace(opts: PullWorkspaceOptions): Promise<void
 export function registerPullWorkspace(program: Command): void {
   program
     .command("pull-workspace")
+    .alias("download-workspace")
     .description("Snapshot each bot's current workspace state to local disk (operator-side)")
     .option("-f, --fleet <path>", "fleet.yaml path")
     .option("-a, --agent <id>", "Pull only this agent (repeatable)",
       (val: string, prev: string[]) => [...prev, val], [] as string[])
     .option("--out <dir>", "Local output directory", "./bot-state")
     .option("--region <region>", "AWS region", "us-west-2")
+    .option("--bucket <name>", "S3 bucket for staging the snapshot tarball. Defaults to <fleetName>-ledger.")
     .option("--include <pattern>", "File or directory to include (repeatable; defaults to AGENTS.md SOUL.md MEMORY.md etc.)",
       (val: string, prev: string[]) => [...prev, val], [] as string[])
     .option("--diff", "After pulling, diff each file against the rendered baseline", false)
@@ -232,7 +247,10 @@ Examples:
   # Pull all bots' workspaces to ./bot-state/
   $ fleetmind pull-workspace
 
-  # Pull only Ariadne's workspace
+  # Same command via the 'download-workspace' alias
+  $ fleetmind download-workspace
+
+  # Pull only one agent
   $ fleetmind pull-workspace --agent ariadne
 
   # Pull and show diff against rendered baseline
@@ -240,12 +258,19 @@ Examples:
 
   # Pull to a custom directory
   $ fleetmind pull-workspace --out ./snapshots/$(date +%Y%m%d)
+
+  # Stage the snapshot in a custom bucket (e.g. audit or cross-account)
+  $ fleetmind pull-workspace --bucket my-audit-bucket --agent ariadne
+
+  # Cross-region pull
+  $ fleetmind pull-workspace --region eu-west-1 --bucket eu-west-snapshots
 `)
     .action(async (opts: {
       fleet?: string;
       agent: string[];
       out: string;
       region: string;
+      bucket?: string;
       include: string[];
       diff: boolean;
     }) => {
@@ -255,6 +280,7 @@ Examples:
           agents: opts.agent.length > 0 ? opts.agent : undefined,
           out: opts.out,
           region: opts.region,
+          bucket: opts.bucket,
           include: opts.include,
           diff: opts.diff,
         });
