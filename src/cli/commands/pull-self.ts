@@ -12,8 +12,7 @@
  */
 
 import crypto from "node:crypto";
-import { execFileSync, execSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -590,37 +589,6 @@ export async function runPullSelf(
   }
 
   log.dim(`  incoming: ${incomingManifest.files.length} files (rendered ${incomingManifest.rendered_at})`);
-
-  // Step 3b: Auto-upgrade CLI if manifest specifies a different version.
-  // Guarded by FLEETMIND_UPGRADED env var to prevent infinite re-exec loops
-  // that occur when the upgraded binary is installed to a user-local npm prefix
-  // but process.argv[1] still points to the system binary (old version).
-  const manifestVersion = incomingManifest.fleetmind_version;
-  const alreadyUpgraded = process.env['FLEETMIND_UPGRADED'] === '1';
-  if (!alreadyUpgraded && manifestVersion && manifestVersion !== 'unknown') {
-    const installedVersion = (() => {
-      try {
-        const here = path.dirname(fileURLToPath(import.meta.url));
-        const pkgPath = path.resolve(here, '..', '..', '..', 'package.json');
-        return (JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version: string }).version;
-      } catch { return 'unknown'; }
-    })();
-    if (installedVersion !== 'unknown' && installedVersion !== manifestVersion) {
-      log.step(`CLI version mismatch (installed: ${installedVersion}, manifest: ${manifestVersion}) — upgrading...`);
-      try {
-        execSync(`fleetmind self-upgrade --version ${manifestVersion} --apply`, { stdio: 'inherit' });
-        log.ok(`  fleetmind upgraded to ${manifestVersion} — re-exec to pick up new binary`);
-        // Set sentinel before re-exec to prevent infinite loop if the upgraded
-        // binary resolves to the same old path (e.g. user-local vs system npm prefix).
-        const env = { ...process.env, FLEETMIND_UPGRADED: '1' };
-        const args = process.argv.slice(1);
-        execFileSync(process.execPath, args, { stdio: 'inherit', env });
-        return { changed: true, applied: true, diff: { added: [], modified: [], deleted: [] } };
-      } catch (err) {
-        log.warn(`  self-upgrade failed: ${String(err)} — continuing with installed version`);
-      }
-    }
-  }
 
   // Step 4: Compute diff
   const diff = computeDiff(currentFiles, incomingManifest.files);

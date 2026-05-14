@@ -116,8 +116,17 @@ function resolveNpmPrefix(): string {
 
 function defaultRunNpmInstall(pkg: string): NpmInstallResult {
   const prefix = resolveNpmPrefix();
+  // If the prefix is root-owned (e.g. /usr), the current user may not have
+  // write access. Use sudo so the binary lands in the same location as the
+  // original system install.
+  const needsSudo = (() => { try { fs.accessSync(prefix, fs.constants.W_OK); return false; } catch { return true; } })();
+
+  const npmArgs = ["install", "-g", "--prefix", prefix, "--userconfig", NPMRC_PATH, pkg];
+  const cmd = needsSudo ? "sudo" : "npm";
+  const args = needsSudo ? ["npm", ...npmArgs] : npmArgs;
+
   try {
-    const stdout = execFileSync("npm", ["install", "-g", "--prefix", prefix, "--userconfig", NPMRC_PATH, pkg], {
+    const stdout = execFileSync(cmd, args, {
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     });
