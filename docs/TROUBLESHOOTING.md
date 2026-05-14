@@ -200,7 +200,7 @@ aws ec2 get-console-output --instance-id <i-id> --region us-west-2 --query 'Outp
 If the instance is otherwise healthy but `agent.env` is missing, the cleanest recovery is to taint and re-apply so bootstrap runs fresh. From your fleet-template repo root:
 
 ```bash
-terraform taint 'module.fleetmind.module.agent["<agent_id>"].aws_instance.bot'   # adjust to your module path
+terraform taint 'module.fleetmind.module.agent["<agent_id>"].aws_instance.agent'   # adjust to your module path
 terraform apply -var-file=workspaces/<fleet>.tfvars -var-file=workspaces/<fleet>.derived.tfvars
 ```
 

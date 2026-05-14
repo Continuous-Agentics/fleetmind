@@ -333,11 +333,8 @@ openclaw_version  = "latest"
 node_version      = "22"
 fleetmind_version = "0.4.3"   # pin to current stable
 
-# Task-ledger module (inter-bot delegation DynamoDB + EventBridge).
+# Task-ledger submodule (inter-bot delegation DynamoDB + EventBridge).
 delegation_enabled = true
-
-# RDS — fleetmind doesn't use it today.
-enable_rds = false
 
 # VPC interface endpoints for SSM/SecretsManager (avoids NAT for those calls).
 # Costs ~$80/mo; turn off to save money on small fleets.
