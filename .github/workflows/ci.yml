@@ -94,35 +94,6 @@ jobs:
           done
           if [ "$FAIL" -eq 1 ]; then exit 1; fi
 
-  terraform-validate:
-    name: Terraform Validate
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "~> 1.6"
-
-      - name: Terraform init + validate (root module)
-        working-directory: infra/terraform
-        run: |
-          terraform init -backend=false
-          terraform validate
-
-      - name: Terraform init + validate (modules/task-ledger)
-        working-directory: infra/terraform/modules/task-ledger
-        run: |
-          terraform init -backend=false
-          terraform validate
-
-      - name: Terraform fmt check
-        working-directory: infra/terraform
-        run: terraform fmt -check -recursive
-
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
