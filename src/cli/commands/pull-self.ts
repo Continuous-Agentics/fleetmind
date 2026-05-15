@@ -44,7 +44,7 @@ export { ManifestFile, DeployManifest };
 export const PROTECTED_PATHS: readonly string[] = [
   "MEMORY.md",
   "memory/",
-  ".openclaw/memory/",
+  ".openclaw/",
 ];
 
 /**
