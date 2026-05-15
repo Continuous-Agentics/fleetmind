@@ -42,7 +42,9 @@ export { ManifestFile, DeployManifest };
  *   - Matching is prefix-based: "memory/" protects "memory/2026-05-15.md".
  */
 export const PROTECTED_PATHS: readonly string[] = [
-  "MEMORY.md",
+  // MEMORY.md is intentionally NOT protected — the operator may push AUTO-tagged
+  // sections (fleet facts, key context). The section merge preserves bot-added
+  // entries. Only the memory/ daily-notes dir is fully agent-owned.
   "memory/",
   ".openclaw/",
   ".cache/",
