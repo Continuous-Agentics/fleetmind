@@ -216,7 +216,6 @@ export function mergeMarkdownSections(
   if (autoSections.length === 0) return null;
 
   const localParsed = parseMarkdownSections(local);
-  const localMap = new Map(localParsed.sections.map((s) => [s.headingKey, s]));
 
   const result: string[] = [];
 
@@ -667,9 +666,9 @@ export function mergeOpenClawConfig(
  * anything not in the incoming tarball would wipe agent state.
  *
  * Additionally, any path that matches PROTECTED_PATHS is filtered out of
- * the deleted list by computeDiff before it ever reaches here — providing
- * an explicit, named safety net for MEMORY.md, memory/, and
- * .openclaw/memory/ that survives future changes to deletion behaviour.
+ * the deleted list by computeDiff before it ever reaches here, and is also
+ * skipped in the modified loop — providing an explicit, named safety net
+ * that survives future changes to deletion or update behaviour.
  */
 export function applyDiff(
   stagingDir: string,
@@ -697,6 +696,13 @@ export function applyDiff(
 
   // Apply modified files — atomic rename for all except .openclaw/openclaw.json
   for (const { incoming } of safeDiff.modified) {
+    // Defence-in-depth: skip protected paths in modified too.
+    // Normally a protected file wouldn't appear here (operator doesn't ship
+    // agent-owned files), but guard in case they do.
+    if (isProtectedPath(incoming.path)) {
+      log.dim(`  ⚠ protected: ${incoming.path} (skipped — agent-owned, never modified)`);
+      continue;
+    }
     const src = path.join(stagingDir, incoming.path);
     const dest = path.join(workspaceDir, incoming.path);
     fs.mkdirSync(path.dirname(dest), { recursive: true });

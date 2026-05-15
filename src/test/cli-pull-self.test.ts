@@ -918,6 +918,23 @@ describe("applyDiff — protected paths (defence-in-depth)", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  test("USER.md is not modified even when in diff.modified", () => {
+    const userPath = path.join(workspaceDir, "USER.md");
+    fs.writeFileSync(userPath, "# User\n\n- **Name:** Grace", "utf-8");
+    fs.writeFileSync(path.join(stagingDir, "USER.md"), "# User\n\n- **Name:** Overwritten", "utf-8");
+
+    const diff: FileDiff = {
+      added: [],
+      modified: [{ incoming: { path: "USER.md", size: 10, sha256: "new", mode: 644 }, currentSize: 10 }],
+      deleted: [],
+    };
+
+    applyDiff(stagingDir, workspaceDir, diff);
+
+    const result = fs.readFileSync(userPath, "utf-8");
+    assert.ok(result.includes("Grace"), "USER.md must not be modified — agent-owned");
+  });
+
   test("USER.md is not deleted even when in diff.deleted", () => {
     const userPath = path.join(workspaceDir, "USER.md");
     fs.writeFileSync(userPath, "# User", "utf-8");
