@@ -8,6 +8,9 @@
  *   - computeDiff: added/modified/deleted buckets
  *   - formatDiff: output shape matches spec (added/modified/deleted/summary)
  *   - verifyTarball: hash match passes, mismatch throws
+ *   - isProtectedPath: correct classification of agent-owned paths
+ *   - computeDiff — protected paths: MEMORY.md/memory//.openclaw/memory/ never appear in deleted
+ *   - applyDiff — protected paths: defence-in-depth guard inside applyDiff
  *   - applyDiff: added files created, modified files renamed, deleted files removed
  *   - runPullSelf — no changes: early exit, no S3 download needed beyond manifest
  *   - runPullSelf — dry-run: shows diff, does not extract
@@ -31,6 +34,8 @@ import {
   verifyTarball,
   applyDiff,
   runPullSelf,
+  isProtectedPath,
+  PROTECTED_PATHS,
   type ManifestFile,
   type DeployManifest,
   type FileDiff,
@@ -529,6 +534,163 @@ describe("runPullSelf — --apply", () => {
     );
 
     assert.equal(applyCalled, false, "apply should not be called after hash mismatch");
+  });
+});
+
+// ── Tests: isProtectedPath ────────────────────────────────────────────────
+
+describe("isProtectedPath", () => {
+  test("MEMORY.md exact match is protected", () => {
+    assert.equal(isProtectedPath("MEMORY.md"), true);
+  });
+
+  test("files inside memory/ are protected", () => {
+    assert.equal(isProtectedPath("memory/2026-05-15.md"), true);
+    assert.equal(isProtectedPath("memory/task-queue.md"), true);
+    assert.equal(isProtectedPath("memory/nested/deep.md"), true);
+  });
+
+  test("files inside .openclaw/memory/ are protected", () => {
+    assert.equal(isProtectedPath(".openclaw/memory/index.md"), true);
+    assert.equal(isProtectedPath(".openclaw/memory/2026-05-15.md"), true);
+  });
+
+  test("unrelated files are not protected", () => {
+    assert.equal(isProtectedPath("AGENTS.md"), false);
+    assert.equal(isProtectedPath("SOUL.md"), false);
+    assert.equal(isProtectedPath("skills/some-skill/SKILL.md"), false);
+    assert.equal(isProtectedPath(".openclaw/openclaw.json"), false);
+  });
+
+  test("path that starts with 'memory' but is not under memory/ is not protected", () => {
+    assert.equal(isProtectedPath("memories.md"), false);
+    assert.equal(isProtectedPath("memorydump.md"), false);
+  });
+
+  test("all entries in PROTECTED_PATHS are themselves protected", () => {
+    for (const p of PROTECTED_PATHS) {
+      const asFile = p.endsWith("/") ? `${p}example.md` : p;
+      assert.ok(
+        isProtectedPath(asFile),
+        `Expected '${asFile}' to be protected (from prefix '${p}')`
+      );
+    }
+  });
+});
+
+// ── Tests: computeDiff — protected paths ─────────────────────────────────────────
+
+describe("computeDiff — protected paths", () => {
+  test("MEMORY.md absent from incoming is not listed as deleted", () => {
+    const current: ManifestFile[] = [
+      makeFile("AGENTS.md"),
+      makeFile("MEMORY.md"),
+    ];
+    const incoming: ManifestFile[] = [makeFile("AGENTS.md")];
+    const diff = computeDiff(current, incoming);
+    assert.equal(diff.deleted.length, 0, "MEMORY.md must not appear in deleted");
+  });
+
+  test("files under memory/ absent from incoming are not listed as deleted", () => {
+    const current: ManifestFile[] = [
+      makeFile("AGENTS.md"),
+      makeFile("memory/2026-05-15.md"),
+      makeFile("memory/task-queue.md"),
+    ];
+    const incoming: ManifestFile[] = [makeFile("AGENTS.md")];
+    const diff = computeDiff(current, incoming);
+    assert.equal(diff.deleted.length, 0, "memory/ files must not appear in deleted");
+  });
+
+  test("files under .openclaw/memory/ absent from incoming are not listed as deleted", () => {
+    const current: ManifestFile[] = [
+      makeFile("AGENTS.md"),
+      makeFile(".openclaw/memory/index.md"),
+    ];
+    const incoming: ManifestFile[] = [makeFile("AGENTS.md")];
+    const diff = computeDiff(current, incoming);
+    assert.equal(diff.deleted.length, 0, ".openclaw/memory/ files must not appear in deleted");
+  });
+
+  test("non-protected files absent from incoming ARE listed as deleted", () => {
+    const current: ManifestFile[] = [
+      makeFile("AGENTS.md"),
+      makeFile("MEMORY.md"),
+      makeFile("skills/old/SKILL.md"),
+    ];
+    const incoming: ManifestFile[] = [makeFile("AGENTS.md")];
+    const diff = computeDiff(current, incoming);
+    assert.equal(diff.deleted.length, 1);
+    assert.equal(diff.deleted[0]?.path, "skills/old/SKILL.md");
+  });
+});
+
+// ── Tests: applyDiff — protected paths (defence-in-depth) ──────────────────────
+
+describe("applyDiff — protected paths (defence-in-depth)", () => {
+  let tmpDir: string;
+  let stagingDir: string;
+  let workspaceDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fm-protected-"));
+    stagingDir = path.join(tmpDir, "staging");
+    workspaceDir = path.join(tmpDir, "workspace");
+    fs.mkdirSync(stagingDir, { recursive: true });
+    fs.mkdirSync(workspaceDir, { recursive: true });
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("MEMORY.md is not deleted even when in diff.deleted", () => {
+    const memPath = path.join(workspaceDir, "MEMORY.md");
+    fs.writeFileSync(memPath, "# Memory", "utf-8");
+
+    const diff: FileDiff = {
+      added: [],
+      modified: [],
+      deleted: [{ path: "MEMORY.md", size: 8, sha256: "x", mode: 644 }],
+    };
+
+    applyDiff(stagingDir, workspaceDir, diff);
+
+    assert.ok(fs.existsSync(memPath), "MEMORY.md must survive applyDiff even if listed in deleted");
+  });
+
+  test("memory/ files are not deleted even when in diff.deleted", () => {
+    const memDir = path.join(workspaceDir, "memory");
+    fs.mkdirSync(memDir, { recursive: true });
+    const dailyNote = path.join(memDir, "2026-05-15.md");
+    fs.writeFileSync(dailyNote, "# Notes", "utf-8");
+
+    const diff: FileDiff = {
+      added: [],
+      modified: [],
+      deleted: [{ path: "memory/2026-05-15.md", size: 7, sha256: "y", mode: 644 }],
+    };
+
+    applyDiff(stagingDir, workspaceDir, diff);
+
+    assert.ok(fs.existsSync(dailyNote), "memory/ files must survive applyDiff even if listed in deleted");
+  });
+
+  test(".openclaw/memory/ files are not deleted even when in diff.deleted", () => {
+    const ocMemDir = path.join(workspaceDir, ".openclaw", "memory");
+    fs.mkdirSync(ocMemDir, { recursive: true });
+    const indexFile = path.join(ocMemDir, "index.md");
+    fs.writeFileSync(indexFile, "# Index", "utf-8");
+
+    const diff: FileDiff = {
+      added: [],
+      modified: [],
+      deleted: [{ path: ".openclaw/memory/index.md", size: 7, sha256: "z", mode: 644 }],
+    };
+
+    applyDiff(stagingDir, workspaceDir, diff);
+
+    assert.ok(fs.existsSync(indexFile), ".openclaw/memory/ files must survive applyDiff");
   });
 });
 
