@@ -24,7 +24,7 @@ import {
   SSMClient,
   CreateDocumentCommand,
   UpdateDocumentCommand,
-  DescribeDocumentCommand,
+  GetDocumentCommand,
   DocumentAlreadyExists,
 } from "@aws-sdk/client-ssm";
 import crypto from "node:crypto";
@@ -95,7 +95,7 @@ export function buildDocumentContent(): string {
               "  exit 0",
               "fi",
               "echo \"Running: sudo fleetmind self-upgrade $FLAG --apply\"",
-              "sudo fleetmind self-upgrade $FLAG --apply",
+              "sudo fleetmind self-upgrade \"$FLAG\" --apply",
             ],
           },
         },
@@ -125,9 +125,9 @@ export function buildDocumentContent(): string {
   return JSON.stringify(doc, null, 2);
 }
 
-/** Stable hash of the document content — used to detect whether an update is needed. */
-function contentHash(content: string): string {
-  return crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
+/** Stable sha256 hash of a string. */
+function sha256(content: string): string {
+  return crypto.createHash("sha256").update(content).digest("hex");
 }
 
 /** SSM Automation document name for a fleet. */
@@ -152,72 +152,67 @@ export async function ensureAutomationDocument(
   deps: { ssmClient?: SSMClient } = {}
 ): Promise<string> {
   const ssm = deps.ssmClient ?? new SSMClient({ region });
-  const name = documentName(fleetName);
+  const docName = documentName(fleetName);
   const content = buildDocumentContent();
-  const hash = contentHash(content);
+  const contentDigest = sha256(content);
 
-  // Check whether the document already exists and whether its content matches.
-  let existingHash: string | null = null;
+  // Check whether the document exists and whether its content matches.
+  // We use GetDocument to retrieve the actual content and compare hashes
+  // directly — more reliable than embedding a hash in the description field,
+  // which breaks silently if the document is edited manually in the console.
+  let existingContent: string | null = null;
   try {
-    const desc = await ssm.send(new DescribeDocumentCommand({ Name: name }));
-    // SSM doesn't expose content hash directly; we embed it in the document
-    // description field as a lightweight change-detection mechanism.
-    existingHash = desc.Document?.Description?.match(/sha256:([0-9a-f]{16})/)?.[1] ?? null;
+    const resp = await ssm.send(
+      new GetDocumentCommand({ Name: docName, DocumentFormat: "JSON" })
+    );
+    existingContent = resp.Content ?? null;
   } catch (err: unknown) {
-    // NoSuchDocument → document doesn't exist yet; any other error re-throws
-    const name = (err as { name?: string }).name;
-    if (name !== "NoSuchDocument" && name !== "InvalidDocument") {
+    const errCode = (err as { name?: string }).name;
+    // NoSuchDocument → document doesn't exist yet; all other errors re-throw
+    if (errCode !== "NoSuchDocument") {
       throw err;
     }
   }
 
-  if (existingHash === hash) {
-    log.dim(`  SSM document '${name}' is current (sha256:${hash})`);
-    return name;
+  if (existingContent !== null && sha256(existingContent) === contentDigest) {
+    log.dim(`  SSM document '${docName}' is current`);
+    return docName;
   }
 
-  // Rebuild document content with hash embedded in description for change detection.
-  const docWithHash = JSON.parse(content) as Record<string, unknown>;
-  docWithHash.description =
-    `FleetMind: optionally upgrade the agent CLI, then sync the workspace. ` +
-    `The upgrade step gates pull-self — a failed upgrade aborts the execution ` +
-    `so pull-self never runs on a stale binary. [sha256:${hash}]`;
-  const finalContent = JSON.stringify(docWithHash, null, 2);
-
-  if (existingHash === null) {
+  if (existingContent === null) {
     // Create
-    log.step(`  Creating SSM Automation document '${name}'...`);
+    log.step(`  Creating SSM Automation document '${docName}'...`);
     try {
       await ssm.send(
         new CreateDocumentCommand({
-          Name: name,
-          Content: finalContent,
+          Name: docName,
+          Content: content,
           DocumentType: "Automation",
           DocumentFormat: "JSON",
         })
       );
-      log.ok(`  Created SSM document '${name}'`);
+      log.ok(`  Created SSM document '${docName}'`);
     } catch (err: unknown) {
-      // Race condition: another push created it between our describe and create
+      // Race condition: another push created it between our get and create
       if (err instanceof DocumentAlreadyExists) {
-        log.dim(`  Document '${name}' created concurrently — proceeding`);
+        log.dim(`  Document '${docName}' created concurrently — proceeding`);
       } else {
         throw err;
       }
     }
   } else {
     // Update
-    log.step(`  Updating SSM Automation document '${name}' (content changed)...`);
+    log.step(`  Updating SSM Automation document '${docName}' (content changed)...`);
     await ssm.send(
       new UpdateDocumentCommand({
-        Name: name,
-        Content: finalContent,
+        Name: docName,
+        Content: content,
         DocumentFormat: "JSON",
         DocumentVersion: "$LATEST",
       })
     );
-    log.ok(`  Updated SSM document '${name}'`);
+    log.ok(`  Updated SSM document '${docName}'`);
   }
 
-  return name;
+  return docName;
 }

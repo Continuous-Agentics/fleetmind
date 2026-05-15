@@ -559,11 +559,11 @@ export async function runPushFleet(
     await acquireLockFn(bucket, region);
   }
 
-  // Ensure the SSM Automation document is current before triggering any agents.
-  // This is a no-op when the document content hasn't changed. Done once here
-  // (not per-agent) so we only make the API call once per push.
+  // Upsert the SSM Automation document when --upgrade-cli is set.
+  // Only called once per push (not per-agent). Skipped entirely on normal
+  // pushes (no --upgrade-cli) so there's no SSM overhead on every deploy.
   let automationDocName: string | null = null;
-  if (!opts.dryRun && !opts.noApply) {
+  if (opts.upgradeCli && !opts.dryRun && !opts.noApply) {
     log.step("Ensuring SSM Automation document is current...");
     automationDocName = await ensureAutomationDocFn(fleetName, region);
   }
@@ -829,6 +829,15 @@ Upgrade behaviour:
   Automation Execution ID to monitor independently:
     aws ssm get-automation-execution --automation-execution-id <id> --region <region>
   Without --upgrade-cli, a single RunCommand triggers pull-self directly.
+
+  Required IAM permissions for --upgrade-cli (operator role):
+    ssm:GetDocument
+    ssm:CreateDocument
+    ssm:UpdateDocument
+    ssm:StartAutomationExecution
+  These are in addition to the permissions already required for a normal push
+  (ssm:DescribeInstanceInformation, ssm:SendCommand, s3:PutObject, etc.).
+  Use --automation-role-arn if the automation steps need a separate execution role.
 
 Examples:
   # Standard push with restart
