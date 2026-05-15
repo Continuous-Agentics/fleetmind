@@ -79,7 +79,10 @@ export interface DeployManifest {
 export interface PushFleetResult {
   agent_id: string;
   status: "pushed" | "skipped" | "error";
+  /** RunCommand command ID (pull-self only, no upgrade). */
   ssm_command_id?: string;
+  /** SSM Automation execution ID (upgrade + pull-self path). */
+  automation_execution_id?: string;
   reason?: string;
 }
 
@@ -734,7 +737,7 @@ export async function runPushFleet(
             );
             log.ok(`  ${agentId}: Automation started → ${executionId}`);
             log.dim(`    monitor: aws ssm get-automation-execution --automation-execution-id ${executionId} --region ${region}`);
-            results.push({ agent_id: agentId, status: "pushed", ssm_command_id: executionId });
+            results.push({ agent_id: agentId, status: "pushed", automation_execution_id: executionId });
           } else {
             // ── Simple RunCommand: pull-self only (no upgrade needed) ───────────
             const pullCmd = `sudo -u ec2-user fleetmind pull-self ${pullSelfArgs}`;
@@ -764,7 +767,12 @@ export async function runPushFleet(
   log.bold("Push summary:");
   for (const r of results) {
     if (r.status === "pushed") {
-      log.ok(`  ${r.agent_id}: pushed${r.ssm_command_id ? ` (cmd=${r.ssm_command_id})` : ""}${r.reason ? ` [${r.reason}]` : ""}`);
+      const ref = r.automation_execution_id
+        ? ` (automation=${r.automation_execution_id})`
+        : r.ssm_command_id
+          ? ` (cmd=${r.ssm_command_id})`
+          : "";
+      log.ok(`  ${r.agent_id}: pushed${ref}${r.reason ? ` [${r.reason}]` : ""}`);
     } else if (r.status === "skipped") {
       log.dim(`  ${r.agent_id}: skipped (${r.reason})`);
     } else {
