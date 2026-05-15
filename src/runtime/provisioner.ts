@@ -330,11 +330,12 @@ export async function provisionAgent(
     writeFile(path.join(workspace, "HEARTBEAT.md"), heartbeatTemplate, dryRun);
   }
 
-  // PATCHES.md — shipped to agent workspace so pull-self can apply patches
-  // after each workspace update (see runtime/patch-engine.ts).
-  const patchesTemplate = readRoleTemplate(role, "PATCHES.md");
-  if (patchesTemplate !== null) {
-    writeFile(path.join(workspace, "PATCHES.md"), patchesTemplate, dryRun);
+  // MEMORY.md — shipped on every push so the section merge can update
+  // AUTO-tagged operator sections (e.g. Active Tasks) while preserving
+  // everything the bot has written in untagged sections.
+  const memoryTemplate = readRoleTemplate(role, "MEMORY.md");
+  if (memoryTemplate !== null) {
+    writeFile(path.join(workspace, "MEMORY.md"), memoryTemplate, dryRun);
   }
 
   // USER.md — only create if missing (don't overwrite customized versions)
