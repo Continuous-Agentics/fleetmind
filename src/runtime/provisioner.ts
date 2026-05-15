@@ -314,6 +314,21 @@ export async function provisionAgent(
     : identityMd(agent);
   writeFile(path.join(workspace, "IDENTITY.md"), identityContent, dryRun);
 
+  // HEARTBEAT.md — operator-scaffolded, bots add task sections. Always ship
+  // so pull-self's section merge can update the AUTO-tagged operator sections
+  // while preserving bot-added task sections.
+  const heartbeatTemplate = readRoleTemplate(role, "HEARTBEAT.md");
+  if (heartbeatTemplate !== null) {
+    writeFile(path.join(workspace, "HEARTBEAT.md"), heartbeatTemplate, dryRun);
+  }
+
+  // PATCHES.md — shipped to agent workspace so pull-self can apply patches
+  // after each workspace update (see runtime/patch-engine.ts).
+  const patchesTemplate = readRoleTemplate(role, "PATCHES.md");
+  if (patchesTemplate !== null) {
+    writeFile(path.join(workspace, "PATCHES.md"), patchesTemplate, dryRun);
+  }
+
   // USER.md — only create if missing (don't overwrite customized versions)
   const userMdPath = path.join(workspace, "USER.md");
   if (!fs.existsSync(userMdPath)) {
