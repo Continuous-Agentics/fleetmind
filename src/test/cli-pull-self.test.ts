@@ -550,16 +550,26 @@ describe("isProtectedPath", () => {
     assert.equal(isProtectedPath("memory/nested/deep.md"), true);
   });
 
-  test("files inside .openclaw/memory/ are protected", () => {
+  test("all .openclaw/ subtrees are protected", () => {
     assert.equal(isProtectedPath(".openclaw/memory/index.md"), true);
-    assert.equal(isProtectedPath(".openclaw/memory/2026-05-15.md"), true);
+    assert.equal(isProtectedPath(".openclaw/sessions/abc123.json"), true);
+    assert.equal(isProtectedPath(".openclaw/plugin-skills/some-skill/SKILL.md"), true);
+    assert.equal(isProtectedPath(".openclaw/plugin-state/foo.json"), true);
+    assert.equal(isProtectedPath(".openclaw/logs/2026-05-15.log"), true);
+    assert.equal(isProtectedPath(".openclaw/tasks/task.json"), true);
+    assert.equal(isProtectedPath(".openclaw/agents/daedalus.json"), true);
+    assert.equal(isProtectedPath(".openclaw/canvas/board.json"), true);
+    assert.equal(isProtectedPath(".openclaw/delivery-queue/msg.json"), true);
+    assert.equal(isProtectedPath(".openclaw/identity/id.json"), true);
+    // operator-shipped config files fall under modified (not deleted) —
+    // protecting .openclaw/ from deletion is safe for them too
+    assert.equal(isProtectedPath(".openclaw/openclaw.json"), true);
   });
 
   test("unrelated files are not protected", () => {
     assert.equal(isProtectedPath("AGENTS.md"), false);
     assert.equal(isProtectedPath("SOUL.md"), false);
     assert.equal(isProtectedPath("skills/some-skill/SKILL.md"), false);
-    assert.equal(isProtectedPath(".openclaw/openclaw.json"), false);
   });
 
   test("path that starts with 'memory' but is not under memory/ is not protected", () => {
@@ -602,14 +612,17 @@ describe("computeDiff — protected paths", () => {
     assert.equal(diff.deleted.length, 0, "memory/ files must not appear in deleted");
   });
 
-  test("files under .openclaw/memory/ absent from incoming are not listed as deleted", () => {
+  test("files anywhere under .openclaw/ absent from incoming are not listed as deleted", () => {
     const current: ManifestFile[] = [
       makeFile("AGENTS.md"),
       makeFile(".openclaw/memory/index.md"),
+      makeFile(".openclaw/sessions/abc.json"),
+      makeFile(".openclaw/plugin-skills/skill/SKILL.md"),
+      makeFile(".openclaw/logs/2026-05-15.log"),
     ];
     const incoming: ManifestFile[] = [makeFile("AGENTS.md")];
     const diff = computeDiff(current, incoming);
-    assert.equal(diff.deleted.length, 0, ".openclaw/memory/ files must not appear in deleted");
+    assert.equal(diff.deleted.length, 0, ".openclaw/ files must not appear in deleted");
   });
 
   test("non-protected files absent from incoming ARE listed as deleted", () => {
@@ -676,21 +689,21 @@ describe("applyDiff — protected paths (defence-in-depth)", () => {
     assert.ok(fs.existsSync(dailyNote), "memory/ files must survive applyDiff even if listed in deleted");
   });
 
-  test(".openclaw/memory/ files are not deleted even when in diff.deleted", () => {
-    const ocMemDir = path.join(workspaceDir, ".openclaw", "memory");
-    fs.mkdirSync(ocMemDir, { recursive: true });
-    const indexFile = path.join(ocMemDir, "index.md");
-    fs.writeFileSync(indexFile, "# Index", "utf-8");
+  test(".openclaw/ files are not deleted even when in diff.deleted", () => {
+    const ocDir = path.join(workspaceDir, ".openclaw", "sessions");
+    fs.mkdirSync(ocDir, { recursive: true });
+    const sessionFile = path.join(ocDir, "abc123.json");
+    fs.writeFileSync(sessionFile, "{}", "utf-8");
 
     const diff: FileDiff = {
       added: [],
       modified: [],
-      deleted: [{ path: ".openclaw/memory/index.md", size: 7, sha256: "z", mode: 644 }],
+      deleted: [{ path: ".openclaw/sessions/abc123.json", size: 2, sha256: "z", mode: 644 }],
     };
 
     applyDiff(stagingDir, workspaceDir, diff);
 
-    assert.ok(fs.existsSync(indexFile), ".openclaw/memory/ files must survive applyDiff");
+    assert.ok(fs.existsSync(sessionFile), ".openclaw/ files must survive applyDiff even if listed in deleted");
   });
 });
 
