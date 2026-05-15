@@ -591,6 +591,67 @@ describe("renderAgentOpenClawJson — per-agent slice", () => {
   });
 });
 
+
+// ── renderAgentOpenClawJson — cacheRetention forwarding ─────────────────────
+
+describe("renderAgentOpenClawJson — cacheRetention forwarding", () => {
+  test("emits agents.defaults.params.cacheRetention when set in fleet defaults", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+    fleet.agents.defaults = {
+      ...fleet.agents.defaults,
+      params: { cacheRetention: "short" },
+    };
+
+    const json = renderAgentOpenClawJson(fleet, "conductor") as {
+      agents: { defaults: { params?: { cacheRetention?: string }; models?: Record<string, { params?: { cacheRetention?: string } }> } };
+    };
+    assert.equal(
+      json.agents.defaults.params?.cacheRetention,
+      "short",
+      'agents.defaults.params.cacheRetention must be "short"'
+    );
+  });
+
+  test("emits agents.defaults.models per-model override when set", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
+    fleet.agents.defaults = {
+      ...fleet.agents.defaults,
+      params: { cacheRetention: "short" },
+      models: {
+        "anthropic/claude-sonnet-4-6": { params: { cacheRetention: "long" } },
+      },
+    };
+
+    const json = renderAgentOpenClawJson(fleet, "conductor") as {
+      agents: { defaults: { params?: { cacheRetention?: string }; models?: Record<string, { params?: { cacheRetention?: string } }> } };
+    };
+    assert.equal(
+      json.agents.defaults.params?.cacheRetention,
+      "short",
+      'global default must be "short"'
+    );
+    assert.equal(
+      json.agents.defaults.models?.["anthropic/claude-sonnet-4-6"]?.params?.cacheRetention,
+      "long",
+      'per-model Sonnet override must be "long"'
+    );
+  });
+
+  test("omits agents.defaults.params when not set in fleet defaults", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent()];
+    fleet.agents.defaults = { model: "anthropic/claude-haiku-4-5", workspace_base: "/opt/openclaw/workspace", plugins: ["anthropic"] };
+
+    const json = renderAgentOpenClawJson(fleet, "conductor") as {
+      agents: { defaults: { params?: unknown; models?: unknown } };
+    };
+    assert.equal(json.agents.defaults.params, undefined, "params must be absent when not configured");
+    assert.equal(json.agents.defaults.models, undefined, "models must be absent when not configured");
+  });
+});
+
 // ── writeOutputs — per-agent file layout ──────────────────────────────────────
 
 describe("writeOutputs — per-agent file layout", () => {
