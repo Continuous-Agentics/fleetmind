@@ -10,6 +10,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Fleet, AgentConfig, CronSweepConfig } from "../config/schema.js";
 import { installSkill } from "./resolver.js";
 import { log } from "../utils/log.js";
@@ -88,9 +89,16 @@ function applyPlaceholders(text: string, agent: AgentConfig, fleet?: Fleet): str
   return result;
 }
 
+/**
+ * Absolute path to the fleetmind package root (where `openclaw/` lives).
+ * Resolved from this file's own location so it works regardless of what
+ * directory the operator runs `fleetmind` from.
+ */
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+
 function readRoleTemplate(role: string, filename: string): string | null {
   const dir = workspaceTemplatePath(role) ?? workspaceTemplatePath("worker")!;
-  const filePath = path.resolve(process.cwd(), dir, filename);
+  const filePath = path.resolve(PACKAGE_ROOT, dir, filename);
   if (!fs.existsSync(filePath)) return null;
   return fs.readFileSync(filePath, "utf8");
 }
