@@ -44,6 +44,7 @@ import {
 import {
   SSMClient,
   SendCommandCommand,
+  GetCommandInvocationCommand,
   DescribeInstanceInformationCommand,
 } from "@aws-sdk/client-ssm";
 
@@ -107,6 +108,10 @@ export interface PushFleetDeps {
    * Send an SSM run-shell-script command. Returns the command ID.
    */
   sendSsmCommand?: (instanceId: string, commands: string[], region: string) => Promise<string>;
+  /**
+   * Poll an SSM command until terminal. Injectable for testing.
+   */
+  pollSsmCommand?: typeof pollSsmCommand;
   /** Override the lock acquire/release for testing. */
   acquireLock?: (bucket: string, region: string) => Promise<void>;
   releaseLock?: (bucket: string, region: string) => Promise<void>;
@@ -293,6 +298,38 @@ async function defaultSendSsmCommand(
   return resp.Command?.CommandId ?? "";
 }
 
+/**
+ * Poll an SSM command invocation until it reaches a terminal state.
+ * Resolves with the final status; rejects on timeout.
+ *
+ * Terminal states: Success | Failed | TimedOut | Cancelled | DeliveryTimedOut
+ */
+async function pollSsmCommand(
+  commandId: string,
+  instanceId: string,
+  region: string,
+  { intervalMs = 3000, timeoutMs = 180_000 } = {}
+): Promise<{ status: string; stdout: string; stderr: string }> {
+  const ssm = new SSMClient({ region });
+  const terminal = new Set(["Success", "Failed", "TimedOut", "Cancelled", "DeliveryTimedOut"]);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const resp = await ssm.send(
+      new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: instanceId })
+    );
+    const status = resp.Status ?? "Pending";
+    if (terminal.has(status)) {
+      return {
+        status,
+        stdout: resp.StandardOutputContent ?? "",
+        stderr: resp.StandardErrorContent ?? "",
+      };
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new Error(`SSM command ${commandId} did not reach a terminal state within ${timeoutMs}ms`);
+}
+
 // ── Fleet-wide S3 lock ───────────────────────────────────────────────────────
 
 const LOCK_KEY = "deploy-staging/lock.json";
@@ -477,6 +514,7 @@ export async function runPushFleet(
   const uploadToS3 = deps.uploadToS3 ?? defaultUploadToS3;
   const lookupInstance = deps.lookupInstance ?? defaultLookupInstance;
   const sendSsmCommand = deps.sendSsmCommand ?? defaultSendSsmCommand;
+  const pollSsmCommandFn = deps.pollSsmCommand ?? pollSsmCommand;
   const acquireLockFn = deps.acquireLock ?? acquireLock;
   const releaseLockFn = deps.releaseLock ?? releaseLock;
   const archiveToHistoryFn = deps.archiveToHistory ?? archiveToHistory;
@@ -644,20 +682,36 @@ export async function runPushFleet(
           results.push({ agent_id: agentId, status: "pushed", reason: "instance not in SSM" });
         } else {
           const restartFlag = opts.restart ? " --restart" : "";
-          // A failed upgrade must hard-stop the script — running pull-self
-          // on a stale binary is worse than doing nothing. Use the correct
-          // self-upgrade flag: --latest for the 'latest' tag, --version <x>
-          // for a pinned semver. Also requires sudo since self-upgrade
-          // asserts euid === 0.
-          const upgradeFlag = opts.upgradeCli === 'latest'
-            ? '--latest'
-            : `--version ${opts.upgradeCli}`;
-          const upgradeStep = opts.upgradeCli
-            ? `timeout 120 sudo fleetmind self-upgrade ${upgradeFlag} --apply && `
-            : "";
-          const cmd = `${upgradeStep}sudo -u ec2-user fleetmind pull-self --apply${restartFlag} --region ${region}`;
-          log.step(`    sending SSM command to ${instanceId}...`);
-          const cmdId = await sendSsmCommand(instanceId, [cmd], region);
+
+          // ── Phase 1: CLI upgrade (separate SSM command, polled to completion) ──
+          // Sending upgrade and pull-self as a single chained shell string is
+          // unsafe: a silent failure in the upgrade step (wrong flags, missing
+          // sudo, npm auth error) falls through to pull-self on a stale binary.
+          // Instead: send the upgrade as its own SSM command, poll for exit 0,
+          // then send pull-self only if the upgrade succeeded.
+          if (opts.upgradeCli) {
+            const upgradeFlag = opts.upgradeCli === 'latest'
+              ? '--latest'
+              : `--version ${opts.upgradeCli}`;
+            const upgradeCmd = `sudo fleetmind self-upgrade ${upgradeFlag} --apply`;
+            log.step(`    [1/2] sending upgrade command to ${instanceId}...`);
+            const upgradeCmdId = await sendSsmCommand(instanceId, [upgradeCmd], region);
+            log.dim(`    polling upgrade: aws ssm get-command-invocation --command-id ${upgradeCmdId} --instance-id ${instanceId} --region ${region}`);
+            const upgradeResult = await pollSsmCommandFn(upgradeCmdId, instanceId, region);
+            if (upgradeResult.status !== "Success") {
+              log.error(`  ${agentId}: CLI upgrade failed (status=${upgradeResult.status}) — pull-self aborted to avoid running stale binary`);
+              if (upgradeResult.stderr) log.dim(`    stderr: ${upgradeResult.stderr.trim()}`);
+              if (upgradeResult.stdout) log.dim(`    stdout: ${upgradeResult.stdout.trim()}`);
+              results.push({ agent_id: agentId, status: "error", reason: `self-upgrade ${upgradeResult.status}` });
+              continue;
+            }
+            log.ok(`  ${agentId}: CLI upgraded successfully`);
+          }
+
+          // ── Phase 2: pull-self ───────────────────────────────────────────────
+          const pullCmd = `sudo -u ec2-user fleetmind pull-self --apply${restartFlag} --region ${region}`;
+          log.step(`    ${opts.upgradeCli ? '[2/2] ' : ''}sending pull-self command to ${instanceId}...`);
+          const cmdId = await sendSsmCommand(instanceId, [pullCmd], region);
           log.ok(`  ${agentId}: SSM command sent → ${cmdId}`);
           log.dim(`    follow up: aws ssm get-command-invocation --command-id ${cmdId} --instance-id ${instanceId} --region ${region}`);
           results.push({ agent_id: agentId, status: "pushed", ssm_command_id: cmdId });
