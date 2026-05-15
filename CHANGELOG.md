@@ -6,6 +6,16 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-05-15
+
+### Added
+
+- **`MEMORY.md` template** — added to all four bot types with an AUTO-tagged `## Active Tasks` section. Shipped on every push; section merge updates AUTO sections while preserving bot-written content. ([#167](https://github.com/Continuous-Agentics/fleetmind/pull/167))
+
+### Removed
+
+- **`PATCHES.md` templates** — removed from all bot types. The patch mechanism was a workaround for files overwritten on every push; section merge makes it redundant. Patch engine in `pull-self` retained (harmless, idempotent on agents with existing `PATCHES.md`). ([#167](https://github.com/Continuous-Agentics/fleetmind/pull/167))
+
 ## [0.6.2] — 2026-05-15
 
 ### Fixed
