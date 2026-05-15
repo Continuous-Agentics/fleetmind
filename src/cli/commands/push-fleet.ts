@@ -644,11 +644,16 @@ export async function runPushFleet(
           results.push({ agent_id: agentId, status: "pushed", reason: "instance not in SSM" });
         } else {
           const restartFlag = opts.restart ? " --restart" : "";
-          // Non-fatal: a timeout or auth failure during upgrade must not
-          // block pull-self. '|| true' ensures the command continues even
-          // if self-upgrade hangs or errors.
+          // A failed upgrade must hard-stop the script — running pull-self
+          // on a stale binary is worse than doing nothing. Use the correct
+          // self-upgrade flag: --latest for the 'latest' tag, --version <x>
+          // for a pinned semver. Also requires sudo since self-upgrade
+          // asserts euid === 0.
+          const upgradeFlag = opts.upgradeCli === 'latest'
+            ? '--latest'
+            : `--version ${opts.upgradeCli}`;
           const upgradeStep = opts.upgradeCli
-            ? `timeout 120 fleetmind self-upgrade --version ${opts.upgradeCli} --apply || true && `
+            ? `timeout 120 sudo fleetmind self-upgrade ${upgradeFlag} --apply && `
             : "";
           const cmd = `${upgradeStep}sudo -u ec2-user fleetmind pull-self --apply${restartFlag} --region ${region}`;
           log.step(`    sending SSM command to ${instanceId}...`);
