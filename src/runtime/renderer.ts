@@ -116,9 +116,31 @@ export function renderAgentOpenClawJson(
     pluginEntries[plugin] = { enabled: true };
   }
 
+  // agents.defaults.params — forward cacheRetention (and any future top-level params)
+  // agents.defaults.models — forward per-model param overrides (e.g. long TTL for Sonnet)
+  const defaultsParams = defaults.params && Object.keys(defaults.params).length > 0
+    ? defaults.params
+    : undefined;
+  const defaultsModels = defaults.models && Object.keys(defaults.models).length > 0
+    ? defaults.models
+    : undefined;
+
   return {
     agents: {
-      defaults: { model: { primary: defaults.model } },
+      defaults: {
+        model: { primary: defaults.model },
+        ...(defaultsParams ? { params: defaultsParams } : {}),
+        ...(defaultsModels
+          ? {
+              models: Object.fromEntries(
+                Object.entries(defaultsModels).map(([modelKey, override]) => [
+                  modelKey,
+                  { params: override.params },
+                ])
+              ),
+            }
+          : {}),
+      },
       list: [agentListEntry],
     },
     bindings,

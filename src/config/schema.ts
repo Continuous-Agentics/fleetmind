@@ -207,10 +207,39 @@ export const AgentSchema = z.object({
   github_app: GitHubAppConfigSchema.optional(),
 });
 
+/**
+ * Per-agent or per-model prompt-caching retention policy.
+ * Maps directly to OpenClaw's `agents.defaults.params.cacheRetention`.
+ *
+ * - "none"  — caching disabled
+ * - "short" — 5-minute ephemeral cache (Anthropic default)
+ * - "long"  — 1-hour cache TTL (Anthropic direct / Vertex only)
+ */
+export const CacheRetentionSchema = z.enum(["none", "short", "long"]);
+export type CacheRetention = z.infer<typeof CacheRetentionSchema>;
+
+/** OpenClaw agent params that flow through to agents.defaults.params. */
+export const AgentParamsSchema = z.object({
+  /** Prompt-cache retention policy for this agent. */
+  cacheRetention: CacheRetentionSchema.optional(),
+});
+export type AgentParams = z.infer<typeof AgentParamsSchema>;
+
+/** Per-model param overrides (keyed by "provider/model" string). */
+export const AgentModelOverridesSchema = z.record(
+  z.string(),
+  z.object({ params: AgentParamsSchema.optional() })
+);
+export type AgentModelOverrides = z.infer<typeof AgentModelOverridesSchema>;
+
 export const AgentDefaultsSchema = z.object({
   model: z.string().default("anthropic/claude-sonnet-4-6"),
   workspace_base: z.string().default("/home/ec2-user/.openclaw"),
   plugins: z.array(z.string()).default(["anthropic"]),
+  /** Global default params applied to all agents (unless overridden). */
+  params: AgentParamsSchema.optional(),
+  /** Per-model param overrides (keyed by "provider/model" string). */
+  models: AgentModelOverridesSchema.optional(),
 });
 
 export const AgentsConfigSchema = z.object({
