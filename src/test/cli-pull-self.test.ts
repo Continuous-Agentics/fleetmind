@@ -685,6 +685,31 @@ describe("mergeMarkdownSections", () => {
     assert.ok(!result.includes("Old Title"), "old preamble replaced");
   });
 
+  test("merge output is byte-stable on repeated application (no sha256 drift)", () => {
+    // If mergeMarkdownSections is applied twice, the output must be identical
+    // to the first application so pull-self does not keep re-touching the file.
+    const incoming = [
+      "# File",
+      "",
+      AUTO_SECTION_TAG,
+      "## Operator",
+      "Operator content.",
+    ].join("\n");
+    const local = [
+      "# File",
+      "",
+      AUTO_SECTION_TAG,
+      "## Operator",
+      "Old content.",
+      "",
+      "## Bot Section",
+      "Bot content.",
+    ].join("\n");
+    const first = mergeMarkdownSections(local, incoming)!;
+    const second = mergeMarkdownSections(first, incoming)!;
+    assert.equal(first, second, "repeated merge must produce identical output");
+  });
+
   test("AUTO_SECTION_TAG is present in merged output for operator sections", () => {
     const incoming = AUTO_SECTION_TAG + "\n## Section\nContent.";
     const local = AUTO_SECTION_TAG + "\n## Section\nOld content.";

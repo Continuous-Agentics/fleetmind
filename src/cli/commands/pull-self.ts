@@ -192,6 +192,23 @@ function formatSection(s: MarkdownSection): string {
 }
 
 /**
+ * Detect the inter-section separator used by a file so the merged output
+ * uses the same spacing and does not cause sha256 drift on repeated pushes.
+ *
+ * Looks for blank lines between a section body and the next heading (or tag).
+ * Defaults to a single blank line ("\n\n") if the pattern cannot be determined.
+ */
+function detectSectionSeparator(content: string): string {
+  // Match: end of body content, then one or more blank lines, then a heading
+  // or AUTO tag. Count the blank lines between them.
+  const m = content.match(/\S(\n+)(?:<!--\s*AUTO SECTION\s*-->\n)?#{2,6} /);
+  if (!m) return "\n\n";
+  // m[1] is the run of newlines after the last non-whitespace body character.
+  // Two newlines = one blank line; three = two blank lines, etc.
+  return m[1]!.length >= 3 ? "\n\n\n" : "\n\n";
+}
+
+/**
  * Merge two Markdown files using AUTO SECTION semantics.
  *
  * Rules:
@@ -199,6 +216,9 @@ function formatSection(s: MarkdownSection): string {
  *   2. AUTO-tagged sections in incoming → always overwrite/add (operator-owned).
  *   3. Untagged sections in local not matched by any incoming AUTO section
  *      → preserved at the end (bot-added).
+ *
+ * Separator between sections is inferred from the incoming file so the merged
+ * output is byte-stable on repeated pushes (no sha256 drift).
  *
  * If incoming has zero AUTO-tagged sections the file is returned unchanged
  * (no tags = not a managed file; fall back to normal overwrite).
@@ -216,28 +236,29 @@ export function mergeMarkdownSections(
   if (autoSections.length === 0) return null;
 
   const localParsed = parseMarkdownSections(local);
+  const sep = detectSectionSeparator(incoming);
 
-  const result: string[] = [];
+  const parts: string[] = [];
 
   // Preamble from incoming (operator owns the file title and intro)
-  if (incomingParsed.preamble) result.push(incomingParsed.preamble);
+  if (incomingParsed.preamble) parts.push(incomingParsed.preamble);
 
   const includedKeys = new Set<string>();
 
   // AUTO sections from incoming — operator-owned, always current
   for (const s of autoSections) {
-    result.push(formatSection(s));
+    parts.push(formatSection(s));
     includedKeys.add(s.headingKey);
   }
 
   // Bot-added sections: in local but not in any incoming AUTO section
   for (const s of localParsed.sections) {
     if (!includedKeys.has(s.headingKey)) {
-      result.push(formatSection(s));
+      parts.push(formatSection(s));
     }
   }
 
-  return result.join("\n\n") + "\n";
+  return parts.join(sep) + "\n";
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
