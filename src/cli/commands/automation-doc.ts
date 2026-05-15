@@ -65,12 +65,7 @@ export function buildDocumentContent(): string {
         type: "String",
         description:
           "Arguments for 'fleetmind pull-self', e.g. '--apply --restart --region us-west-2'.",
-      },
-      AutomationAssumeRole: {
-        type: "String",
-        description:
-          "IAM role ARN for the automation to assume. Leave empty to use the caller's permissions.",
-        default: "",
+        default: "--apply",
       },
     },
     mainSteps: [
@@ -174,7 +169,13 @@ export async function ensureAutomationDocument(
     }
   }
 
-  if (existingContent !== null && sha256(existingContent) === contentDigest) {
+  // Normalize both sides before comparing to guard against SSM reformatting
+  // JSON on ingest (e.g. key reordering, whitespace changes). Parsing and
+  // re-serializing both strings ensures we compare semantics, not formatting.
+  const normalize = (s: string): string => {
+    try { return JSON.stringify(JSON.parse(s)); } catch { return s; }
+  };
+  if (existingContent !== null && normalize(existingContent) === normalize(content)) {
     log.dim(`  SSM document '${docName}' is current`);
     return docName;
   }

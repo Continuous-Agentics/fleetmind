@@ -321,6 +321,11 @@ async function defaultSendSsmCommand(
  * The automation document is responsible for step sequencing and failure
  * handling — the operator fires this and monitors via the returned ID.
  * No operator-side polling; SSM owns the state machine.
+ *
+ * Service role: passed as ServiceRoleArn on the API call (not as the
+ * AutomationAssumeRole document parameter, which we don't use). The document
+ * does not declare AutomationAssumeRole — role assumption is handled here
+ * at the API layer so the document stays simple and reusable.
  */
 async function defaultStartAutomation(
   docName: string,
