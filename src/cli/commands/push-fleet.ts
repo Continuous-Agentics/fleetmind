@@ -844,6 +844,7 @@ Upgrade behaviour:
     ssm:GetDocument
     ssm:CreateDocument
     ssm:UpdateDocument
+    ssm:UpdateDocumentDefaultVersion
     ssm:StartAutomationExecution
   These are in addition to the permissions already required for a normal push
   (ssm:DescribeInstanceInformation, ssm:SendCommand, s3:PutObject, etc.).

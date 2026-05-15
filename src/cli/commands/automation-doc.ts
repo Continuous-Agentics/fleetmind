@@ -211,15 +211,23 @@ export async function ensureAutomationDocument(
       })
     );
     const newVersion = updateResp.DocumentDescription?.DocumentVersion;
-    if (newVersion) {
-      await ssm.send(
-        new UpdateDocumentDefaultVersionCommand({
-          Name: docName,
-          DocumentVersion: newVersion,
-        })
+    if (!newVersion) {
+      // This should never happen — SSM always returns the new version number
+      // in the UpdateDocument response. If it does, failing loudly is safer
+      // than proceeding: without UpdateDocumentDefaultVersion, automations
+      // would silently keep running the old default version.
+      throw new Error(
+        `SSM UpdateDocument for '${docName}' succeeded but returned no DocumentVersion. ` +
+        `Cannot advance default version — aborting to avoid running stale document content.`
       );
     }
-    log.ok(`  Updated SSM document '${docName}' (now default version ${newVersion ?? "unknown"})`);
+    await ssm.send(
+      new UpdateDocumentDefaultVersionCommand({
+        Name: docName,
+        DocumentVersion: newVersion,
+      })
+    );
+    log.ok(`  Updated SSM document '${docName}' (now default version ${newVersion})`);
   }
 
   return docName;
