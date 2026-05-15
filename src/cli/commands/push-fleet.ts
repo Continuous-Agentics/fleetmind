@@ -337,6 +337,11 @@ async function defaultStartAutomation(
   const resp = await ssm.send(
     new StartAutomationExecutionCommand({
       DocumentName: docName,
+      // Use $LATEST so automations always run the current document version.
+      // ensureAutomationDocument also calls UpdateDocumentDefaultVersionCommand
+      // after each update, but being explicit here defends against any edge
+      // case where $DEFAULT lags behind (e.g. concurrent update, manual edit).
+      DocumentVersion: "$LATEST",
       Parameters: parameters,
       ...(serviceRoleArn ? { ServiceRoleArn: serviceRoleArn } : {}),
     })

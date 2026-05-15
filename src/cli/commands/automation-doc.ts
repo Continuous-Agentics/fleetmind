@@ -24,10 +24,10 @@ import {
   SSMClient,
   CreateDocumentCommand,
   UpdateDocumentCommand,
+  UpdateDocumentDefaultVersionCommand,
   GetDocumentCommand,
   DocumentAlreadyExists,
 } from "@aws-sdk/client-ssm";
-import crypto from "node:crypto";
 import { log } from "../../utils/log.js";
 
 // ── Document definition ───────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ export function buildDocumentContent(): string {
               "  echo 'UpgradeFlag is empty — skipping CLI upgrade'",
               "  exit 0",
               "fi",
-              "echo \"Running: sudo fleetmind self-upgrade $FLAG --apply\"",
+              "echo \"Running: sudo fleetmind self-upgrade \\\"$FLAG\\\" --apply\"",
               "sudo fleetmind self-upgrade \"$FLAG\" --apply",
             ],
           },
@@ -120,10 +120,6 @@ export function buildDocumentContent(): string {
   return JSON.stringify(doc, null, 2);
 }
 
-/** Stable sha256 hash of a string. */
-function sha256(content: string): string {
-  return crypto.createHash("sha256").update(content).digest("hex");
-}
 
 /** SSM Automation document name for a fleet. */
 export function documentName(fleetName: string): string {
@@ -149,10 +145,9 @@ export async function ensureAutomationDocument(
   const ssm = deps.ssmClient ?? new SSMClient({ region });
   const docName = documentName(fleetName);
   const content = buildDocumentContent();
-  const contentDigest = sha256(content);
 
   // Check whether the document exists and whether its content matches.
-  // We use GetDocument to retrieve the actual content and compare hashes
+  // We use GetDocument to retrieve the actual content and compare semantics
   // directly — more reliable than embedding a hash in the description field,
   // which breaks silently if the document is edited manually in the console.
   let existingContent: string | null = null;
@@ -202,9 +197,12 @@ export async function ensureAutomationDocument(
       }
     }
   } else {
-    // Update
+    // Update: create a new document version then advance the default so that
+    // StartAutomationExecution (which uses $DEFAULT when no DocumentVersion is
+    // specified) picks up the new content. Without this second call, the update
+    // creates a new version but automations keep running the old default.
     log.step(`  Updating SSM Automation document '${docName}' (content changed)...`);
-    await ssm.send(
+    const updateResp = await ssm.send(
       new UpdateDocumentCommand({
         Name: docName,
         Content: content,
@@ -212,7 +210,16 @@ export async function ensureAutomationDocument(
         DocumentVersion: "$LATEST",
       })
     );
-    log.ok(`  Updated SSM document '${docName}'`);
+    const newVersion = updateResp.DocumentDescription?.DocumentVersion;
+    if (newVersion) {
+      await ssm.send(
+        new UpdateDocumentDefaultVersionCommand({
+          Name: docName,
+          DocumentVersion: newVersion,
+        })
+      );
+    }
+    log.ok(`  Updated SSM document '${docName}' (now default version ${newVersion ?? "unknown"})`);
   }
 
   return docName;
