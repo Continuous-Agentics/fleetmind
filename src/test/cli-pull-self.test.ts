@@ -789,8 +789,8 @@ describe("applyDiff — markdown section merge", () => {
 // ── Tests: isProtectedPath ────────────────────────────────────────────────
 
 describe("isProtectedPath", () => {
-  test("MEMORY.md exact match is protected", () => {
-    assert.equal(isProtectedPath("MEMORY.md"), true);
+  test("MEMORY.md is NOT protected — operator may push AUTO-tagged sections via merge", () => {
+    assert.equal(isProtectedPath("MEMORY.md"), false);
   });
 
   test("files inside memory/ are protected", () => {
@@ -851,14 +851,16 @@ describe("isProtectedPath", () => {
 // ── Tests: computeDiff — protected paths ─────────────────────────────────────────
 
 describe("computeDiff — protected paths", () => {
-  test("MEMORY.md absent from incoming is not listed as deleted", () => {
+  test("MEMORY.md absent from incoming IS listed as deleted (operator may remove it to reset)", () => {
     const current: ManifestFile[] = [
       makeFile("AGENTS.md"),
       makeFile("MEMORY.md"),
     ];
     const incoming: ManifestFile[] = [makeFile("AGENTS.md")];
     const diff = computeDiff(current, incoming);
-    assert.equal(diff.deleted.length, 0, "MEMORY.md must not appear in deleted");
+    // MEMORY.md is not in PROTECTED_PATHS — it goes through section merge, not hard protection
+    assert.equal(diff.deleted.length, 1);
+    assert.equal(diff.deleted[0]?.path, "MEMORY.md");
   });
 
   test("files under memory/ absent from incoming are not listed as deleted", () => {
@@ -888,7 +890,6 @@ describe("computeDiff — protected paths", () => {
   test("non-protected files absent from incoming ARE listed as deleted", () => {
     const current: ManifestFile[] = [
       makeFile("AGENTS.md"),
-      makeFile("MEMORY.md"),
       makeFile("skills/old/SKILL.md"),
     ];
     const incoming: ManifestFile[] = [makeFile("AGENTS.md")];
@@ -917,19 +918,19 @@ describe("applyDiff — protected paths (defence-in-depth)", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("MEMORY.md is not deleted even when in diff.deleted", () => {
-    const memPath = path.join(workspaceDir, "MEMORY.md");
-    fs.writeFileSync(memPath, "# Memory", "utf-8");
+  test("USER.md is not deleted even when in diff.deleted", () => {
+    const userPath = path.join(workspaceDir, "USER.md");
+    fs.writeFileSync(userPath, "# User", "utf-8");
 
     const diff: FileDiff = {
       added: [],
       modified: [],
-      deleted: [{ path: "MEMORY.md", size: 8, sha256: "x", mode: 644 }],
+      deleted: [{ path: "USER.md", size: 6, sha256: "x", mode: 644 }],
     };
 
     applyDiff(stagingDir, workspaceDir, diff);
 
-    assert.ok(fs.existsSync(memPath), "MEMORY.md must survive applyDiff even if listed in deleted");
+    assert.ok(fs.existsSync(userPath), "USER.md must survive applyDiff even if listed in deleted");
   });
 
   test("memory/ files are not deleted even when in diff.deleted", () => {
