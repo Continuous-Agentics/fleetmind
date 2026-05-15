@@ -147,10 +147,13 @@ describe("deploy local-render-path regression", () => {
     const expectedWorkspace = path.join(tmpDir, "rendered", "workspaces", "conductor");
     assert.ok(fs.existsSync(expectedWorkspace), `workspace dir should exist at ${expectedWorkspace}`);
 
-    // The absolute EC2-side dir must NOT exist on this machine.
+    // The agent's dir must NOT have been created inside workspace_base on this machine.
+    // (Checking the agent subpath, not workspace_base itself, so the test is resilient
+    // to workspace_base pre-existing — e.g. when run on an agent EC2.)
+    const wrongAgentDir = path.join(EC2_WORKSPACE_BASE, agent.id);
     assert.ok(
-      !fs.existsSync(EC2_WORKSPACE_BASE),
-      `workspace_base ${EC2_WORKSPACE_BASE} must NOT be created locally`
+      !fs.existsSync(wrongAgentDir),
+      `provisionAgent must NOT create ${wrongAgentDir} locally`
     );
   });
 

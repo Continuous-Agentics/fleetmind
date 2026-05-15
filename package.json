@@ -47,7 +47,8 @@
     "build": "tsc",
     "dev": "tsx src/cli/index.ts",
     "lint": "eslint src/",
-    "test": "node --import tsx/esm --test 'src/test/**/*.test.ts'"
+    "test": "node --test 'dist/test/**/*.test.js'",
+    "test:dev": "node --import tsx/esm --test 'src/test/**/*.test.ts'"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1037.0",
