@@ -6,6 +6,19 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-15
+
+### Added
+
+- **Agent-owned file protection in `pull-self`.** `PROTECTED_PATHS` constant guards `memory/`, `.openclaw/`, `.cache/`, `.local/`, `.npm/`, `USER.md`, and `TOOLS.md` from deletion and modification during `push fleet --apply`. Protection is applied at two layers: `computeDiff` (primary — protected files never appear as deletion candidates) and `applyDiff` (defence-in-depth — also guarded in the modified loop). Agent memory and runtime state now survive every push. ([#164](https://github.com/Continuous-Agentics/fleetmind/pull/164))
+- **Section-aware merge for `.md` workspace files.** Operator-managed sections are marked with `<!-- AUTO SECTION -->` on the line before any `##` heading. On `pull-self --apply`, AUTO-tagged sections are always taken from the incoming manifest (operator wins); untagged sections added by bots are preserved. `MEMORY.md` participates in the merge (not hard-protected) so operators can push fleet facts into it. Merge separator is inferred from the incoming file to prevent sha256 drift on repeated pushes (idempotent). ([#164](https://github.com/Continuous-Agentics/fleetmind/pull/164))
+- **`<!-- AUTO SECTION -->` tagging across all role templates.** All `##` sections in `AGENTS.md`, `SOUL.md`, `PATCHES.md`, and new `HEARTBEAT.md` templates tagged for worker-bot, pm-bot, backend-worker-bot, and frontend-worker-bot. New `HEARTBEAT.md` template added to all bot types. ([#164](https://github.com/Continuous-Agentics/fleetmind/pull/164))
+
+### Fixed
+
+- **`push-fleet --upgrade-cli` now uses SSM Automation document for two-step sequencing.** Previously, upgrade + pull-self were chained in a single shell string with `|| true`, which silently swallowed upgrade failures and ran pull-self against a stale CLI. Now uses an SSM Automation document (`fleetmind-upgrade-<fleet>`) that sequences the steps server-side: upgrade CLI → verify → pull-self. Operator fires one call and monitors via `AutomationExecutionId`; no operator-side polling required. ([#162](https://github.com/Continuous-Agentics/fleetmind/pull/162))
+- **New `automation-doc` command** manages the SSM Automation document lifecycle (create/update, default-version advancement, content-hash comparison guarded against SSM JSON reformatting). ([#162](https://github.com/Continuous-Agentics/fleetmind/pull/162))
+
 ## [0.5.3] — 2026-05-15
 
 ### Added
