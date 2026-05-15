@@ -6,6 +6,13 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-05-15
+
+### Fixed
+
+- **`.config/` missing from `PROTECTED_PATHS`** — `.config/` is agent-generated (configstore, pip, git config state) and was being shown as deleted on push. Added alongside `.cache/`, `.local/`, `.npm/`. ([#165](https://github.com/Continuous-Agentics/fleetmind/pull/165))
+- **`HEARTBEAT.md` and `PATCHES.md` not included in push-fleet manifest** — Both templates existed in `openclaw/*/workspace/` but `provisionAgent` never wrote them to `rendered/workspaces/<agent>/`, so they never reached the push-fleet S3 manifest and appeared as deleted on agents. Wired both into `provisionAgent` using the same `readRoleTemplate` pattern as `SOUL.md`/`AGENTS.md`/`IDENTITY.md`. Added regression test. ([#165](https://github.com/Continuous-Agentics/fleetmind/pull/165))
+
 ## [0.6.0] — 2026-05-15
 
 ### Added
