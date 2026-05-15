@@ -11,6 +11,9 @@
  *   - isProtectedPath: correct classification of agent-owned paths
  *   - computeDiff — protected paths: MEMORY.md/memory//.openclaw/memory/ never appear in deleted
  *   - applyDiff — protected paths: defence-in-depth guard inside applyDiff
+ *   - parseMarkdownSections: preamble, headings, auto-tag detection
+ *   - mergeMarkdownSections: operator wins on AUTO sections, bot additions preserved
+ *   - applyDiff — markdown merge: .md files use section merge, not overwrite
  *   - applyDiff: added files created, modified files renamed, deleted files removed
  *   - runPullSelf — no changes: early exit, no S3 download needed beyond manifest
  *   - runPullSelf — dry-run: shows diff, does not extract
@@ -36,6 +39,9 @@ import {
   runPullSelf,
   isProtectedPath,
   PROTECTED_PATHS,
+  parseMarkdownSections,
+  mergeMarkdownSections,
+  AUTO_SECTION_TAG,
   type ManifestFile,
   type DeployManifest,
   type FileDiff,
@@ -537,6 +543,249 @@ describe("runPullSelf — --apply", () => {
   });
 });
 
+// ── Tests: parseMarkdownSections ──────────────────────────────────────────────
+
+describe("parseMarkdownSections", () => {
+  test("extracts preamble before first heading", () => {
+    const md = `# Title\n\nIntro text.\n\n## Section`;
+    const parsed = parseMarkdownSections(md);
+    assert.ok(parsed.preamble.includes("# Title"), "preamble includes file title");
+    assert.ok(parsed.preamble.includes("Intro text."), "preamble includes intro");
+    assert.equal(parsed.sections.length, 1);
+    assert.equal(parsed.sections[0]?.heading, "## Section");
+  });
+
+  test("sets autoTagged=true for heading preceded by AUTO_SECTION_TAG", () => {
+    const md = `# Title\n\n${AUTO_SECTION_TAG}\n## Operator Section\nContent.`;
+    const parsed = parseMarkdownSections(md);
+    assert.equal(parsed.sections.length, 1);
+    assert.equal(parsed.sections[0]?.autoTagged, true);
+    assert.equal(parsed.sections[0]?.heading, "## Operator Section");
+  });
+
+  test("sets autoTagged=false for untagged headings", () => {
+    const md = `## Bot Section\nBot content.`;
+    const parsed = parseMarkdownSections(md);
+    assert.equal(parsed.sections[0]?.autoTagged, false);
+  });
+
+  test("AUTO_SECTION_TAG line is not included in any section body", () => {
+    const md = `${AUTO_SECTION_TAG}\n## Section\nContent.`;
+    const parsed = parseMarkdownSections(md);
+    assert.ok(!parsed.sections[0]?.body.includes(AUTO_SECTION_TAG));
+  });
+
+  test("handles multiple sections with mixed tagging", () => {
+    const md = [
+      "# File",
+      "",
+      AUTO_SECTION_TAG,
+      "## Operator",
+      "Op content.",
+      "",
+      "## Bot Added",
+      "Bot content.",
+    ].join("\n");
+    const parsed = parseMarkdownSections(md);
+    assert.equal(parsed.sections.length, 2);
+    assert.equal(parsed.sections[0]?.autoTagged, true);
+    assert.equal(parsed.sections[0]?.headingKey, "operator");
+    assert.equal(parsed.sections[1]?.autoTagged, false);
+    assert.equal(parsed.sections[1]?.headingKey, "bot added");
+  });
+
+  test("normalises headingKey to lower-case text without hashes", () => {
+    const md = `## What You Do\nContent.`;
+    const parsed = parseMarkdownSections(md);
+    assert.equal(parsed.sections[0]?.headingKey, "what you do");
+  });
+});
+
+// ── Tests: mergeMarkdownSections ────────────────────────────────────────────
+
+describe("mergeMarkdownSections", () => {
+  test("returns null when incoming has no AUTO sections (no-op signal)", () => {
+    const local = "## Section\nContent.";
+    const incoming = "## Section\nNew content.";
+    assert.equal(mergeMarkdownSections(local, incoming), null);
+  });
+
+  test("AUTO section from incoming overwrites matching local section", () => {
+    const local = [
+      "# File",
+      "",
+      AUTO_SECTION_TAG,
+      "## Role",
+      "Old operator content.",
+    ].join("\n");
+    const incoming = [
+      "# File",
+      "",
+      AUTO_SECTION_TAG,
+      "## Role",
+      "Updated operator content.",
+    ].join("\n");
+    const result = mergeMarkdownSections(local, incoming)!;
+    assert.ok(result.includes("Updated operator content."), "incoming AUTO content wins");
+    assert.ok(!result.includes("Old operator content."), "old content removed");
+  });
+
+  test("bot-added sections in local are preserved", () => {
+    const local = [
+      "# File",
+      "",
+      AUTO_SECTION_TAG,
+      "## Operator Section",
+      "Operator content.",
+      "",
+      "## My Bot Notes",
+      "Bot-added content.",
+    ].join("\n");
+    const incoming = [
+      "# File",
+      "",
+      AUTO_SECTION_TAG,
+      "## Operator Section",
+      "Updated operator content.",
+    ].join("\n");
+    const result = mergeMarkdownSections(local, incoming)!;
+    assert.ok(result.includes("Bot-added content."), "bot section preserved");
+    assert.ok(result.includes("Updated operator content."), "operator update applied");
+  });
+
+  test("new AUTO sections in incoming are added even if absent from local", () => {
+    const local = [
+      "# File",
+      "",
+      AUTO_SECTION_TAG,
+      "## Existing",
+      "Content.",
+    ].join("\n");
+    const incoming = [
+      "# File",
+      "",
+      AUTO_SECTION_TAG,
+      "## Existing",
+      "Content.",
+      "",
+      AUTO_SECTION_TAG,
+      "## New Operator Section",
+      "Newly added by operator.",
+    ].join("\n");
+    const result = mergeMarkdownSections(local, incoming)!;
+    assert.ok(result.includes("New Operator Section"), "new AUTO section added");
+    assert.ok(result.includes("Newly added by operator."), "new AUTO content included");
+  });
+
+  test("preamble is taken from incoming", () => {
+    const local = "# Old Title\n\nOld intro.\n\n" + AUTO_SECTION_TAG + "\n## Section\nContent.";
+    const incoming = "# New Title\n\nNew intro.\n\n" + AUTO_SECTION_TAG + "\n## Section\nContent.";
+    const result = mergeMarkdownSections(local, incoming)!;
+    assert.ok(result.includes("# New Title"), "incoming preamble wins");
+    assert.ok(!result.includes("Old Title"), "old preamble replaced");
+  });
+
+  test("AUTO_SECTION_TAG is present in merged output for operator sections", () => {
+    const incoming = AUTO_SECTION_TAG + "\n## Section\nContent.";
+    const local = AUTO_SECTION_TAG + "\n## Section\nOld content.";
+    const result = mergeMarkdownSections(local, incoming)!;
+    assert.ok(result.includes(AUTO_SECTION_TAG), "tag preserved in output");
+  });
+
+  test("bot section matching an AUTO section key is replaced by operator version", () => {
+    // Bot modified an operator section (no tag locally) — operator wins since
+    // the incoming file marks it as AUTO.
+    const local = [
+      AUTO_SECTION_TAG,
+      "## Role",
+      "Bot-modified content.",  // bot removed the tag and edited
+    ].join("\n");
+    const incoming = [
+      AUTO_SECTION_TAG,
+      "## Role",
+      "Operator content.",
+    ].join("\n");
+    const result = mergeMarkdownSections(local, incoming)!;
+    assert.ok(result.includes("Operator content."), "operator wins on key-matched AUTO section");
+    assert.ok(!result.includes("Bot-modified content."), "bot edit to AUTO section replaced");
+  });
+});
+
+// ── Tests: applyDiff — markdown section merge ────────────────────────────────
+
+describe("applyDiff — markdown section merge", () => {
+  let tmpDir: string;
+  let stagingDir: string;
+  let workspaceDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fm-mdmerge-"));
+    stagingDir = path.join(tmpDir, "staging");
+    workspaceDir = path.join(tmpDir, "workspace");
+    fs.mkdirSync(stagingDir, { recursive: true });
+    fs.mkdirSync(workspaceDir, { recursive: true });
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test(".md file with AUTO sections is merged, not overwritten", () => {
+    const localContent = [
+      "# AGENTS.md",
+      "",
+      AUTO_SECTION_TAG,
+      "## Role",
+      "Old operator content.",
+      "",
+      "## My Custom Section",
+      "Bot-added notes.",
+    ].join("\n");
+    const incomingContent = [
+      "# AGENTS.md",
+      "",
+      AUTO_SECTION_TAG,
+      "## Role",
+      "Updated operator content.",
+    ].join("\n");
+
+    fs.writeFileSync(path.join(workspaceDir, "AGENTS.md"), localContent);
+    fs.writeFileSync(path.join(stagingDir, "AGENTS.md"), incomingContent);
+
+    const diff: FileDiff = {
+      added: [],
+      modified: [{ incoming: { path: "AGENTS.md", size: incomingContent.length, sha256: "x", mode: 644 }, currentSize: localContent.length }],
+      deleted: [],
+    };
+
+    applyDiff(stagingDir, workspaceDir, diff);
+
+    const result = fs.readFileSync(path.join(workspaceDir, "AGENTS.md"), "utf-8");
+    assert.ok(result.includes("Updated operator content."), "operator update applied");
+    assert.ok(result.includes("Bot-added notes."), "bot section preserved");
+    assert.ok(!result.includes("Old operator content."), "old operator content replaced");
+  });
+
+  test(".md file without AUTO sections is overwritten normally", () => {
+    const localContent = "## Section\nOld content.";
+    const incomingContent = "## Section\nNew content.";
+
+    fs.writeFileSync(path.join(workspaceDir, "SOUL.md"), localContent);
+    fs.writeFileSync(path.join(stagingDir, "SOUL.md"), incomingContent);
+
+    const diff: FileDiff = {
+      added: [],
+      modified: [{ incoming: { path: "SOUL.md", size: incomingContent.length, sha256: "y", mode: 644 }, currentSize: localContent.length }],
+      deleted: [],
+    };
+
+    applyDiff(stagingDir, workspaceDir, diff);
+
+    const result = fs.readFileSync(path.join(workspaceDir, "SOUL.md"), "utf-8");
+    assert.equal(result, incomingContent, "file overwritten normally when no AUTO tags");
+  });
+});
+
 // ── Tests: isProtectedPath ────────────────────────────────────────────────
 
 describe("isProtectedPath", () => {
@@ -570,6 +819,11 @@ describe("isProtectedPath", () => {
     assert.equal(isProtectedPath(".cache/gh/token"), true);
     assert.equal(isProtectedPath(".local/state/something"), true);
     assert.equal(isProtectedPath(".npm/_cacache/index.json"), true);
+  });
+
+  test("USER.md and TOOLS.md are protected (bot fills these in from scratch)", () => {
+    assert.equal(isProtectedPath("USER.md"), true);
+    assert.equal(isProtectedPath("TOOLS.md"), true);
   });
 
   test("unrelated files are not protected", () => {

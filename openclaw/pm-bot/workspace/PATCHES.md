@@ -23,6 +23,7 @@
 
 ---
 
+<!-- AUTO SECTION -->
 ## Patch: slack-mention-format
 - **id:** `slack-mention-format`
 - **file:** AGENTS.md
@@ -34,6 +35,7 @@
 - **description:** Slack mention format rule — plain @USERID doesn't notify. Learned from live fleet.
 
 ```markdown
+<!-- AUTO SECTION -->
 ## Slack Conventions
 
 **Always use `<@USERID>` format for mentions** — never plain `@USERID` or a
@@ -47,6 +49,7 @@ If you don't have a user ID yet, run `fleetmind slack discover` or ask the human
 
 ---
 
+<!-- AUTO SECTION -->
 ## Patch: no-how-in-envelopes
 - **id:** `no-how-in-envelopes`
 - **file:** AGENTS.md
@@ -66,6 +69,7 @@ If you don't have a user ID yet, run `fleetmind slack discover` or ask the human
 
 ---
 
+<!-- AUTO SECTION -->
 ## Patch: memory-fleet-roster
 - **id:** `memory-fleet-roster`
 - **file:** MEMORY.md
@@ -77,6 +81,7 @@ If you don't have a user ID yet, run `fleetmind slack discover` or ask the human
 - **description:** Seed a Fleet Members section in MEMORY.md so the bot tracks Slack user IDs.
 
 ```markdown
+<!-- AUTO SECTION -->
 ## Fleet Members
 
 | Agent | Role | Slack User ID | Channel(s) |
