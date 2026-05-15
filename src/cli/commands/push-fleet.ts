@@ -44,6 +44,7 @@ import {
 import {
   SSMClient,
   SendCommandCommand,
+  StartAutomationExecutionCommand,
   DescribeInstanceInformationCommand,
 } from "@aws-sdk/client-ssm";
 
@@ -51,6 +52,7 @@ import { loadFleet } from "../../config/loader.js";
 import { provisionFleet } from "../../runtime/provisioner.js";
 import { writeOutputs, resolveOpenClawBaseDir } from "../../runtime/renderer.js";
 import { log } from "../../utils/log.js";
+import { ensureAutomationDocument, documentName } from "./automation-doc.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -77,7 +79,10 @@ export interface DeployManifest {
 export interface PushFleetResult {
   agent_id: string;
   status: "pushed" | "skipped" | "error";
+  /** RunCommand command ID (pull-self only, no upgrade). */
   ssm_command_id?: string;
+  /** SSM Automation execution ID (upgrade + pull-self path). */
+  automation_execution_id?: string;
   reason?: string;
 }
 
@@ -105,8 +110,25 @@ export interface PushFleetDeps {
 
   /**
    * Send an SSM run-shell-script command. Returns the command ID.
+   * Used for simple single-step commands (e.g. rollback pull-self).
    */
   sendSsmCommand?: (instanceId: string, commands: string[], region: string) => Promise<string>;
+  /**
+   * Start an SSM Automation execution. Returns the execution ID.
+   * Used for multi-step operations (upgrade + pull-self) where SSM owns
+   * the state machine and step sequencing.
+   */
+  startAutomation?: (
+    docName: string,
+    parameters: Record<string, string[]>,
+    region: string,
+    serviceRoleArn?: string
+  ) => Promise<string>;
+  /**
+   * Ensure the SSM Automation document exists and is current.
+   * Injectable for testing to avoid SSM API calls.
+   */
+  ensureAutomationDoc?: (fleetName: string, region: string) => Promise<string>;
   /** Override the lock acquire/release for testing. */
   acquireLock?: (bucket: string, region: string) => Promise<void>;
   releaseLock?: (bucket: string, region: string) => Promise<void>;
@@ -293,6 +315,40 @@ async function defaultSendSsmCommand(
   return resp.Command?.CommandId ?? "";
 }
 
+/**
+ * Start an SSM Automation execution and return the execution ID.
+ *
+ * The automation document is responsible for step sequencing and failure
+ * handling — the operator fires this and monitors via the returned ID.
+ * No operator-side polling; SSM owns the state machine.
+ *
+ * Service role: passed as ServiceRoleArn on the API call (not as the
+ * AutomationAssumeRole document parameter, which we don't use). The document
+ * does not declare AutomationAssumeRole — role assumption is handled here
+ * at the API layer so the document stays simple and reusable.
+ */
+async function defaultStartAutomation(
+  docName: string,
+  parameters: Record<string, string[]>,
+  region: string,
+  serviceRoleArn?: string
+): Promise<string> {
+  const ssm = new SSMClient({ region });
+  const resp = await ssm.send(
+    new StartAutomationExecutionCommand({
+      DocumentName: docName,
+      // Use $LATEST so automations always run the current document version.
+      // ensureAutomationDocument also calls UpdateDocumentDefaultVersionCommand
+      // after each update, but being explicit here defends against any edge
+      // case where $DEFAULT lags behind (e.g. concurrent update, manual edit).
+      DocumentVersion: "$LATEST",
+      Parameters: parameters,
+      ...(serviceRoleArn ? { ServiceRoleArn: serviceRoleArn } : {}),
+    })
+  );
+  return resp.AutomationExecutionId ?? "";
+}
+
 // ── Fleet-wide S3 lock ───────────────────────────────────────────────────────
 
 const LOCK_KEY = "deploy-staging/lock.json";
@@ -448,11 +504,22 @@ export interface PushFleetOptions {
   dryRun: boolean;
   noApply: boolean;
   /**
-   * When set, prepend a self-upgrade step to the SSM command so the CLI on
-   * each instance is upgraded before pull-self runs. "latest" upgrades to
-   * the newest published version; a semver string pins to that version.
+   * When set, run a CLI upgrade on each instance via SSM Automation before
+   * syncing the workspace. "latest" upgrades to the newest published version;
+   * a semver string pins to that version.
+   *
+   * The upgrade runs as a separate SSM Automation step with onFailure: Abort.
+   * pull-self is only triggered after the upgrade step succeeds, so a failed
+   * upgrade can never silently fall through to pull-self on a stale binary.
    */
   upgradeCli?: string;
+  /**
+   * IAM role ARN for SSM Automation to assume when running automation steps.
+   * Required when the caller's IAM role doesn't have ssm:SendCommand on the
+   * target instances. Corresponds to StartAutomationExecution ServiceRoleArn.
+   * Leave unset to use the caller's permissions (sufficient for most setups).
+   */
+  automationRoleArn?: string;
   /**
    * When set, roll back to a previous deployment instead of pushing a new one.
    * Value is the history index to roll back to: 1 = most recent, 2 = second-most-recent, etc.
@@ -477,6 +544,8 @@ export async function runPushFleet(
   const uploadToS3 = deps.uploadToS3 ?? defaultUploadToS3;
   const lookupInstance = deps.lookupInstance ?? defaultLookupInstance;
   const sendSsmCommand = deps.sendSsmCommand ?? defaultSendSsmCommand;
+  const startAutomationFn = deps.startAutomation ?? defaultStartAutomation;
+  const ensureAutomationDocFn = deps.ensureAutomationDoc ?? ensureAutomationDocument;
   const acquireLockFn = deps.acquireLock ?? acquireLock;
   const releaseLockFn = deps.releaseLock ?? releaseLock;
   const archiveToHistoryFn = deps.archiveToHistory ?? archiveToHistory;
@@ -498,6 +567,15 @@ export async function runPushFleet(
   // Acquire fleet-wide lock (prevents concurrent pushes racing on S3)
   if (!opts.noLock && !opts.dryRun) {
     await acquireLockFn(bucket, region);
+  }
+
+  // Upsert the SSM Automation document when --upgrade-cli is set.
+  // Only called once per push (not per-agent). Skipped entirely on normal
+  // pushes (no --upgrade-cli) so there's no SSM overhead on every deploy.
+  let automationDocName: string | null = null;
+  if (opts.upgradeCli && !opts.dryRun && !opts.noApply) {
+    log.step("Ensuring SSM Automation document is current...");
+    automationDocName = await ensureAutomationDocFn(fleetName, region);
   }
 
   const results: PushFleetResult[] = [];
@@ -644,18 +722,41 @@ export async function runPushFleet(
           results.push({ agent_id: agentId, status: "pushed", reason: "instance not in SSM" });
         } else {
           const restartFlag = opts.restart ? " --restart" : "";
-          // Non-fatal: a timeout or auth failure during upgrade must not
-          // block pull-self. '|| true' ensures the command continues even
-          // if self-upgrade hangs or errors.
-          const upgradeStep = opts.upgradeCli
-            ? `timeout 120 fleetmind self-upgrade --version ${opts.upgradeCli} --apply || true && `
-            : "";
-          const cmd = `${upgradeStep}sudo -u ec2-user fleetmind pull-self --apply${restartFlag} --region ${region}`;
-          log.step(`    sending SSM command to ${instanceId}...`);
-          const cmdId = await sendSsmCommand(instanceId, [cmd], region);
-          log.ok(`  ${agentId}: SSM command sent → ${cmdId}`);
-          log.dim(`    follow up: aws ssm get-command-invocation --command-id ${cmdId} --instance-id ${instanceId} --region ${region}`);
-          results.push({ agent_id: agentId, status: "pushed", ssm_command_id: cmdId });
+          const pullSelfArgs = `--apply${restartFlag} --region ${region}`;
+
+          if (opts.upgradeCli) {
+            // ── SSM Automation: upgrade → pull-self (server-side sequencing) ──
+            // SSM Automation owns the state machine. Each step has its own
+            // status, stdout, and stderr visible in the SSM console/API.
+            // onFailure: Abort on the upgrade step means pull-self is never
+            // triggered on a stale binary — no operator-side polling required.
+            const upgradeFlag = opts.upgradeCli === 'latest'
+              ? '--latest'
+              : `--version ${opts.upgradeCli}`;
+            const docName = automationDocName ?? documentName(fleetName);
+            log.step(`    starting SSM Automation for ${agentId} (${docName})...`);
+            const executionId = await startAutomationFn(
+              docName,
+              {
+                InstanceId: [instanceId],
+                UpgradeFlag: [upgradeFlag],
+                PullSelfArgs: [pullSelfArgs],
+              },
+              region,
+              opts.automationRoleArn
+            );
+            log.ok(`  ${agentId}: Automation started → ${executionId}`);
+            log.dim(`    monitor: aws ssm get-automation-execution --automation-execution-id ${executionId} --region ${region}`);
+            results.push({ agent_id: agentId, status: "pushed", automation_execution_id: executionId });
+          } else {
+            // ── Simple RunCommand: pull-self only (no upgrade needed) ───────────
+            const pullCmd = `sudo -u ec2-user fleetmind pull-self ${pullSelfArgs}`;
+            log.step(`    sending pull-self command to ${instanceId}...`);
+            const cmdId = await sendSsmCommand(instanceId, [pullCmd], region);
+            log.ok(`  ${agentId}: SSM command sent → ${cmdId}`);
+            log.dim(`    follow up: aws ssm get-command-invocation --command-id ${cmdId} --instance-id ${instanceId} --region ${region}`);
+            results.push({ agent_id: agentId, status: "pushed", ssm_command_id: cmdId });
+          }
         }
       } catch (err) {
         log.warn(`  ${agentId}: SSM trigger failed — ${String(err)}`);
@@ -676,7 +777,12 @@ export async function runPushFleet(
   log.bold("Push summary:");
   for (const r of results) {
     if (r.status === "pushed") {
-      log.ok(`  ${r.agent_id}: pushed${r.ssm_command_id ? ` (cmd=${r.ssm_command_id})` : ""}${r.reason ? ` [${r.reason}]` : ""}`);
+      const ref = r.automation_execution_id
+        ? ` (automation=${r.automation_execution_id})`
+        : r.ssm_command_id
+          ? ` (cmd=${r.ssm_command_id})`
+          : "";
+      log.ok(`  ${r.agent_id}: pushed${ref}${r.reason ? ` [${r.reason}]` : ""}`);
     } else if (r.status === "skipped") {
       log.dim(`  ${r.agent_id}: skipped (${r.reason})`);
     } else {
@@ -712,6 +818,7 @@ export function registerPushFleet(pushCmd: Command): void {
     .option("--no-lock", "Skip the S3 concurrency lock (use only for debugging or when the lock is stale)")
     .option("--dry-run", "Package locally and compute manifest, but skip upload and SSM", false)
     .option("--no-apply", "Upload to S3 but skip SSM trigger")  // Commander's --no-* sets opts.apply=true by default; --no-apply flips to false. Do NOT pass a default value here (would shadow Commander's inverse-flag semantics).
+    .option("--automation-role-arn <arn>", "IAM role ARN for SSM Automation to assume when running upgrade+pull-self steps. Required when the caller's role lacks ssm:SendCommand on target instances.")
     .addHelpText('after', `
 Concurrency:
   A fleet-wide S3 lock prevents concurrent pushes from racing.
@@ -725,21 +832,39 @@ History:
   Last 5 deployments are kept per agent.
 
 Upgrade behaviour:
-  pull-self auto-upgrades the CLI when the manifest version differs.
-  Use --upgrade-cli to force an upgrade to a specific version.
+  When --upgrade-cli is set, push fleet uses an SSM Automation document
+  (FleetMind-<fleet>-AgentUpdate) to sequence the upgrade and workspace sync.
+  SSM owns the state machine: the upgrade step has onFailure: Abort, so
+  pull-self is never triggered on a stale binary. The operator gets back an
+  Automation Execution ID to monitor independently:
+    aws ssm get-automation-execution --automation-execution-id <id> --region <region>
+  Without --upgrade-cli, a single RunCommand triggers pull-self directly.
+
+  Required IAM permissions for --upgrade-cli (operator role):
+    ssm:GetDocument
+    ssm:CreateDocument
+    ssm:UpdateDocument
+    ssm:UpdateDocumentDefaultVersion
+    ssm:StartAutomationExecution
+  These are in addition to the permissions already required for a normal push
+  (ssm:DescribeInstanceInformation, ssm:SendCommand, s3:PutObject, etc.).
+  Use --automation-role-arn if the automation steps need a separate execution role.
 
 Examples:
   # Standard push with restart
   $ fleetmind push fleet --restart
+
+  # Push AND upgrade CLI to latest (uses SSM Automation for safe sequencing)
+  $ fleetmind push fleet --restart --upgrade-cli
+
+  # Pin CLI upgrade to a specific version
+  $ fleetmind push fleet --restart --upgrade-cli 0.5.3
 
   # Roll back all agents to the previous deployment
   $ fleetmind push fleet --rollback --restart
 
   # Roll back to 2 deployments ago
   $ fleetmind push fleet --rollback 2 --restart
-
-  # Push AND upgrade CLI to latest
-  $ fleetmind push fleet --restart --upgrade-cli
 
   # Dry-run: package + manifest, skip upload and SSM
   $ fleetmind push fleet --dry-run
@@ -760,6 +885,7 @@ Examples:
       lock: boolean;  // commander --no-lock sets opts.lock = false
       dryRun: boolean;
       apply: boolean;  // commander --no-apply sets opts.apply = false
+      automationRoleArn?: string;
     }) => {
       try {
         const upgradeCli = opts.upgradeCli === true ? 'latest'
@@ -778,6 +904,7 @@ Examples:
           noLock: opts.lock === false,
           dryRun: opts.dryRun,
           noApply: opts.apply === false,
+          automationRoleArn: opts.automationRoleArn,
         });
       } catch (err) {
         log.error(String(err));
