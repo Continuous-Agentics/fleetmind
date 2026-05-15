@@ -29,6 +29,43 @@ import { applyWorkspacePatches } from "../../runtime/patch-engine.js";
 
 export { ManifestFile, DeployManifest };
 
+// ── Protected paths ─────────────────────────────────────────────────────────────
+
+/**
+ * Path prefixes that pull-self must never delete, regardless of what the
+ * incoming S3 manifest says.  These are agent-owned files that the operator
+ * never ships — deleting them would wipe memory and runtime state.
+ *
+ * Rules:
+ *   - An exact match protects a single file  (e.g. "MEMORY.md").
+ *   - A trailing "/" protects an entire directory  (e.g. "memory/").
+ *   - Matching is prefix-based: "memory/" protects "memory/2026-05-15.md".
+ */
+export const PROTECTED_PATHS: readonly string[] = [
+  "MEMORY.md",
+  "memory/",
+  ".openclaw/memory/",
+];
+
+/**
+ * Return true if `filePath` (relative, forward-slash) falls under any
+ * protected prefix.
+ */
+export function isProtectedPath(filePath: string): boolean {
+  for (const prefix of PROTECTED_PATHS) {
+    if (prefix.endsWith("/")) {
+      // Directory prefix — match the dir itself or any file inside it
+      if (filePath === prefix.slice(0, -1) || filePath.startsWith(prefix)) {
+        return true;
+      }
+    } else {
+      // Exact file match
+      if (filePath === prefix) return true;
+    }
+  }
+  return false;
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface AgentEnv {
@@ -143,7 +180,11 @@ export function computeDiff(
 
   for (const current of currentFiles) {
     if (!incomingMap.has(current.path)) {
-      deleted.push(current);
+      // Never surface protected paths as deletions — they are agent-owned and
+      // must survive every push regardless of what the S3 manifest contains.
+      if (!isProtectedPath(current.path)) {
+        deleted.push(current);
+      }
     }
   }
 
@@ -449,14 +490,29 @@ export function mergeOpenClawConfig(
  * it shipped. The runtime creates many files alongside fleetmind's
  * (memory, sessions, plugin-skills, cron state, etc.) and deleting
  * anything not in the incoming tarball would wipe agent state.
+ *
+ * Additionally, any path that matches PROTECTED_PATHS is filtered out of
+ * the deleted list by computeDiff before it ever reaches here — providing
+ * an explicit, named safety net for MEMORY.md, memory/, and
+ * .openclaw/memory/ that survives future changes to deletion behaviour.
  */
 export function applyDiff(
   stagingDir: string,
   workspaceDir: string,
   diff: FileDiff
 ): void {
+  // Defensive guard: even if a protected path slips past computeDiff (e.g.
+  // direct applyDiff call in tests or future refactors), never delete it.
+  const safeDeleted = diff.deleted.filter((f) => {
+    if (isProtectedPath(f.path)) {
+      log.dim(`  ⚠ protected: ${f.path} (skipped — agent-owned, never deleted)`);
+      return false;
+    }
+    return true;
+  });
+  const safeDiff: FileDiff = { ...diff, deleted: safeDeleted };
   // Apply added files
-  for (const f of diff.added) {
+  for (const f of safeDiff.added) {
     const src = path.join(stagingDir, f.path);
     const dest = path.join(workspaceDir, f.path);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -465,7 +521,7 @@ export function applyDiff(
   }
 
   // Apply modified files — atomic rename for all except .openclaw/openclaw.json
-  for (const { incoming } of diff.modified) {
+  for (const { incoming } of safeDiff.modified) {
     const src = path.join(stagingDir, incoming.path);
     const dest = path.join(workspaceDir, incoming.path);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
