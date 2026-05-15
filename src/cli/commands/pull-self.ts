@@ -29,6 +29,238 @@ import { applyWorkspacePatches } from "../../runtime/patch-engine.js";
 
 export { ManifestFile, DeployManifest };
 
+// ── Protected paths ─────────────────────────────────────────────────────────────
+
+/**
+ * Path prefixes that pull-self must never delete, regardless of what the
+ * incoming S3 manifest says.  These are agent-owned files that the operator
+ * never ships — deleting them would wipe memory and runtime state.
+ *
+ * Rules:
+ *   - An exact match protects a single file  (e.g. "MEMORY.md").
+ *   - A trailing "/" protects an entire directory  (e.g. "memory/").
+ *   - Matching is prefix-based: "memory/" protects "memory/2026-05-15.md".
+ */
+export const PROTECTED_PATHS: readonly string[] = [
+  // MEMORY.md is intentionally NOT protected — the operator may push AUTO-tagged
+  // sections (fleet facts, key context). The section merge preserves bot-added
+  // entries. Only the memory/ daily-notes dir is fully agent-owned.
+  "memory/",
+  ".openclaw/",
+  ".cache/",
+  ".local/",
+  ".npm/",
+  // Bot fills these in from scratch during onboarding — never overwrite
+  "USER.md",
+  "TOOLS.md",
+];
+
+/**
+ * Return true if `filePath` (relative, forward-slash) falls under any
+ * protected prefix.
+ */
+export function isProtectedPath(filePath: string): boolean {
+  for (const prefix of PROTECTED_PATHS) {
+    if (prefix.endsWith("/")) {
+      // Directory prefix — match the dir itself or any file inside it
+      if (filePath === prefix.slice(0, -1) || filePath.startsWith(prefix)) {
+        return true;
+      }
+    } else {
+      // Exact file match
+      if (filePath === prefix) return true;
+    }
+  }
+  return false;
+}
+
+// ── Markdown section merge ──────────────────────────────────────────────────────────────
+
+/**
+ * The tag that marks a Markdown section as operator-owned.
+ * Place it on the line immediately before a heading.
+ * Invisible in rendered Markdown (HTML comment).
+ *
+ * Merge behaviour:
+ *   - Sections preceded by this tag → always taken from incoming (operator wins)
+ *   - Sections without the tag that exist locally → preserved (bot-added)
+ *   - NEW auto-tagged sections in incoming not yet in local → appended
+ *   - Preamble (everything before the first heading) → taken from incoming
+ */
+export const AUTO_SECTION_TAG = "<!-- AUTO SECTION -->";
+
+export interface MarkdownSection {
+  /** True when preceded by AUTO_SECTION_TAG in the source. */
+  autoTagged: boolean;
+  /** Full heading line, e.g. "## What You Do" */
+  heading: string;
+  /** Normalised key used for section matching (heading text, lower-cased). */
+  headingKey: string;
+  /** Lines after the heading until the next heading, joined with "\n". */
+  body: string;
+}
+
+export interface ParsedMarkdown {
+  /** Content before the first heading (may include the `#` title line). */
+  preamble: string;
+  sections: MarkdownSection[];
+}
+
+/** Normalise a heading line to a lookup key. */
+function headingKey(heading: string): string {
+  return heading.replace(/^#+\s+/, "").toLowerCase().trim();
+}
+
+/**
+ * Parse a Markdown string into preamble + sections.
+ * The AUTO_SECTION_TAG line is consumed and sets `autoTagged` on the
+ * immediately following heading; it does not appear in any body.
+ */
+export function parseMarkdownSections(content: string): ParsedMarkdown {
+  const lines = content.split("\n");
+  const preambleLines: string[] = [];
+  const sections: MarkdownSection[] = [];
+  let currentHeading = "";
+  let currentBody: string[] = [];
+  let currentAutoTagged = false;
+  let pendingAutoTag = false;
+  let inSection = false;
+
+  const pushSection = (): void => {
+    if (!inSection) return;
+    // Trim trailing blank lines from body
+    let body = currentBody.join("\n");
+    body = body.replace(/\n+$/, "");
+    sections.push({
+      autoTagged: currentAutoTagged,
+      heading: currentHeading,
+      headingKey: headingKey(currentHeading),
+      body,
+    });
+  };
+
+  for (const line of lines) {
+    const isAutoTag = line.trim() === AUTO_SECTION_TAG;
+    // Only ## and deeper start a new section; # (file title) stays in preamble
+    const isHeading = /^#{2,6} /.test(line);
+
+    if (isAutoTag) {
+      // Buffer the tag; it belongs to the next heading.
+      // If we're inside a section, don't add the tag line to its body.
+      pendingAutoTag = true;
+      continue;
+    }
+
+    if (isHeading) {
+      pushSection();
+      inSection = true;
+      currentHeading = line;
+      currentAutoTagged = pendingAutoTag;
+      currentBody = [];
+      pendingAutoTag = false;
+      continue;
+    }
+
+    // Regular line
+    if (inSection) {
+      currentBody.push(line);
+    } else {
+      // pendingAutoTag before a non-heading is unusual; treat it as preamble text
+      if (pendingAutoTag) {
+        preambleLines.push(AUTO_SECTION_TAG);
+        pendingAutoTag = false;
+      }
+      preambleLines.push(line);
+    }
+  }
+
+  pushSection();
+
+  // Trim trailing blank lines from preamble
+  let preamble = preambleLines.join("\n").replace(/\n+$/, "");
+
+  return { preamble, sections };
+}
+
+/** Serialise a section back to string (with tag if auto-tagged). */
+function formatSection(s: MarkdownSection): string {
+  const parts: string[] = [];
+  if (s.autoTagged) parts.push(AUTO_SECTION_TAG);
+  parts.push(s.heading);
+  if (s.body) parts.push(s.body);
+  return parts.join("\n");
+}
+
+/**
+ * Detect the inter-section separator used by a file so the merged output
+ * uses the same spacing and does not cause sha256 drift on repeated pushes.
+ *
+ * Looks for blank lines between a section body and the next heading (or tag).
+ * Defaults to a single blank line ("\n\n") if the pattern cannot be determined.
+ */
+function detectSectionSeparator(content: string): string {
+  // Match: end of body content, then one or more blank lines, then a heading
+  // or AUTO tag. Count the blank lines between them.
+  const m = content.match(/\S(\n+)(?:<!--\s*AUTO SECTION\s*-->\n)?#{2,6} /);
+  if (!m) return "\n\n";
+  // m[1] is the run of newlines after the last non-whitespace body character.
+  // Two newlines = one blank line; three = two blank lines, etc.
+  return m[1]!.length >= 3 ? "\n\n\n" : "\n\n";
+}
+
+/**
+ * Merge two Markdown files using AUTO SECTION semantics.
+ *
+ * Rules:
+ *   1. Preamble → taken from incoming.
+ *   2. AUTO-tagged sections in incoming → always overwrite/add (operator-owned).
+ *   3. Untagged sections in local not matched by any incoming AUTO section
+ *      → preserved at the end (bot-added).
+ *
+ * Separator between sections is inferred from the incoming file so the merged
+ * output is byte-stable on repeated pushes (no sha256 drift).
+ *
+ * If incoming has zero AUTO-tagged sections the file is returned unchanged
+ * (no tags = not a managed file; fall back to normal overwrite).
+ *
+ * Returns null when no merge was performed (caller should do normal overwrite).
+ */
+export function mergeMarkdownSections(
+  local: string,
+  incoming: string
+): string | null {
+  const incomingParsed = parseMarkdownSections(incoming);
+  const autoSections = incomingParsed.sections.filter((s) => s.autoTagged);
+
+  // Not a managed file — no auto tags. Signal caller to overwrite normally.
+  if (autoSections.length === 0) return null;
+
+  const localParsed = parseMarkdownSections(local);
+  const sep = detectSectionSeparator(incoming);
+
+  const parts: string[] = [];
+
+  // Preamble from incoming (operator owns the file title and intro)
+  if (incomingParsed.preamble) parts.push(incomingParsed.preamble);
+
+  const includedKeys = new Set<string>();
+
+  // AUTO sections from incoming — operator-owned, always current
+  for (const s of autoSections) {
+    parts.push(formatSection(s));
+    includedKeys.add(s.headingKey);
+  }
+
+  // Bot-added sections: in local but not in any incoming AUTO section
+  for (const s of localParsed.sections) {
+    if (!includedKeys.has(s.headingKey)) {
+      parts.push(formatSection(s));
+    }
+  }
+
+  return parts.join(sep) + "\n";
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface AgentEnv {
@@ -143,7 +375,11 @@ export function computeDiff(
 
   for (const current of currentFiles) {
     if (!incomingMap.has(current.path)) {
-      deleted.push(current);
+      // Never surface protected paths as deletions — they are agent-owned and
+      // must survive every push regardless of what the S3 manifest contains.
+      if (!isProtectedPath(current.path)) {
+        deleted.push(current);
+      }
     }
   }
 
@@ -449,14 +685,29 @@ export function mergeOpenClawConfig(
  * it shipped. The runtime creates many files alongside fleetmind's
  * (memory, sessions, plugin-skills, cron state, etc.) and deleting
  * anything not in the incoming tarball would wipe agent state.
+ *
+ * Additionally, any path that matches PROTECTED_PATHS is filtered out of
+ * the deleted list by computeDiff before it ever reaches here, and is also
+ * skipped in the modified loop — providing an explicit, named safety net
+ * that survives future changes to deletion or update behaviour.
  */
 export function applyDiff(
   stagingDir: string,
   workspaceDir: string,
   diff: FileDiff
 ): void {
+  // Defensive guard: even if a protected path slips past computeDiff (e.g.
+  // direct applyDiff call in tests or future refactors), never delete it.
+  const safeDeleted = diff.deleted.filter((f) => {
+    if (isProtectedPath(f.path)) {
+      log.dim(`  ⚠ protected: ${f.path} (skipped — agent-owned, never deleted)`);
+      return false;
+    }
+    return true;
+  });
+  const safeDiff: FileDiff = { ...diff, deleted: safeDeleted };
   // Apply added files
-  for (const f of diff.added) {
+  for (const f of safeDiff.added) {
     const src = path.join(stagingDir, f.path);
     const dest = path.join(workspaceDir, f.path);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -465,7 +716,14 @@ export function applyDiff(
   }
 
   // Apply modified files — atomic rename for all except .openclaw/openclaw.json
-  for (const { incoming } of diff.modified) {
+  for (const { incoming } of safeDiff.modified) {
+    // Defence-in-depth: skip protected paths in modified too.
+    // Normally a protected file wouldn't appear here (operator doesn't ship
+    // agent-owned files), but guard in case they do.
+    if (isProtectedPath(incoming.path)) {
+      log.dim(`  ⚠ protected: ${incoming.path} (skipped — agent-owned, never modified)`);
+      continue;
+    }
     const src = path.join(stagingDir, incoming.path);
     const dest = path.join(workspaceDir, incoming.path);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -479,6 +737,21 @@ export function applyDiff(
         log.dim(`    ℹ live config patches preserved (see .openclaw/openclaw.base.json for base)`);
         delete (merged as Record<string, unknown>)._patched;
         fs.writeFileSync(dest, JSON.stringify(merged, null, 2));
+      }
+    } else if (incoming.path.endsWith(".md") && fs.existsSync(dest)) {
+      // Section merge for Markdown files: AUTO-tagged sections from incoming
+      // overwrite local; untagged local sections (bot-added) are preserved.
+      const localContent = fs.readFileSync(dest, "utf-8");
+      const incomingContent = fs.readFileSync(src, "utf-8");
+      const merged = mergeMarkdownSections(localContent, incomingContent);
+      if (merged !== null) {
+        fs.writeFileSync(dest, merged, "utf-8");
+        log.dim(`    ℹ sections merged (bot additions preserved)`);
+      } else {
+        // No AUTO tags — not a managed file; overwrite normally
+        const tmp = `${dest}.new`;
+        fs.copyFileSync(src, tmp);
+        fs.renameSync(tmp, dest);
       }
     } else {
       const tmp = `${dest}.new`;

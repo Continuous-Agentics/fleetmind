@@ -5,6 +5,7 @@
 
 ---
 
+<!-- AUTO SECTION -->
 ## Patch: acp-thread-context
 - **id:** `acp-thread-context`
 - **file:** AGENTS.md
@@ -28,6 +29,7 @@ delegation flows.
 
 ---
 
+<!-- AUTO SECTION -->
 ## Patch: memory-active-tasks
 - **id:** `memory-active-tasks`
 - **file:** MEMORY.md
@@ -39,6 +41,7 @@ delegation flows.
 - **description:** Seed an Active Tasks section in MEMORY.md.
 
 ```markdown
+<!-- AUTO SECTION -->
 ## Active Tasks
 
 | Task ID | Description | Status | Thread |
