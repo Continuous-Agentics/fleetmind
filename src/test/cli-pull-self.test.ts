@@ -566,6 +566,12 @@ describe("isProtectedPath", () => {
     assert.equal(isProtectedPath(".openclaw/openclaw.json"), true);
   });
 
+  test("cache and local state dirs are protected", () => {
+    assert.equal(isProtectedPath(".cache/gh/token"), true);
+    assert.equal(isProtectedPath(".local/state/something"), true);
+    assert.equal(isProtectedPath(".npm/_cacache/index.json"), true);
+  });
+
   test("unrelated files are not protected", () => {
     assert.equal(isProtectedPath("AGENTS.md"), false);
     assert.equal(isProtectedPath("SOUL.md"), false);
