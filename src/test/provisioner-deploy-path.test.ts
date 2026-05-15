@@ -203,14 +203,14 @@ describe("deploy local-render-path regression", () => {
 
   // ── Workspace files inside the correct dir ────────────────────────────────
 
-  test("provisionAgent writes SOUL.md, AGENTS.md, IDENTITY.md, USER.md to correct local dir", async () => {
+  test("provisionAgent writes SOUL.md, AGENTS.md, IDENTITY.md, USER.md, HEARTBEAT.md, PATCHES.md to correct local dir", async () => {
     const fleet = makeFleet();
     const agent = makeConductorAgent();
 
     await provisionAgent(fleet, agent, false, tmpDir);
 
     const ws = path.join(tmpDir, "rendered", "workspaces", "conductor");
-    for (const file of ["SOUL.md", "AGENTS.md", "IDENTITY.md", "USER.md"]) {
+    for (const file of ["SOUL.md", "AGENTS.md", "IDENTITY.md", "USER.md", "HEARTBEAT.md", "PATCHES.md"]) {
       assert.ok(fs.existsSync(path.join(ws, file)), `${file} must exist in workspace dir`);
     }
   });

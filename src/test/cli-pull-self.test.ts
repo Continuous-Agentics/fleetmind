@@ -842,6 +842,7 @@ describe("isProtectedPath", () => {
 
   test("cache and local state dirs are protected", () => {
     assert.equal(isProtectedPath(".cache/gh/token"), true);
+    assert.equal(isProtectedPath(".config/configstore/foo.json"), true);
     assert.equal(isProtectedPath(".local/state/something"), true);
     assert.equal(isProtectedPath(".npm/_cacache/index.json"), true);
   });

@@ -48,6 +48,7 @@ export const PROTECTED_PATHS: readonly string[] = [
   "memory/",
   ".openclaw/",
   ".cache/",
+  ".config/",
   ".local/",
   ".npm/",
   // Bot fills these in from scratch during onboarding — never overwrite
