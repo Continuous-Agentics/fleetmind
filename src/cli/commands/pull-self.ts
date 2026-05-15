@@ -45,6 +45,9 @@ export const PROTECTED_PATHS: readonly string[] = [
   "MEMORY.md",
   "memory/",
   ".openclaw/",
+  ".cache/",
+  ".local/",
+  ".npm/",
 ];
 
 /**
