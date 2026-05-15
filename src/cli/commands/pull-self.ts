@@ -48,6 +48,9 @@ export const PROTECTED_PATHS: readonly string[] = [
   ".cache/",
   ".local/",
   ".npm/",
+  // Bot fills these in from scratch during onboarding — never overwrite
+  "USER.md",
+  "TOOLS.md",
 ];
 
 /**
@@ -67,6 +70,173 @@ export function isProtectedPath(filePath: string): boolean {
     }
   }
   return false;
+}
+
+// ── Markdown section merge ──────────────────────────────────────────────────────────────
+
+/**
+ * The tag that marks a Markdown section as operator-owned.
+ * Place it on the line immediately before a heading.
+ * Invisible in rendered Markdown (HTML comment).
+ *
+ * Merge behaviour:
+ *   - Sections preceded by this tag → always taken from incoming (operator wins)
+ *   - Sections without the tag that exist locally → preserved (bot-added)
+ *   - NEW auto-tagged sections in incoming not yet in local → appended
+ *   - Preamble (everything before the first heading) → taken from incoming
+ */
+export const AUTO_SECTION_TAG = "<!-- AUTO SECTION -->";
+
+export interface MarkdownSection {
+  /** True when preceded by AUTO_SECTION_TAG in the source. */
+  autoTagged: boolean;
+  /** Full heading line, e.g. "## What You Do" */
+  heading: string;
+  /** Normalised key used for section matching (heading text, lower-cased). */
+  headingKey: string;
+  /** Lines after the heading until the next heading, joined with "\n". */
+  body: string;
+}
+
+export interface ParsedMarkdown {
+  /** Content before the first heading (may include the `#` title line). */
+  preamble: string;
+  sections: MarkdownSection[];
+}
+
+/** Normalise a heading line to a lookup key. */
+function headingKey(heading: string): string {
+  return heading.replace(/^#+\s+/, "").toLowerCase().trim();
+}
+
+/**
+ * Parse a Markdown string into preamble + sections.
+ * The AUTO_SECTION_TAG line is consumed and sets `autoTagged` on the
+ * immediately following heading; it does not appear in any body.
+ */
+export function parseMarkdownSections(content: string): ParsedMarkdown {
+  const lines = content.split("\n");
+  const preambleLines: string[] = [];
+  const sections: MarkdownSection[] = [];
+  let currentHeading = "";
+  let currentBody: string[] = [];
+  let currentAutoTagged = false;
+  let pendingAutoTag = false;
+  let inSection = false;
+
+  const pushSection = (): void => {
+    if (!inSection) return;
+    // Trim trailing blank lines from body
+    let body = currentBody.join("\n");
+    body = body.replace(/\n+$/, "");
+    sections.push({
+      autoTagged: currentAutoTagged,
+      heading: currentHeading,
+      headingKey: headingKey(currentHeading),
+      body,
+    });
+  };
+
+  for (const line of lines) {
+    const isAutoTag = line.trim() === AUTO_SECTION_TAG;
+    // Only ## and deeper start a new section; # (file title) stays in preamble
+    const isHeading = /^#{2,6} /.test(line);
+
+    if (isAutoTag) {
+      // Buffer the tag; it belongs to the next heading.
+      // If we're inside a section, don't add the tag line to its body.
+      pendingAutoTag = true;
+      continue;
+    }
+
+    if (isHeading) {
+      pushSection();
+      inSection = true;
+      currentHeading = line;
+      currentAutoTagged = pendingAutoTag;
+      currentBody = [];
+      pendingAutoTag = false;
+      continue;
+    }
+
+    // Regular line
+    if (inSection) {
+      currentBody.push(line);
+    } else {
+      // pendingAutoTag before a non-heading is unusual; treat it as preamble text
+      if (pendingAutoTag) {
+        preambleLines.push(AUTO_SECTION_TAG);
+        pendingAutoTag = false;
+      }
+      preambleLines.push(line);
+    }
+  }
+
+  pushSection();
+
+  // Trim trailing blank lines from preamble
+  let preamble = preambleLines.join("\n").replace(/\n+$/, "");
+
+  return { preamble, sections };
+}
+
+/** Serialise a section back to string (with tag if auto-tagged). */
+function formatSection(s: MarkdownSection): string {
+  const parts: string[] = [];
+  if (s.autoTagged) parts.push(AUTO_SECTION_TAG);
+  parts.push(s.heading);
+  if (s.body) parts.push(s.body);
+  return parts.join("\n");
+}
+
+/**
+ * Merge two Markdown files using AUTO SECTION semantics.
+ *
+ * Rules:
+ *   1. Preamble → taken from incoming.
+ *   2. AUTO-tagged sections in incoming → always overwrite/add (operator-owned).
+ *   3. Untagged sections in local not matched by any incoming AUTO section
+ *      → preserved at the end (bot-added).
+ *
+ * If incoming has zero AUTO-tagged sections the file is returned unchanged
+ * (no tags = not a managed file; fall back to normal overwrite).
+ *
+ * Returns null when no merge was performed (caller should do normal overwrite).
+ */
+export function mergeMarkdownSections(
+  local: string,
+  incoming: string
+): string | null {
+  const incomingParsed = parseMarkdownSections(incoming);
+  const autoSections = incomingParsed.sections.filter((s) => s.autoTagged);
+
+  // Not a managed file — no auto tags. Signal caller to overwrite normally.
+  if (autoSections.length === 0) return null;
+
+  const localParsed = parseMarkdownSections(local);
+  const localMap = new Map(localParsed.sections.map((s) => [s.headingKey, s]));
+
+  const result: string[] = [];
+
+  // Preamble from incoming (operator owns the file title and intro)
+  if (incomingParsed.preamble) result.push(incomingParsed.preamble);
+
+  const includedKeys = new Set<string>();
+
+  // AUTO sections from incoming — operator-owned, always current
+  for (const s of autoSections) {
+    result.push(formatSection(s));
+    includedKeys.add(s.headingKey);
+  }
+
+  // Bot-added sections: in local but not in any incoming AUTO section
+  for (const s of localParsed.sections) {
+    if (!includedKeys.has(s.headingKey)) {
+      result.push(formatSection(s));
+    }
+  }
+
+  return result.join("\n\n") + "\n";
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -538,6 +708,21 @@ export function applyDiff(
         log.dim(`    ℹ live config patches preserved (see .openclaw/openclaw.base.json for base)`);
         delete (merged as Record<string, unknown>)._patched;
         fs.writeFileSync(dest, JSON.stringify(merged, null, 2));
+      }
+    } else if (incoming.path.endsWith(".md") && fs.existsSync(dest)) {
+      // Section merge for Markdown files: AUTO-tagged sections from incoming
+      // overwrite local; untagged local sections (bot-added) are preserved.
+      const localContent = fs.readFileSync(dest, "utf-8");
+      const incomingContent = fs.readFileSync(src, "utf-8");
+      const merged = mergeMarkdownSections(localContent, incomingContent);
+      if (merged !== null) {
+        fs.writeFileSync(dest, merged, "utf-8");
+        log.dim(`    ℹ sections merged (bot additions preserved)`);
+      } else {
+        // No AUTO tags — not a managed file; overwrite normally
+        const tmp = `${dest}.new`;
+        fs.copyFileSync(src, tmp);
+        fs.renameSync(tmp, dest);
       }
     } else {
       const tmp = `${dest}.new`;
