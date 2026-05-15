@@ -6,6 +6,12 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-05-15
+
+### Added
+
+- **`cacheRetention` support in `fleet.yaml`** — `agents.defaults.params.cacheRetention` and `agents.defaults.models.<model>.params.cacheRetention` are now schema-validated and forwarded to each agent's rendered `openclaw.json`. Supported values: `none` | `short` | `long`. Recommended defaults for Anthropic fleets: `short` globally, `long` for `anthropic/claude-sonnet-4-6`. Without this, every agent turn re-processed the full system prompt at full cost. ([#159](https://github.com/Continuous-Agentics/fleetmind/pull/159))
+
 ## [0.5.2] — 2026-05-14
 
 ### Added
