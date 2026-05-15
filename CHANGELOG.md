@@ -6,6 +6,12 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-05-15
+
+### Fixed
+
+- **`provisionAgent` resolved role templates against `process.cwd()` instead of the package root** — when the operator runs `fleetmind push fleet` from their fleet repo, `process.cwd()` is the fleet repo (no `openclaw/` subdir). `SOUL.md`/`AGENTS.md`/`IDENTITY.md` were unaffected because they fall back to inline generators when the template is null. `HEARTBEAT.md` and `PATCHES.md` have no fallback so they were silently excluded from the rendered workspace and the push-fleet manifest. Fixed by resolving from `import.meta.url` → package installation root. ([#166](https://github.com/Continuous-Agentics/fleetmind/pull/166))
+
 ## [0.6.1] — 2026-05-15
 
 ### Fixed
