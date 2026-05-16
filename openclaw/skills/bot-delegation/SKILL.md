@@ -558,7 +558,17 @@ worker bot containing `"— self-start notice"` with a `Task ID:` and `Linear:` 
    - Row MISSING → create it on behalf of the worker (worker forgot; this is a
      recovery path, not the normal case):
      ```bash
-     fleetmind task create        --project <inferred from Linear project/labels>        --worker  <notifying-worker-id>          --delegated-by <notifying-worker-id>        --dod "<from Linear issue title>"        --thread "<notice message permalink>"        --tracker "<Linear URL from notice>"        --lifecycle requires-human-signoff        --task-id <8-char-hex from notice>        --status  accepted        --json
+     fleetmind task create \
+       --project <inferred from Linear project/labels> \
+       --worker  <notifying-worker-id>   \
+       --delegated-by <notifying-worker-id> \
+       --dod "<from Linear issue title>" \
+       --thread "<notice message permalink>" \
+       --tracker "<Linear URL from notice>" \
+       --lifecycle requires-human-signoff \
+       --task-id <8-char-hex from notice> \
+       --status  accepted \
+       --json
      ```
 4. **Do NOT** post a delegation envelope. The worker is already running; an
    envelope would trigger a duplicate `:eyes:` reaction and a duplicate DDB ack.
