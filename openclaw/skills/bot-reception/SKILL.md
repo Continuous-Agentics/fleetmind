@@ -375,16 +375,24 @@ fleetmind task create \
   --delegated-by <your-agent-id> \
   --dod "<one-line summary, no PII>" \
   --thread "<slack permalink to the thread the work originated in>" \
-  --lifecycle informal \
+  --envelope-ts "<timestamp of the triggering Slack message>" \
+  --lifecycle shipped-is-done \
   --task-id "${TASK_ID}" \
-  --status accepted \
   --json
+
+# Advance to 'accepted'
+fleetmind task ack \
+  --task-id "${TASK_ID}" \
+  --worker <your-agent-id> \
+  --project <best-fit-project-slug>
 ```
 
 Key differences from a standard delegation row:
-- `--lifecycle informal` (the PM bot's signoff watchdog ignores these).
+- `--lifecycle shipped-is-done` — no human sign-off required; task closes when shipped.
+  (`--lifecycle informal` is not a valid CLI option.)
 - `--delegated-by` = your own agent ID (self-delegation).
-- `--status accepted` from the start (no separate `delegated` step).
+- `task ack` after `task create` advances the row to `accepted`. There is no `--status` flag on `task create`.
+- `--envelope-ts` — use the timestamp of the Slack message that triggered the work.
 - No tracker link by default.
 
 Generate the task ID at the moment work becomes meaningful (first commit, first

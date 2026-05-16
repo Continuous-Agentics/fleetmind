@@ -564,11 +564,16 @@ worker bot containing `"— self-start notice"` with a `Task ID:` and `Linear:` 
        --delegated-by <notifying-worker-id> \
        --dod "<from Linear issue title>" \
        --thread "<notice message permalink>" \
+       --envelope-ts "<notice message timestamp>" \
        --tracker "<Linear URL from notice>" \
        --lifecycle requires-human-signoff \
        --task-id <8-char-hex from notice> \
-       --status  accepted \
        --json
+
+     fleetmind task ack \
+       --task-id <8-char-hex from notice> \
+       --worker  <notifying-worker-id> \
+       --project <inferred project slug>
      ```
 4. **Do NOT** post a delegation envelope. The worker is already running; an
    envelope would trigger a duplicate `:eyes:` reaction and a duplicate DDB ack.

@@ -65,7 +65,7 @@ Add to `## In Progress`:
 - **<TASK_ID>** — <one-line summary> | self-start | Linear: <url>
 ```
 
-### 3. Post self-start notice in the fleet delegation channel
+### 3. Post self-start notice and capture its timestamp
 
 Post a top-level message (not a thread reply) in the delegation channel,
 mentioning the PM bot:
@@ -79,27 +79,39 @@ Task ID: <TASK_ID>
 Summary: <one sentence — what you're starting and why>
 ```
 
+**Capture the message timestamp** (e.g. `1778948346.398399`). You will use it
+as `--envelope-ts` in the next step.
+
 ### 4. Create a DDB row
 
 ```bash
+NOTICE_TS="<timestamp captured in step 3 e.g. 1778948346.398399>"
+
 fleetmind task create \
   --project <best-fit-project-slug>         \
   --worker  <your-agent-id>                 \
   --delegated-by <your-agent-id>            \
   --dod "<definition of done — one line>"   \
   --thread "<Slack permalink to your self-start notice>" \
+  --envelope-ts "${NOTICE_TS}"              \
   --tracker "<Linear issue URL>"            \
   --lifecycle requires-human-signoff        \
   --task-id  "${TASK_ID}"                   \
-  --status   accepted                       \
   --json
+
+# Advance from 'delegated' to 'accepted' (self-ack)
+fleetmind task ack \
+  --task-id "${TASK_ID}"   \
+  --worker  <your-agent-id> \
+  --project <best-fit-project-slug>
 ```
 
 Key flags:
+- `--envelope-ts` — use the timestamp of your self-start notice (step 3). This is the self-start equivalent of the delegation envelope TS.
 - `--lifecycle requires-human-signoff` — human sign-off required, same as PM-delegated tasks.
 - `--delegated-by <your-agent-id>` — self-delegation; PM bot did not create the row.
-- `--status accepted` from the start; no separate `delegated` step.
 - `--tracker` is mandatory for Linear-assigned self-starts.
+- `task ack` after `task create` advances the row from `delegated` to `accepted`. The `task create` CLI always starts at `delegated`; there is no `--status` flag.
 
 ### 5. Do the work silently
 
@@ -119,8 +131,9 @@ Follow the `bot-reception` ship pattern:
 When doing a short-horizon spike (< 1 day) with no Linear issue:
 - No self-start notice required if it stays under 1 day.
 - If the spike produces real deliverable work, convert it: generate a task ID,
-  post a self-start notice, create a DDB row with `--lifecycle informal`, and
-  proceed as a self-start.
+  post a self-start notice, create a DDB row with `--lifecycle shipped-is-done`
+  (no human sign-off required for spikes), and proceed as a self-start.
+  Note: `--lifecycle informal` is not a valid CLI option — use `shipped-is-done` for untracked work.
 
 ---
 
@@ -141,11 +154,16 @@ When the PM bot sees a message in the delegation channel matching `"— self-sta
        --delegated-by <notifying-worker-id> \
        --dod "<from Linear issue title>" \
        --thread "<notice message permalink>" \
+       --envelope-ts "<notice message timestamp>" \
        --tracker "<Linear URL from notice>" \
        --lifecycle requires-human-signoff \
        --task-id <8-char-hex from notice> \
-       --status  accepted \
        --json
+
+     fleetmind task ack \
+       --task-id <8-char-hex from notice> \
+       --worker  <notifying-worker-id> \
+       --project <inferred project slug>
      ```
 4. **Do NOT** post a delegation envelope. The worker is already running.
 
