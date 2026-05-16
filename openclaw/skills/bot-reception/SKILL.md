@@ -1,6 +1,6 @@
 ---
 name: bot-reception
-version: 1.1.0
+version: 1.2.0
 description: >
   Protocol for receiving and handling task delegations from a PM bot in
   fleetmind-managed agent fleets. Use when: (1) you receive a delegation
@@ -307,10 +307,33 @@ If you can't write 2-5 non-obvious bullets, use `[]`.
 
 ## Handling Human Requests (Non-Envelope)
 
-- **Discussion:** just answer.
-- **Real task:** treat like a delegation, skip task-id formality on the Slack surface,
+Before acting: classify the request.
+
+- **Discussion / one-liner:** just answer.
+- **New feature request, no Linear issue assigned to you:** push back — see § Push-back below.
+- **Real task with a Linear issue assigned to you:** follow the `worker-self-start` skill.
+- **Real task without a tracker (bug fix, triage, informal request):** treat like a delegation,
+  skip task-id formality on the Slack surface,
   but **still write a DDB row + S3 narrative under `lifecycle: informal`** — see
   § Informal-task ledger below.
+
+---
+
+## Push-back (unlinked feature requests)
+
+When a human asks for new feature work but there is no Linear issue assigned to you:
+
+1. Reply once in the same channel/thread:
+   ```
+   This looks like new feature scope — can you create a Linear issue and assign
+   it to me? I'll kick off as soon as it's linked. (If there's already an issue,
+   share the link and I'll start now.)
+   ```
+2. Stop. Do not implement anything.
+3. When they share the Linear URL: verify it is assigned to you, then follow the
+   `worker-self-start` skill.
+
+One reply only, no repeats, no apologies, no workarounds.
 
 ---
 
@@ -391,6 +414,13 @@ On completion/blocked: move to `## Done` or `## Blocked` with outcome note.
 
 ## Changelog
 
+- **1.2.0 (2026-05-16)** — Worker Self-Start Protocol integration (CON-91):
+  - § Handling Human Requests now classifies requests before acting: discussion,
+    push-back for unlinked feature requests, self-start for Linear-assigned tasks.
+  - New § Push-back: exact reply text for unlinked feature requests; links to
+    `worker-self-start` skill for the Linear self-start path.
+  - The "Real task" branch now routes Linear-assigned tasks to `worker-self-start`
+    instead of the informal-task ledger.
 - **1.1.0 (2026-05-11)** — Port substantive protocol improvements from Carpe POC
   v2.5.0–v2.5.1 (generalized; Carpe-specific channel IDs, bot IDs, and AWS table
   names stripped):

@@ -1,6 +1,6 @@
 ---
 name: bot-delegation
-version: 1.1.0
+version: 1.2.0
 description: >
   Delegate concrete dev work from a project-manager bot to worker bots,
   track through completion, and report back to the planning channel.
@@ -535,13 +535,48 @@ Load these only when the task you're handling needs them:
   sub-agent (close-the-loop, In-Review, signoff, blocked). Each template embeds
   the § 7a hard rule verbatim. **Always copy from here; never compose ad-hoc.**
 
+## Inbound Self-Start Notices (from worker bots)
+
+Workers running the `worker-self-start` skill may begin work on Linear-assigned
+tasks without a delegation envelope and notify the PM bot via a self-start notice.
+
+**Recognizing a self-start notice:** a message in the delegation channel from a
+worker bot containing `"— self-start notice"` with a `Task ID:` and `Linear:` field.
+
+**Handler — run inline (no sub-agent needed for the initial receipt):**
+
+1. **Verify** the Linear issue URL in the notice using the `linear-fleet` skill.
+   Confirm the issue is assigned to the notifying worker. If it is not, reply in
+   thread: `"Linear issue is not assigned to you — cannot register this self-start."`
+   and take no further action.
+2. **React `:white_check_mark:`** to the notice message.
+3. **Check DDB** for the task ID in the notice:
+   ```bash
+   fleetmind task get --task-id <8-char-hex> --json
+   ```
+   - Row exists → no action needed; the worker created it correctly.
+   - Row MISSING → create it on behalf of the worker (worker forgot; this is a
+     recovery path, not the normal case):
+     ```bash
+     fleetmind task create        --project <inferred from Linear project/labels>        --worker  <notifying-worker-id>          --delegated-by <notifying-worker-id>        --dod "<from Linear issue title>"        --thread "<notice message permalink>"        --tracker "<Linear URL from notice>"        --lifecycle requires-human-signoff        --task-id <8-char-hex from notice>        --status  accepted        --json
+     ```
+4. **Do NOT** post a delegation envelope. The worker is already running; an
+   envelope would trigger a duplicate `:eyes:` reaction and a duplicate DDB ack.
+5. **Add to `memory/active-delegations.md`** under `## Active` — same format as
+   a PM-delegated task, but mark it `[self-start]` in the notes column.
+
+The self-started task then enters the normal signoff watchdog lifecycle.
+Human sign-off is required before the row moves to `signed_off`.
+
+---
+
 ## Hard limits
 
 - 🚫 Do NOT delegate ambiguous work. Push back first.
 - 🚫 Do NOT post in worker channels outside of delegation envelopes and active threads.
 - 🚫 Do NOT write code, run deploys, or modify infrastructure. Orchestrate.
 - 🚫 Do NOT rely on `active-delegations.md` for live state — query DDB instead.
-- 🚫 Do NOT respond to worker bot messages outside the delegation protocol.
+- 🚫 Do NOT respond to worker bot messages outside the delegation protocol (exception: self-start notices — see § Inbound Self-Start Notices).
 - 🚫 Do NOT post close-the-loop summaries inline on a wake turn — spawn a sub-agent.
 - ✅ Always close the loop in the planning thread on every delegation.
 - ✅ Always query DDB on heartbeat for live task state.
@@ -549,6 +584,14 @@ Load these only when the task you're handling needs them:
 
 ## Changelog
 
+- **1.2.0 (2026-05-16)** — Worker Self-Start Protocol integration (CON-91):
+  - New § Inbound Self-Start Notices: handler for when worker bots post a
+    `"— self-start notice"` message in the delegation channel. Covers Linear
+    assignment verification, `:white_check_mark:` reaction, DDB row check/
+    recovery, and the explicit "do NOT send a delegation envelope" rule.
+  - Updated Hard limits: removed the blanket "Do NOT respond to worker bot
+    messages outside the delegation protocol" — self-start notices are now
+    a recognized in-protocol trigger.
 - **1.1.0 (2026-05-11)** — Port substantive protocol improvements from Carpe POC
   v1.9.0–v1.11.0 (generalized; Carpe-specific names, channels, and AWS/Linear
   references stripped):

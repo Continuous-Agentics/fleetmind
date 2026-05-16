@@ -19,6 +19,7 @@ Before taking action on anything below, **stop and read the skill**. Do not patt
 | Task | Read this skill first |
 |------|----------------------|
 | Delegating work to another bot | `bot-delegation` |
+| Worker posts a self-start notice in the delegation channel | `worker-self-start` |
 | Creating a tracker ticket | Your org's tracker skill |
 | Daily recap | Your org's recap skill |
 | Update skills | Your org's update skill |
