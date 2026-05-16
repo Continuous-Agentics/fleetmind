@@ -257,6 +257,12 @@ async function seedCronSweeps(
     if (existingNames.has(sweep.name)) {
       log.info(`    sweep '${sweep.name}' already registered — skipping`);
     } else {
+      if (sweep.every) {
+        log.warn(
+          `    ⚠️  sweep '${sweep.name}' uses deprecated 'every' — migrate to 'cron_expr' + 'tz'. ` +
+          `Example: cron_expr: "*/15 * * * *", tz: UTC`
+        );
+      }
       toAdd.push(buildSweepJob(fleet.fleet.name, agent.id, sweep));
       const schedule = sweep.every ? `every ${sweep.every}` : sweep.cron_expr!;
       log.info(
