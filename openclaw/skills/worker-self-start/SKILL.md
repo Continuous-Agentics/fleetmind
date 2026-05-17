@@ -65,10 +65,12 @@ Add to `## In Progress`:
 - **<TASK_ID>** — <one-line summary> | self-start | Linear: <url>
 ```
 
-### 3. Post self-start notice and capture its timestamp
+### 3. Post self-start notice within 60 seconds and capture its timestamp
 
 Post a top-level message (not a thread reply) in the delegation channel,
-mentioning the PM bot:
+mentioning the PM bot **within 60 seconds of beginning work**. Do NOT post
+this notice if Ariadne already sent a delegation envelope for the same Linear
+issue.
 
 ```
 <@PM_BOT_SLACK_ID> — self-start notice
@@ -144,28 +146,38 @@ When the PM bot sees a message in the delegation channel matching `"— self-sta
 1. **Verify**: fetch the Linear issue from the notice URL. Confirm it's assigned
    to the notifying worker (use the `linear-fleet` skill).
 2. **React `:white_check_mark:`** to the notice.
-3. **Check DDB**: run `fleetmind task get --task-id <8-char-hex> --json`.
+3. **Resolve project slug from Linear labels**: inspect the Linear issue's labels
+   and project to determine the best-fit `--project` slug for the DDB row.
+   - If labels are **missing** or **ambiguous** (multiple project labels, no
+     recognisable fleet project label, or the label doesn't map to a known slug):
+     **do NOT guess**. Instead, reply in the notice thread:
+     ```
+     @<worker> — I can't determine the project slug from this issue's labels.
+     Can you confirm which project this belongs to? (e.g. `ca-core`, `ca-infra`)
+     ```
+     Wait for clarification before creating the DDB row.
+4. **Check DDB**: run `fleetmind task get --task-id <8-char-hex> --json`.
    - Row exists → no action needed; worker already created it.
    - Row MISSING → create it on behalf of the worker:
      ```bash
      fleetmind task create \
-       --project <inferred from Linear project/labels> \
-       --worker  <notifying-worker-id>   \
+       --project <resolved project slug>   \
+       --worker  <notifying-worker-id>     \
        --delegated-by <notifying-worker-id> \
-       --dod "<from Linear issue title>" \
+       --dod "<from Linear issue title>"   \
        --thread "<notice message permalink>" \
        --envelope-ts "<notice message timestamp>" \
        --tracker "<Linear URL from notice>" \
        --lifecycle requires-human-signoff \
-       --task-id <8-char-hex from notice> \
+       --task-id <8-char-hex from notice>  \
        --json
 
      fleetmind task ack \
        --task-id <8-char-hex from notice> \
        --worker  <notifying-worker-id> \
-       --project <inferred project slug>
+       --project <resolved project slug>
      ```
-4. **Do NOT** post a delegation envelope. The worker is already running.
+5. **Do NOT** post a delegation envelope. The worker is already running.
 
 ---
 
