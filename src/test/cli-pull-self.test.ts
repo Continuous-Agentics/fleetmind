@@ -847,9 +847,12 @@ describe("isProtectedPath", () => {
     assert.equal(isProtectedPath(".npm/_cacache/index.json"), true);
   });
 
-  test("USER.md and TOOLS.md are protected (bot fills these in from scratch)", () => {
+  test("USER.md is protected (bot fills this in from scratch)", () => {
     assert.equal(isProtectedPath("USER.md"), true);
-    assert.equal(isProtectedPath("TOOLS.md"), true);
+  });
+
+  test("TOOLS.md is NOT protected — operator manages AUTO-tagged sections via section merge", () => {
+    assert.equal(isProtectedPath("TOOLS.md"), false);
   });
 
   test("unrelated files are not protected", () => {
