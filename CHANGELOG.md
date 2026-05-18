@@ -6,6 +6,12 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-05-18
+
+### Fixed
+
+- **`clawhub` CLI now ships as a declared dependency.** `src/runtime/resolver.ts` shells out to `clawhub install` when provisioning skills with `source: clawhub`. Previously the CLI was assumed to be a manual global install, causing `fleetmind push fleet` to fail with `'clawhub' CLI not found` on any host where it hadn't been pre-installed. Adding `clawhub@^0.16.0` to `dependencies` ensures it is available wherever `fleetmind` is installed. Updated the not-found error message to reflect the correct remediation. ([#170](https://github.com/Continuous-Agentics/fleetmind/pull/170))
+
 ## [0.6.3] — 2026-05-15
 
 ### Added
