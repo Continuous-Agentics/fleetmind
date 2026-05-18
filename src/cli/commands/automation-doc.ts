@@ -158,8 +158,9 @@ export async function ensureAutomationDocument(
     existingContent = resp.Content ?? null;
   } catch (err: unknown) {
     const errCode = (err as { name?: string }).name;
-    // NoSuchDocument → document doesn't exist yet; all other errors re-throw
-    if (errCode !== "NoSuchDocument") {
+    // GetDocument returns InvalidDocument (not NoSuchDocument) when the
+    // document doesn't exist. Accept both so the create path runs correctly.
+    if (errCode !== "NoSuchDocument" && errCode !== "InvalidDocument") {
       throw err;
     }
   }
