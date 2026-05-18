@@ -676,6 +676,34 @@ export function mergeOpenClawConfig(
   }
 
   const merged = deepMerge(incoming, patches);
+
+  // agents.list is entirely fleet-managed (derived from fleet.yaml by the
+  // renderer). It is never directly operator-patched via 'openclaw config
+  // patch' in chat. Always use incoming.agents.list so structural fields
+  // like `workspace` and `agentDir` — which may be absent in a live config
+  // written before a newer renderer version added them — are never dropped
+  // by the (live − base) patch set.
+  //
+  // Concrete failure mode without this guard:
+  //   base  = { agents: { list: [{ id, name, workspace, ... }] } }  (rendered w/ workspace)
+  //   live  = { agents: { list: [{ id, name, ... }] } }             (old file, no workspace)
+  //   patches.agents = live.agents  (because base.agents != live.agents)
+  //   deepMerge replaces incoming.agents.list with live.agents.list  → workspace lost
+  if (
+    incoming.agents !== undefined &&
+    typeof incoming.agents === 'object' &&
+    !Array.isArray(incoming.agents) &&
+    merged.agents !== undefined &&
+    typeof merged.agents === 'object' &&
+    !Array.isArray(merged.agents)
+  ) {
+    const incomingAgents = incoming.agents as Record<string, unknown>;
+    const mergedAgents = merged.agents as Record<string, unknown>;
+    if (Array.isArray(incomingAgents.list)) {
+      mergedAgents.list = incomingAgents.list;
+    }
+  }
+
   (merged as Record<string, unknown>)._patched = true;
   return merged;
 }
@@ -720,6 +748,41 @@ export function applyDiff(
 
   // Apply modified files — atomic rename for all except .openclaw/openclaw.json
   for (const { incoming } of safeDiff.modified) {
+    const src = path.join(stagingDir, incoming.path);
+    const dest = path.join(workspaceDir, incoming.path);
+
+    // openclaw.json is operator-shipped (rendered by fleetmind). It MUST be
+    // updated on every push via three-way merge so workspace/agentDir and
+    // other renderer-managed fields stay current. Handle it BEFORE the
+    // protected-path check: .openclaw/ is protected to guard agent-owned
+    // runtime state (sessions, plugin state, cron) but NOT the two operator-
+    // shipped files that live there.
+    if (incoming.path === ".openclaw/openclaw.json") {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      // Three-way merge: incoming (rendered) + (live - base) = merged.
+      // Operator patches applied via 'openclaw config patch' survive pushes.
+      const merged = mergeOpenClawConfig(src, dest, workspaceDir);
+      if (merged._patched) {
+        log.dim(`    ℹ live config patches preserved (see .openclaw/openclaw.base.json for base)`);
+        delete (merged as Record<string, unknown>)._patched;
+      }
+      fs.writeFileSync(dest, JSON.stringify(merged, null, 2));
+      log.info(`  ~ ${incoming.path}`);
+      continue;
+    }
+
+    // openclaw.base.json is the render snapshot used as the three-way-merge
+    // baseline. Always update it so the next push has an accurate baseline.
+    // Also exempt from the protected-path check for the same reason.
+    if (incoming.path === ".openclaw/openclaw.base.json") {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      const tmp = `${dest}.new`;
+      fs.copyFileSync(src, tmp);
+      fs.renameSync(tmp, dest);
+      log.info(`  ~ ${incoming.path}`);
+      continue;
+    }
+
     // Defence-in-depth: skip protected paths in modified too.
     // Normally a protected file wouldn't appear here (operator doesn't ship
     // agent-owned files), but guard in case they do.
@@ -727,21 +790,9 @@ export function applyDiff(
       log.dim(`  ⚠ protected: ${incoming.path} (skipped — agent-owned, never modified)`);
       continue;
     }
-    const src = path.join(stagingDir, incoming.path);
-    const dest = path.join(workspaceDir, incoming.path);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
 
-    if (incoming.path === ".openclaw/openclaw.json") {
-      // Three-way merge: incoming (rendered) + (live - base) = merged.
-      // Operator patches applied via 'openclaw config patch' survive pushes.
-      const merged = mergeOpenClawConfig(src, dest, workspaceDir);
-      fs.writeFileSync(dest, JSON.stringify(merged, null, 2));
-      if (merged._patched) {
-        log.dim(`    ℹ live config patches preserved (see .openclaw/openclaw.base.json for base)`);
-        delete (merged as Record<string, unknown>)._patched;
-        fs.writeFileSync(dest, JSON.stringify(merged, null, 2));
-      }
-    } else if (incoming.path.endsWith(".md") && fs.existsSync(dest)) {
+    if (incoming.path.endsWith(".md") && fs.existsSync(dest)) {
       // Section merge for Markdown files: AUTO-tagged sections from incoming
       // overwrite local; untagged local sections (bot-added) are preserved.
       const localContent = fs.readFileSync(dest, "utf-8");
