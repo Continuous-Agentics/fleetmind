@@ -69,5 +69,19 @@
     "@types/node": "^20.0.0",
     "tsx": "^4.11.0",
     "typescript": "^5.4.0"
-  }
+  },
+  "bundledDependencies": [
+    "@aws-sdk/client-dynamodb",
+    "@aws-sdk/client-s3",
+    "@aws-sdk/client-secrets-manager",
+    "@aws-sdk/client-ssm",
+    "@aws-sdk/lib-dynamodb",
+    "chalk",
+    "clawhub",
+    "commander",
+    "js-yaml",
+    "simple-git",
+    "yaml",
+    "zod"
+  ]
 }
