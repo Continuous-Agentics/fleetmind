@@ -62,7 +62,8 @@
     "js-yaml": "^4.1.0",
     "simple-git": "^3.25.0",
     "yaml": "^2.9.0",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "@smithy/node-http-handler": "^4.6.1"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
@@ -76,6 +77,7 @@
     "@aws-sdk/client-secrets-manager",
     "@aws-sdk/client-ssm",
     "@aws-sdk/lib-dynamodb",
+    "@smithy/node-http-handler",
     "chalk",
     "clawhub",
     "commander",

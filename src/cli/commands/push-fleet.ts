@@ -47,6 +47,7 @@ import {
   DescribeInstanceInformationCommand,
 } from "@aws-sdk/client-ssm";
 
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { loadFleet } from "../../config/loader.js";
 import { provisionFleet } from "../../runtime/provisioner.js";
 import { writeOutputs, resolveOpenClawBaseDir } from "../../runtime/renderer.js";
@@ -54,13 +55,24 @@ import { log } from "../../utils/log.js";
 
 // ── AWS client helpers ───────────────────────────────────────────────────────
 
-/** Request timeout for all SSM API calls. Prevents indefinite hangs on
- *  transient AWS API failures — the SDK's default retry logic has no wall-clock
- *  limit, which can block `push fleet` for many minutes on a single stuck call. */
-const SSM_REQUEST_TIMEOUT_MS = 30_000;
-
+/**
+ * Return a configured SSMClient with explicit timeouts and a capped retry count.
+ *
+ * connectionTimeout: abort quickly if the SSM endpoint is unreachable (network
+ *   blip, VPN, misconfigured endpoint) rather than hanging on TCP SYN.
+ * requestTimeout: abort if a connected request doesn't complete within 30s.
+ * maxAttempts: 2 attempts total (1 retry). Without this the SDK retries 3 times
+ *   by default, so a worst-case hang is 3 x requestTimeout + backoff ~= 95s.
+ */
 function makeSsmClient(region: string): SSMClient {
-  return new SSMClient({ region, requestHandler: { requestTimeout: SSM_REQUEST_TIMEOUT_MS } });
+  return new SSMClient({
+    region,
+    requestHandler: new NodeHttpHandler({
+      connectionTimeout: 5_000,
+      requestTimeout: 30_000,
+    }),
+    maxAttempts: 2,
+  });
 }
 
 
@@ -663,6 +675,7 @@ export async function runPushFleet(
     // Trigger SSM — skip when --no-apply is set
     if (!opts.noApply) {
       try {
+        log.step(`    looking up ${agentId} instance in SSM...`);
         const instanceId = await lookupInstance(fleetName, agentId, region);
         if (!instanceId) {
           log.warn(`  ${agentId}: instance not found in SSM (fleet_name=${fleetName}, agent_id=${agentId}) — skipping SSM trigger`);
