@@ -58,10 +58,39 @@ export function fleetmindPackageRoot(): string {
  * The `author` field is ignored for resolution (ClaWHub slugs are globally unique)
  * but can be used for display/documentation purposes.
  */
+/**
+ * Resolve the PATH to use for clawhub exec calls.
+ *
+ * When fleetmind is installed as a local dependency in a fleet repo, npm
+ * hoists `clawhub` to the fleet repo's own node_modules/.bin — two directory
+ * levels above the fleetmind package root (past `@continuous-agentics/fleetmind`).
+ * When fleetmind is installed globally, npm hoists clawhub to the global bin
+ * dir which is already in PATH.
+ *
+ * We prepend both candidate locations so the binary is found in either case
+ * without relying on the caller's environment having node_modules/.bin in PATH.
+ */
+function clawHubEnv(): NodeJS.ProcessEnv {
+  const pkgRoot = fleetmindPackageRoot();
+  // Local dep scenario: <fleet-repo>/node_modules/@continuous-agentics/fleetmind
+  // clawhub hoisted to:  <fleet-repo>/node_modules/.bin/clawhub
+  const hoistedBin = path.join(pkgRoot, "..", "..", ".bin");
+  // Nested dep scenario: clawhub inside fleetmind's own node_modules
+  const localBin = path.join(pkgRoot, "node_modules", ".bin");
+  const systemPath = process.env.PATH ?? "";
+  return {
+    ...process.env,
+    PATH: `${localBin}${path.delimiter}${hoistedBin}${path.delimiter}${systemPath}`,
+  };
+}
+
 async function resolveClawHub(skill: SkillRef, destDir: string, dryRun: boolean): Promise<boolean> {
-  // Check clawhub CLI is available
+  const env = clawHubEnv();
+
+  // Check clawhub CLI is available.
+  // Note: clawhub uses -V (not --version); --version exits 1.
   try {
-    execSync("clawhub --version", { stdio: "pipe" });
+    execSync("clawhub -V", { stdio: "pipe", env });
   } catch {
     log.error(`  [clawhub] 'clawhub' CLI not found. It should be installed as a fleetmind dependency — try reinstalling: npm install -g @continuous-agentics/fleetmind`);
     return false;
@@ -82,7 +111,7 @@ async function resolveClawHub(skill: SkillRef, destDir: string, dryRun: boolean)
     log.dim(`  [clawhub] Installing ${slug}${skill.version ? `@${skill.version}` : ""}`);
     execSync(
       `clawhub install ${slug} ${versionFlag} --workdir ${workdir} --no-input --force`,
-      { stdio: "pipe" }
+      { stdio: "pipe", env }
     );
     log.ok(`  [clawhub] ${slug} installed`);
     return true;
