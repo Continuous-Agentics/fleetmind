@@ -63,7 +63,7 @@ async function resolveClawHub(skill: SkillRef, destDir: string, dryRun: boolean)
   try {
     execSync("clawhub --version", { stdio: "pipe" });
   } catch {
-    log.error(`  [clawhub] 'clawhub' CLI not found. Install with: npm i -g clawhub`);
+    log.error(`  [clawhub] 'clawhub' CLI not found. It should be installed as a fleetmind dependency — try reinstalling: npm install -g @continuous-agentics/fleetmind`);
     return false;
   }
 
