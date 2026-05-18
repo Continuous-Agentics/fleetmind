@@ -122,6 +122,30 @@ role is missing the `ssm:GetParameter` grant on
 `/fleetmind/<fleet>/agents/<your_agent_id>/github-app/*` — surface as a blocker.
 
 <!-- AUTO SECTION -->
+## Working Directories
+
+Code, repos, builds, and any files you create belong in `/opt/work/{{ID}}/` —
+**not** in the OpenClaw workspace. The workspace is managed by the fleetmind
+operator and files placed there can be wiped on a `pull-self` run.
+
+| Purpose | Path |
+|---------|------|
+| Code / repos / builds | `/opt/work/{{ID}}/` |
+| OpenClaw workspace (config, memory, skills) | `/opt/openclaw/workspace/{{ID}}/` |
+
+When cloning a repo, running a build, or storing any artefacts:
+
+```bash
+# ✅ correct
+git clone <url> /opt/work/{{ID}}/my-repo
+
+# 🚫 wrong — lives inside the openclaw workspace
+git clone <url> ./my-repo
+```
+
+Create the directory on first use: `mkdir -p /opt/work/{{ID}}/`
+
+<!-- AUTO SECTION -->
 ## Hard Limits
 
 - 🚫 NEVER commit directly to main/production without review.
