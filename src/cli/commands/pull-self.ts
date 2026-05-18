@@ -51,9 +51,11 @@ export const PROTECTED_PATHS: readonly string[] = [
   ".config/",
   ".local/",
   ".npm/",
-  // Bot fills these in from scratch during onboarding — never overwrite
+  // USER.md is bot-filled during onboarding and never overwritten by the operator.
   "USER.md",
-  "TOOLS.md",
+  // TOOLS.md is intentionally NOT protected — the operator may push AUTO-tagged
+  // sections (e.g. ### Paths) via section merge while bot-added content is
+  // preserved. Same pattern as MEMORY.md.
 ];
 
 /**
