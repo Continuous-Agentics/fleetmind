@@ -6,6 +6,12 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-05-18
+
+### Fixed
+
+- **`clawhub` availability check used wrong flag and ignored local `node_modules`.** Two bugs in `resolveClawHub()`: (1) `clawhub --version` exits 1 — the correct flag is `-V`, so the check was always throwing and always reporting "clawhub not found" even when the binary was reachable; (2) `execSync` uses the system PATH which does not include `node_modules/.bin`, so when fleetmind is a local dep in a fleet repo, npm's hoisted `clawhub` binary was never found. Fixed by switching to `-V` and augmenting PATH with both the hoisted (`<fleet-repo>/node_modules/.bin`) and nested (`<fleetmind>/node_modules/.bin`) bin locations. Both fixes verified with isolated node tests before merging. ([#171](https://github.com/Continuous-Agentics/fleetmind/pull/171))
+
 ## [0.6.4] — 2026-05-18
 
 ### Fixed
