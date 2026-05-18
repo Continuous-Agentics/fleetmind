@@ -52,6 +52,18 @@ import { provisionFleet } from "../../runtime/provisioner.js";
 import { writeOutputs, resolveOpenClawBaseDir } from "../../runtime/renderer.js";
 import { log } from "../../utils/log.js";
 
+// ── AWS client helpers ───────────────────────────────────────────────────────
+
+/** Request timeout for all SSM API calls. Prevents indefinite hangs on
+ *  transient AWS API failures — the SDK's default retry logic has no wall-clock
+ *  limit, which can block `push fleet` for many minutes on a single stuck call. */
+const SSM_REQUEST_TIMEOUT_MS = 30_000;
+
+function makeSsmClient(region: string): SSMClient {
+  return new SSMClient({ region, requestHandler: { requestTimeout: SSM_REQUEST_TIMEOUT_MS } });
+}
+
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface ManifestFile {
@@ -267,7 +279,7 @@ async function defaultLookupInstance(
 ): Promise<string | null> {
   // Tag keys must match the fleetmind:* namespace set by infra/terraform/ec2.tf.
   // Unprefixed `fleet_name` / `agent_id` tags don't exist on the instances.
-  const ssm = new SSMClient({ region });
+  const ssm = makeSsmClient(region);
   const resp = await ssm.send(
     new DescribeInstanceInformationCommand({
       Filters: [
@@ -285,7 +297,7 @@ async function defaultSendSsmCommand(
   commands: string[],
   region: string
 ): Promise<string> {
-  const ssm = new SSMClient({ region });
+  const ssm = makeSsmClient(region);
   const resp = await ssm.send(
     new SendCommandCommand({
       InstanceIds: [instanceId],
