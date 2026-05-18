@@ -78,6 +78,7 @@ export function buildFleetRoster(fleet: Fleet, currentAgent: AgentConfig): strin
 function applyPlaceholders(text: string, agent: AgentConfig, fleet?: Fleet): string {
   let result = text
     .replaceAll("{{NAME}}", agent.name)
+    .replaceAll("{{ID}}", agent.id)
     .replaceAll("{{EMOJI}}", agent.emoji ?? "")
     .replaceAll("{{DESCRIPTION}}", agent.description ?? "")
     .replaceAll("{{SOUL_BODY}}", agent.persona?.soul ?? "");
@@ -342,6 +343,14 @@ export async function provisionAgent(
   const memoryTemplate = readRoleTemplate(role, "MEMORY.md");
   if (memoryTemplate !== null) {
     writeFile(path.join(workspace, "MEMORY.md"), memoryTemplate, dryRun);
+  }
+
+  // TOOLS.md — only create if missing. pull-self protects this file from
+  // being overwritten on existing agents, so this seeds it once for new agents.
+  const toolsMdTemplate = readRoleTemplate(role, "TOOLS.md");
+  const toolsMdPath = path.join(workspace, "TOOLS.md");
+  if (toolsMdTemplate !== null && !fs.existsSync(toolsMdPath)) {
+    writeFile(toolsMdPath, applyPlaceholders(toolsMdTemplate, agent, fleet), dryRun);
   }
 
   // USER.md — only create if missing (don't overwrite customized versions)
