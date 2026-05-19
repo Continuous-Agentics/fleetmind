@@ -7,7 +7,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseDuration } from "../cli/commands/query.js";
+import { parseDuration, resolveStatusItems } from "../cli/commands/query.js";
 import type { TaskSummary, TaskStatus } from "../runtime/delegation/types.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -291,6 +291,86 @@ describe("query all — GSI selection logic", () => {
     const output = { items: results };
     assert.ok(Array.isArray(output.items));
     assert.equal(output.items.length, 1);
+  });
+});
+
+// ── query all — multi-status (comma-separated --status) ─────────────────────
+
+
+describe("query all — multi-status comma-separated --status (GSI bug fix)", () => {
+  it("single status string still issues exactly one GSI2 query", async () => {
+    const calls: LedgerMockCall[] = [];
+    const items = [makeTaskSummary({ status: "blocked" })];
+    const ledger = makeMockLedger(items, calls);
+
+    const results = await resolveStatusItems(ledger, { status: "blocked", limit: 50 });
+    assert.equal(results.length, 1);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, "queryByStatus");
+    assert.equal((calls[0].opts as QueryByStatusOpts).status, "blocked");
+  });
+
+  it("comma-separated statuses issue one GSI2 query per status", async () => {
+    const calls: LedgerMockCall[] = [];
+    const items = [
+      makeTaskSummary({ task_id: "aaaa0001", status: "delegated" }),
+      makeTaskSummary({ task_id: "aaaa0002", status: "accepted" }),
+      makeTaskSummary({ task_id: "aaaa0003", status: "shipped" }),
+      makeTaskSummary({ task_id: "aaaa0004", status: "blocked" }),
+    ];
+    const ledger = makeMockLedger(items, calls);
+
+    const results = await resolveStatusItems(ledger, { status: "delegated,accepted,shipped,blocked", limit: 50 });
+    assert.equal(results.length, 4);
+    assert.equal(calls.length, 4, "should issue 4 separate GSI queries");
+    const queriedStatuses = calls.map((c) => (c.opts as QueryByStatusOpts).status).sort();
+    assert.deepEqual(queriedStatuses, ["accepted", "blocked", "delegated", "shipped"]);
+  });
+
+  it("heartbeat form 'delegated,accepted,shipped,blocked' returns non-empty results", async () => {
+    // This is the exact form used in HEARTBEAT.md that was silently returning empty.
+    const calls: LedgerMockCall[] = [];
+    const items = [
+      makeTaskSummary({ task_id: "hb000001", status: "accepted", worker: "daedalus" }),
+      makeTaskSummary({ task_id: "hb000002", status: "delegated", worker: "iris" }),
+    ];
+    const ledger = makeMockLedger(items, calls);
+
+    const results = await resolveStatusItems(ledger, { status: "delegated,accepted,shipped,blocked", limit: 50 });
+    assert.ok(results.length > 0, "must return tasks, not empty array");
+    assert.equal(calls.length, 4, "must issue separate query per status, not one compound GSI key");
+  });
+
+  it("comma-separated statuses with --project use GSI1 per status", async () => {
+    const calls: LedgerMockCall[] = [];
+    const items = [
+      makeTaskSummary({ task_id: "proj0001", status: "delegated", project: "my-project" }),
+      makeTaskSummary({ task_id: "proj0002", status: "accepted", project: "my-project" }),
+    ];
+    const ledger = makeMockLedger(items, calls);
+
+    const results = await resolveStatusItems(ledger, { status: "delegated,accepted", project: "my-project", limit: 50 });
+    assert.equal(results.length, 2);
+    assert.equal(calls.length, 2, "should issue 2 GSI1 queries");
+    for (const call of calls) {
+      assert.equal(call.method, "queryByProjectStatus");
+      assert.equal((call.opts as QueryByProjectStatusOpts).project, "my-project");
+    }
+  });
+
+  it("trims whitespace around comma-separated statuses", async () => {
+    const calls: LedgerMockCall[] = [];
+    const items = [
+      makeTaskSummary({ task_id: "trim0001", status: "delegated" }),
+      makeTaskSummary({ task_id: "trim0002", status: "shipped" }),
+    ];
+    const ledger = makeMockLedger(items, calls);
+
+    const results = await resolveStatusItems(ledger, { status: " delegated , shipped ", limit: 50 });
+    assert.equal(calls.length, 2);
+    const queriedStatuses = calls.map((c) => (c.opts as QueryByStatusOpts).status).sort();
+    assert.deepEqual(queriedStatuses, ["delegated", "shipped"]);
+    assert.equal(results.length, 2);
   });
 });
 

@@ -19,6 +19,50 @@ import { log } from "../../utils/log.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/**
+ * Resolve items for `query all` given optional project + comma-separated status.
+ *
+ * Exported for unit testing — this is the production dispatch logic.
+ *
+ * Note: `limit` is applied per-status (consistent with the no-filter path).
+ * With N statuses the caller may receive up to N × limit results.
+ */
+export async function resolveStatusItems(
+  ledger: Pick<TaskLedger, "queryByStatus" | "queryByProjectStatus">,
+  opts: { project?: string; status?: string; limit: number }
+): Promise<Awaited<ReturnType<TaskLedger["queryByStatus"]>>> {
+  const { project, limit } = opts;
+  const ALL_STATUSES: TaskStatus[] = ["delegated", "accepted", "shipped", "signed_off", "merged", "blocked", "abandoned"];
+
+  if (project && opts.status) {
+    // GSI1: ProjectStatusIndex — comma-separated statuses fan out to one query each
+    const statuses = opts.status.split(",").map((s) => s.trim()).filter(Boolean) as TaskStatus[];
+    const results = await Promise.all(
+      statuses.map((s) => ledger.queryByProjectStatus({ project, status: s, limit, ascending: false }))
+    );
+    return results.flat();
+  } else if (opts.status) {
+    // GSI2: StatusIndex — cross-project, one query per status
+    const statuses = opts.status.split(",").map((s) => s.trim()).filter(Boolean) as TaskStatus[];
+    const results = await Promise.all(
+      statuses.map((s) => ledger.queryByStatus({ status: s, limit, ascending: false }))
+    );
+    return results.flat();
+  } else if (project) {
+    // All statuses for one project — requires multiple GSI1 queries (no table scan)
+    const results = await Promise.all(
+      ALL_STATUSES.map((s) => ledger.queryByProjectStatus({ project, status: s, limit, ascending: false }))
+    );
+    return results.flat();
+  } else {
+    // No filters — fan out across all status indexes (potentially expensive)
+    const results = await Promise.all(
+      ALL_STATUSES.map((s) => ledger.queryByStatus({ status: s, limit, ascending: false }))
+    );
+    return results.flat();
+  }
+}
+
 function makeLedger(fleet: ReturnType<typeof resolveAndLoadFleet>): TaskLedger {
   const d = fleet.delegation;
   if (!d?.enabled || !d.table_name) {
@@ -301,42 +345,17 @@ Examples:
       const ledger = makeLedger(fleet);
       const limit = parseInt(opts.limit, 10);
 
-      let items;
-
-      if (opts.project && opts.status) {
-        // GSI1: ProjectStatusIndex — most efficient
-        items = await ledger.queryByProjectStatus({
-          project: opts.project,
-          status: opts.status as TaskStatus,
-          limit,
-          ascending: false,
-        });
-      } else if (opts.status) {
-        // GSI2: StatusIndex — cross-project
-        items = await ledger.queryByStatus({
-          status: opts.status as TaskStatus,
-          limit,
-          ascending: false,
-        });
-      } else if (opts.project) {
-        // All statuses for a project — query each known status and merge
-        log.warn("Querying all statuses for a project requires multiple GSI1 queries (no table scan).");
-        const statuses: TaskStatus[] = ["delegated", "accepted", "shipped", "signed_off", "merged", "blocked", "abandoned"];
-        const results = await Promise.all(
-          statuses.map((s) =>
-            ledger.queryByProjectStatus({ project: opts.project!, status: s, limit, ascending: false })
-          )
-        );
-        items = results.flat();
-      } else {
-        // No filters — warn about cost
+      if (!opts.project && !opts.status) {
         log.warn("No --project or --status given. This queries each status index separately (potentially expensive).");
-        const statuses: TaskStatus[] = ["delegated", "accepted", "shipped", "signed_off", "merged", "blocked", "abandoned"];
-        const results = await Promise.all(
-          statuses.map((s) => ledger.queryByStatus({ status: s, limit, ascending: false }))
-        );
-        items = results.flat();
+      } else if (opts.project && !opts.status) {
+        log.warn("Querying all statuses for a project requires multiple GSI1 queries (no table scan).");
       }
+
+      const items = await resolveStatusItems(ledger, {
+        project: opts.project,
+        status: opts.status,
+        limit,
+      });
 
       const output = { items };
       console.log(opts.json ? JSON.stringify(output, null, 2) : formatTable(items));
