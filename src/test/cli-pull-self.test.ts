@@ -1017,17 +1017,15 @@ describe("applyDiff — protected paths (defence-in-depth)", () => {
     assert.ok(fs.existsSync(sessionFile), ".openclaw/ files must survive applyDiff even if listed in deleted");
   });
 
-  test(".openclaw/openclaw.json IS updated even though .openclaw/ is protected — three-way merge applies", () => {
-    // Scenario: live openclaw.json is missing workspace (e.g., written by openclaw
-    // self-init before the first push). The incoming tarball has workspace.
-    // applyDiff must update the file despite .openclaw/ being in PROTECTED_PATHS.
+  test(".openclaw/openclaw.json IS updated even though .openclaw/ is protected — patches=empty path", () => {
+    // base = live = no workspace; patches = {}; incoming wins cleanly.
+    // Confirms the protected-path guard is bypassed for openclaw.json.
     const ocDir = path.join(workspaceDir, ".openclaw");
     fs.mkdirSync(ocDir, { recursive: true });
 
     const liveConfig = { agents: { defaults: { model: { primary: "m" } }, list: [{ id: "bot", name: "Bot" }] } };
     const incomingConfig = { agents: { defaults: { model: { primary: "m" } }, list: [{ id: "bot", name: "Bot", workspace: "/opt/openclaw/workspace/bot" }] } };
-    // base matches live (no workspace) — so patches = {} and incoming wins cleanly
-    const baseConfig = { ...liveConfig };
+    const baseConfig = { ...liveConfig }; // base = live → patches = {}
 
     const ocJsonPath = path.join(ocDir, "openclaw.json");
     const ocBasePath = path.join(ocDir, "openclaw.base.json");
@@ -1038,13 +1036,11 @@ describe("applyDiff — protected paths (defence-in-depth)", () => {
     fs.writeFileSync(ocBasePath, JSON.stringify(baseConfig), "utf-8");
     fs.writeFileSync(path.join(stagingOcDir, "openclaw.json"), JSON.stringify(incomingConfig), "utf-8");
 
-    const diff: FileDiff = {
+    applyDiff(stagingDir, workspaceDir, {
       added: [],
       modified: [{ incoming: { path: ".openclaw/openclaw.json", size: 100, sha256: "new", mode: 644 }, currentSize: 80 }],
       deleted: [],
-    };
-
-    applyDiff(stagingDir, workspaceDir, diff);
+    });
 
     const result = JSON.parse(fs.readFileSync(ocJsonPath, "utf-8"));
     assert.equal(
@@ -1052,6 +1048,42 @@ describe("applyDiff — protected paths (defence-in-depth)", () => {
       "/opt/openclaw/workspace/bot",
       ".openclaw/openclaw.json must be updated by applyDiff even though .openclaw/ is protected"
     );
+    assert.equal(result._patched, undefined, "_patched must not appear in written file");
+  });
+
+  test(".openclaw/openclaw.json updated via three-way merge — real regression (base has workspace, live doesn't)", () => {
+    // The exact bug scenario: base+incoming have workspace, live doesn't.
+    // Without the agents.list fix, deepMerge would put live's no-workspace list into the result.
+    // This test exercises both the protected-path bypass AND the array-replacement fix.
+    const ocDir = path.join(workspaceDir, ".openclaw");
+    fs.mkdirSync(ocDir, { recursive: true });
+
+    const liveConfig = { agents: { list: [{ id: "bot", name: "Bot" }] }, gateway: { port: 18789 } }; // no workspace
+    const baseConfig = { agents: { list: [{ id: "bot", name: "Bot", workspace: "/opt/openclaw/workspace/bot" }] }, gateway: { port: 18789 } }; // HAS workspace
+    const incomingConfig = { agents: { list: [{ id: "bot", name: "Bot", workspace: "/opt/openclaw/workspace/bot" }] }, gateway: { port: 18789 } };
+
+    const ocJsonPath = path.join(ocDir, "openclaw.json");
+    const ocBasePath = path.join(ocDir, "openclaw.base.json");
+    const stagingOcDir = path.join(stagingDir, ".openclaw");
+    fs.mkdirSync(stagingOcDir, { recursive: true });
+
+    fs.writeFileSync(ocJsonPath, JSON.stringify(liveConfig), "utf-8");
+    fs.writeFileSync(ocBasePath, JSON.stringify(baseConfig), "utf-8");
+    fs.writeFileSync(path.join(stagingOcDir, "openclaw.json"), JSON.stringify(incomingConfig), "utf-8");
+
+    applyDiff(stagingDir, workspaceDir, {
+      added: [],
+      modified: [{ incoming: { path: ".openclaw/openclaw.json", size: 100, sha256: "new2", mode: 644 }, currentSize: 80 }],
+      deleted: [],
+    });
+
+    const result = JSON.parse(fs.readFileSync(ocJsonPath, "utf-8"));
+    assert.equal(
+      result.agents.list[0].workspace,
+      "/opt/openclaw/workspace/bot",
+      "workspace from incoming must win even when base had it but live didn't (array-replacement regression)"
+    );
+    assert.equal(result._patched, undefined, "_patched must not appear in written file");
   });
 
   test(".openclaw/openclaw.base.json IS updated even though .openclaw/ is protected", () => {
@@ -1112,8 +1144,9 @@ describe("mergeOpenClawConfig — workspace field preservation", () => {
     assert.deepEqual(result, incoming);
   });
 
-  test("workspace field from incoming is preserved when live config lacks it", () => {
-    // Simulates the bug: live config created before workspace field was added.
+  test("workspace field preserved when base=live=no-workspace (patches empty, incoming wins)", () => {
+    // patches = {} because base === live; merge returns incoming directly.
+    // Exercises the patches=0 early-return path.
     const base = { agents: { list: [{ id: "bot", name: "Bot" }] }, gateway: { port: 18789 } };
     const live = { agents: { list: [{ id: "bot", name: "Bot" }] }, gateway: { port: 18789 } };
     const incoming = { agents: { list: [{ id: "bot", name: "Bot", workspace: "/opt/openclaw/workspace/bot" }] }, gateway: { port: 18789 } };
@@ -1123,13 +1156,39 @@ describe("mergeOpenClawConfig — workspace field preservation", () => {
     writeJson(path.join(workspaceDir, ".openclaw", "openclaw.base.json"), base);
 
     const result = mergeOpenClawConfig(incomingPath, livePath, workspaceDir);
-    // agents.list must always come from incoming
     const agentsList = ((result.agents as Record<string, unknown>).list as Record<string, unknown>[]);
     assert.equal(
       agentsList?.[0]?.workspace,
       "/opt/openclaw/workspace/bot",
       "workspace must be present in merged result even if live config lacked it"
     );
+  });
+
+  test("workspace field preserved when base HAS workspace but live DOESN'T (the array-replacement bug)", () => {
+    // This is the exact regression: base was pushed WITH workspace (so base has it),
+    // but live somehow lost it (e.g. written by openclaw self-init before first push
+    // then overwritten by a non-workspace push). Without the agents.list fix,
+    // deepMerge replaces incoming.agents.list with live.agents.list (no workspace).
+    const base = { agents: { list: [{ id: "bot", name: "Bot", workspace: "/opt/openclaw/workspace/bot" }] }, gateway: { port: 18789 } };
+    const live = { agents: { list: [{ id: "bot", name: "Bot" }] }, gateway: { port: 18789 } }; // workspace MISSING
+    const incoming = { agents: { list: [{ id: "bot", name: "Bot", workspace: "/opt/openclaw/workspace/bot" }] }, gateway: { port: 18789 } };
+
+    // patches = { agents: live.agents } because base.agents != live.agents
+    // deepMerge without the fix: replaces incoming.agents.list with live.agents.list (no workspace)
+    // deepMerge WITH the fix: restores incoming.agents.list after merge
+    const incomingPath = writeJson(path.join(tmpDir, "incoming-ws-regression.json"), incoming);
+    const livePath = writeJson(path.join(tmpDir, "live-ws-regression.json"), live);
+    writeJson(path.join(workspaceDir, ".openclaw", "openclaw.base.json"), base);
+
+    const result = mergeOpenClawConfig(incomingPath, livePath, workspaceDir);
+    const agentsList = ((result.agents as Record<string, unknown>).list as Record<string, unknown>[]);
+    assert.equal(
+      agentsList?.[0]?.workspace,
+      "/opt/openclaw/workspace/bot",
+      "workspace from incoming must survive even when live.agents.list lacks it and base.agents.list had it"
+    );
+    // _patched should NOT be set — the only patch was agents.list, which we override from incoming
+    assert.equal(result._patched, undefined, "_patched must not be set when only agents.list differed");
   });
 
   test("operator patch to gateway.port survives merge", () => {
@@ -1151,6 +1210,8 @@ describe("mergeOpenClawConfig — workspace field preservation", () => {
       "/ws/bot",
       "workspace must remain from incoming"
     );
+    // _patched should be true because gateway.port was genuinely operator-patched
+    assert.equal(result._patched, true, "_patched must be set when non-agents keys are patched");
   });
 
   test("incoming wins entirely when base equals live (no live patches)", () => {

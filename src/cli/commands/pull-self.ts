@@ -671,40 +671,57 @@ export function mergeOpenClawConfig(
   const live = JSON.parse(fs.readFileSync(livePath, 'utf-8')) as Record<string, unknown>;
 
   const patches = diffObjects(base, live);
+
+  // Always restore incoming.agents.list regardless of whether patches exist.
+  // agents.list is fleet-managed (derived from fleet.yaml by the renderer)
+  // and is never directly operator-patched via 'openclaw config patch'.
+  // The (live − base) diff can produce patches.agents when the live config
+  // is missing a renderer-added field (e.g. workspace, agentDir).
+  // deepMerge replaces arrays wholesale, so without this guard the stale
+  // live.agents.list (no workspace) would silently win over incoming.
+  //
+  // Concrete failure mode:
+  //   base  = { agents: { list: [{ id, name, workspace, ... }] } }  (rendered w/ workspace)
+  //   live  = { agents: { list: [{ id, name, ... }] } }             (old file, no workspace)
+  //   patches.agents = live.agents  (because JSON(base.agents) ≠ JSON(live.agents))
+  //   deepMerge replaces incoming.agents.list with live.agents.list  → workspace lost
+  const hasIncomingList =
+    incoming.agents !== undefined &&
+    typeof incoming.agents === 'object' &&
+    !Array.isArray(incoming.agents) &&
+    Array.isArray((incoming.agents as Record<string, unknown>).list);
+
   if (Object.keys(patches).length === 0) {
     return incoming;
   }
 
   const merged = deepMerge(incoming, patches);
 
-  // agents.list is entirely fleet-managed (derived from fleet.yaml by the
-  // renderer). It is never directly operator-patched via 'openclaw config
-  // patch' in chat. Always use incoming.agents.list so structural fields
-  // like `workspace` and `agentDir` — which may be absent in a live config
-  // written before a newer renderer version added them — are never dropped
-  // by the (live − base) patch set.
-  //
-  // Concrete failure mode without this guard:
-  //   base  = { agents: { list: [{ id, name, workspace, ... }] } }  (rendered w/ workspace)
-  //   live  = { agents: { list: [{ id, name, ... }] } }             (old file, no workspace)
-  //   patches.agents = live.agents  (because base.agents != live.agents)
-  //   deepMerge replaces incoming.agents.list with live.agents.list  → workspace lost
   if (
-    incoming.agents !== undefined &&
-    typeof incoming.agents === 'object' &&
-    !Array.isArray(incoming.agents) &&
+    hasIncomingList &&
     merged.agents !== undefined &&
     typeof merged.agents === 'object' &&
     !Array.isArray(merged.agents)
   ) {
     const incomingAgents = incoming.agents as Record<string, unknown>;
     const mergedAgents = merged.agents as Record<string, unknown>;
-    if (Array.isArray(incomingAgents.list)) {
-      mergedAgents.list = incomingAgents.list;
-    }
+    mergedAgents.list = incomingAgents.list;
   }
 
-  (merged as Record<string, unknown>)._patched = true;
+  // Only mark _patched when keys OTHER than agents are patched, OR when
+  // agents has keys other than list patched. agents.list is always taken
+  // from incoming (fleet-managed), so an agents-only patch that only affects
+  // list is not a meaningful operator customisation to surface.
+  const nonAgentsPatched = Object.keys(patches).some((k) => k !== 'agents');
+  const agentsNonListPatched = (() => {
+    if (!('agents' in patches) || typeof patches.agents !== 'object' || Array.isArray(patches.agents) || patches.agents === null) return false;
+    const pAgents = patches.agents as Record<string, unknown>;
+    return Object.keys(pAgents).some((k) => k !== 'list');
+  })();
+
+  if (nonAgentsPatched || agentsNonListPatched) {
+    (merged as Record<string, unknown>)._patched = true;
+  }
   return merged;
 }
 
