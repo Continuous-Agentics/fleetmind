@@ -6,6 +6,12 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.6.13] — 2026-05-19
+
+### Fixed
+
+- **`fleetmind query all --status` silently returned empty when given comma-separated values without `--project`.** The CLI was passing the full string (e.g. `delegated,accepted,shipped,blocked`) as a single DynamoDB GSI2 key, which matches nothing. Fixed by splitting on commas and fanning out one `queryByStatus` / `queryByProjectStatus` call per status, then merging results. Dispatch logic extracted into an exported `resolveStatusItems` helper so tests exercise the production path directly. ([#188](https://github.com/Continuous-Agentics/fleetmind/pull/188))
+
 ## [0.6.5] — 2026-05-18
 
 ### Fixed
