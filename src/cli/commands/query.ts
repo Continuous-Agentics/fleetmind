@@ -305,19 +305,39 @@ Examples:
 
       if (opts.project && opts.status) {
         // GSI1: ProjectStatusIndex — most efficient
-        items = await ledger.queryByProjectStatus({
-          project: opts.project,
-          status: opts.status as TaskStatus,
-          limit,
-          ascending: false,
-        });
+        // Support comma-separated status values (e.g. "delegated,accepted,shipped")
+        const statuses = opts.status.split(",").map((s) => s.trim()).filter(Boolean) as TaskStatus[];
+        if (statuses.length === 1) {
+          items = await ledger.queryByProjectStatus({
+            project: opts.project,
+            status: statuses[0],
+            limit,
+            ascending: false,
+          });
+        } else {
+          const results = await Promise.all(
+            statuses.map((s) =>
+              ledger.queryByProjectStatus({ project: opts.project!, status: s, limit, ascending: false })
+            )
+          );
+          items = results.flat();
+        }
       } else if (opts.status) {
         // GSI2: StatusIndex — cross-project
-        items = await ledger.queryByStatus({
-          status: opts.status as TaskStatus,
-          limit,
-          ascending: false,
-        });
+        // Support comma-separated status values (e.g. "delegated,accepted,shipped,blocked")
+        const statuses = opts.status.split(",").map((s) => s.trim()).filter(Boolean) as TaskStatus[];
+        if (statuses.length === 1) {
+          items = await ledger.queryByStatus({
+            status: statuses[0],
+            limit,
+            ascending: false,
+          });
+        } else {
+          const results = await Promise.all(
+            statuses.map((s) => ledger.queryByStatus({ status: s, limit, ascending: false }))
+          );
+          items = results.flat();
+        }
       } else if (opts.project) {
         // All statuses for a project — query each known status and merge
         log.warn("Querying all statuses for a project requires multiple GSI1 queries (no table scan).");
