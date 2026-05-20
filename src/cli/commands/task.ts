@@ -23,7 +23,29 @@ import { readFileSync } from "fs";
 import { resolveAndLoadFleet } from "../../config/loader.js";
 import { TaskLedger, TaskConditionError } from "../../runtime/delegation/ddb.js";
 import type { TaskRecord } from "../../runtime/delegation/types.js";
+import type { DelegationFleetConfig } from "../../config/schema.js";
+import { publishTaskEvent, type TaskEvent } from "../../transport/nats.js";
 import { log } from "../../utils/log.js";
+
+// ── NATS helper ────────────────────────────────────────────────────────────
+
+/**
+ * Publish a task event to NATS if the fleet config includes NATS transport.
+ * Never throws — NATS failures are logged but do not fail the CLI command.
+ */
+async function maybePublishNats(
+  delegation: DelegationFleetConfig | undefined,
+  event: TaskEvent
+): Promise<void> {
+  if (!delegation?.nats) return;
+  const transport = delegation.delegation_transport ?? "slack";
+  if (transport === "slack") return;
+  try {
+    await publishTaskEvent(delegation.nats, event);
+  } catch (err) {
+    log.warn(`[nats] publish failed for ${event.event}/${event.task_id}: ${err}`);
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -409,7 +431,8 @@ Examples:
       --tracker https://linear.app/acme/issue/ENG-42
 `)
     .action(async (opts: CreateTaskOptions) => {
-      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
+      const fleet = resolveAndLoadFleet(opts.fleet);
+      const ledger = makeLedger(fleet);
       try {
         const record = await createTask(opts, ledger);
         output(
@@ -418,6 +441,20 @@ Examples:
             : `Created task ${record.task_id} for project ${record.project} (status: delegated)`,
           opts.json ?? false
         );
+        // Publish delegation event to NATS if transport is nats or both.
+        await maybePublishNats(fleet.delegation, {
+          v: "1.0",
+          event: "delegation",
+          task_id: record.task_id,
+          project: record.project,
+          worker: record.worker,
+          delegated_by: record.delegated_by,
+          at: record.delegated_at,
+          definition_of_done: record.definition_of_done,
+          tracker_link: record.tracker_link ?? undefined,
+          delegation_thread: record.delegation_thread,
+          delegation_envelope_ts: record.delegation_envelope_ts,
+        });
       } catch (err) {
         if (err instanceof TaskConditionError) {
           log.error(err.message);
@@ -446,7 +483,8 @@ Examples:
   $ fleetmind task ack --task-id a1b2c3d4 --worker forge --project website-rewrite
 `)
     .action(async (opts: WorkerTaskOptions) => {
-      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
+      const fleet = resolveAndLoadFleet(opts.fleet);
+      const ledger = makeLedger(fleet);
       try {
         await ackTask(opts, ledger);
         output(
@@ -455,6 +493,19 @@ Examples:
             : `Task ${opts.taskId} acknowledged (status: accepted)`,
           opts.json ?? false
         );
+        // Publish ack event to NATS if transport includes it.
+        const record = await ledger.getTask(opts.taskId);
+        if (record) {
+          await maybePublishNats(fleet.delegation, {
+            v: "1.0",
+            event: "ack",
+            task_id: record.task_id,
+            project: record.project,
+            worker: record.worker,
+            delegated_by: record.delegated_by,
+            at: record.accepted_at ?? new Date().toISOString(),
+          });
+        }
       } catch (err) { handleError(err); }
     });
 
@@ -477,7 +528,8 @@ Examples:
   $ fleetmind task ship --task-id a1b2c3d4 --worker forge --project website-rewrite
 `)
     .action(async (opts: WorkerTaskOptions) => {
-      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
+      const fleet = resolveAndLoadFleet(opts.fleet);
+      const ledger = makeLedger(fleet);
       try {
         await shipTask(opts, ledger);
         output(
@@ -486,6 +538,19 @@ Examples:
             : `Task ${opts.taskId} shipped (status: shipped)`,
           opts.json ?? false
         );
+        // Publish ship event to NATS if transport includes it.
+        const record = await ledger.getTask(opts.taskId);
+        if (record) {
+          await maybePublishNats(fleet.delegation, {
+            v: "1.0",
+            event: "ship",
+            task_id: record.task_id,
+            project: record.project,
+            worker: record.worker,
+            delegated_by: record.delegated_by,
+            at: record.shipped_at ?? new Date().toISOString(),
+          });
+        }
       } catch (err) { handleError(err); }
     });
 
@@ -508,7 +573,8 @@ Examples:
   $ fleetmind task block --task-id a1b2c3d4 --worker forge --project api-refactor
 `)
     .action(async (opts: WorkerTaskOptions) => {
-      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
+      const fleet = resolveAndLoadFleet(opts.fleet);
+      const ledger = makeLedger(fleet);
       try {
         await blockTask(opts, ledger);
         output(
@@ -517,6 +583,19 @@ Examples:
             : `Task ${opts.taskId} blocked (status: blocked)`,
           opts.json ?? false
         );
+        // Publish block event to NATS if transport includes it.
+        const record = await ledger.getTask(opts.taskId);
+        if (record) {
+          await maybePublishNats(fleet.delegation, {
+            v: "1.0",
+            event: "block",
+            task_id: record.task_id,
+            project: record.project,
+            worker: record.worker,
+            delegated_by: record.delegated_by,
+            at: record.blocked_at ?? new Date().toISOString(),
+          });
+        }
       } catch (err) { handleError(err); }
     });
 

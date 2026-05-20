@@ -122,6 +122,43 @@ export const CronSweepSchema = z.object({
 
 export type CronSweepConfig = z.infer<typeof CronSweepSchema>;
 
+// ── NATS transport config ─────────────────────────────────────────────────────
+
+/**
+ * Which transports are used when the PM bot delivers a task delegation.
+ * - "slack": Slack channel message only (legacy default)
+ * - "nats": NATS subject publish only
+ * - "both": publish to both Slack and NATS simultaneously
+ */
+export const DelegationTransportSchema = z.enum(["slack", "nats", "both"]).default("slack");
+export type DelegationTransport = z.infer<typeof DelegationTransportSchema>;
+
+/**
+ * NATS connection config embedded in fleet delegation settings.
+ * Used by both the PM bot publisher and the worker subscriber.
+ */
+export const NatsConfigSchema = z.object({
+  /**
+   * NATS server URLs.  One or more servers for redundancy.
+   * Example: ["nats://nats.fleetmind.internal:4222"]
+   */
+  servers: z.array(z.string()).min(1),
+  /**
+   * Optional credentials file path (nkeys/creds format).
+   * If omitted the connection is unauthenticated.
+   */
+  creds_file: z.string().optional(),
+  /** Inbox prefix used for request-reply if needed; defaults to "_INBOX". */
+  inbox_prefix: z.string().default("_INBOX"),
+  /** Subject prefix for all fleetmind task events. Default: "fleetmind". */
+  subject_prefix: z.string().default("fleetmind"),
+  /** Connect timeout in milliseconds. Default 5000. */
+  connect_timeout_ms: z.number().int().positive().default(5000),
+  /** Max reconnect attempts (-1 = unlimited). Default -1. */
+  max_reconnect: z.number().int().default(-1),
+});
+export type NatsConfig = z.infer<typeof NatsConfigSchema>;
+
 /** Per-fleet delegation settings. Optional — fleets without delegation work normally. */
 export const DelegationFleetSchema = z.object({
   enabled: z.boolean().default(false),
@@ -136,6 +173,15 @@ export const DelegationFleetSchema = z.object({
    */
   s3_key_template: z.string().default("v0/projects/{project}/tasks/{date}-{task_id}.md"),
   aws_region: z.string().optional(),
+  /**
+   * Which transport(s) to use for delegation delivery.
+   * Defaults to "slack" for backwards compatibility.
+   */
+  delegation_transport: DelegationTransportSchema,
+  /**
+   * NATS connection config.  Required when delegation_transport is "nats" or "both".
+   */
+  nats: NatsConfigSchema.optional(),
 }).superRefine((val, ctx) => {
   if (val.enabled) {
     if (!val.table_name) {
@@ -143,6 +189,10 @@ export const DelegationFleetSchema = z.object({
     }
     if (!val.s3_bucket) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "delegation.s3_bucket is required when delegation.enabled = true" });
+    }
+    const transport = val.delegation_transport ?? "slack";
+    if ((transport === "nats" || transport === "both") && !val.nats) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "delegation.nats is required when delegation_transport is 'nats' or 'both'" });
     }
   }
 });
