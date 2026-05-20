@@ -30,6 +30,7 @@ import { log } from "../utils/log.js";
 export type TaskEventType =
   | "delegation"
   | "ack"
+  | "progress"
   | "ship"
   | "block";
 
@@ -55,6 +56,18 @@ export interface TaskEvent {
    */
   definition_of_done?: string;
   /**
+   * Free-text description of the feature / work context.
+   * Included in delegation events so workers can open an informed Slack
+   * thread with the requestor without a DDB round-trip.
+   */
+  description?: string;
+  /**
+   * Slack user ID (U…) of the human who requested this feature.
+   * Workers use this to open a Slack thread directly with the requestor
+   * on delegation receipt.
+   */
+  requestor?: string;
+  /**
    * External tracker link (Linear, Jira, etc.) — included in delegations
    * so workers can update the tracker without a DDB lookup.
    */
@@ -73,6 +86,11 @@ export interface TaskEvent {
    * summary without requiring a DDB read on the PM side).
    */
   reason?: string;
+  /**
+   * Progress message (used in progress events).
+   * Freeform update from the worker to the PM bot mid-task.
+   */
+  message?: string;
 }
 
 // ── Subject helpers ───────────────────────────────────────────────────────────
@@ -81,7 +99,7 @@ export function delegationSubject(prefix: string, workerId: string): string {
   return `${prefix}.delegation.${workerId}`;
 }
 
-export function taskSubject(prefix: string, taskId: string, event: "ack" | "ship" | "block"): string {
+export function taskSubject(prefix: string, taskId: string, event: "ack" | "progress" | "ship" | "block"): string {
   return `${prefix}.task.${taskId}.${event}`;
 }
 
@@ -152,6 +170,8 @@ function resolvePublishSubject(prefix: string, event: TaskEvent): string {
       return delegationSubject(prefix, event.worker);
     case "ack":
       return taskSubject(prefix, event.task_id, "ack");
+    case "progress":
+      return taskSubject(prefix, event.task_id, "progress");
     case "ship":
       return taskSubject(prefix, event.task_id, "ship");
     case "block":

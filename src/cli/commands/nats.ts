@@ -4,7 +4,8 @@
  * Usage:
  *   fleetmind nats subscribe --mode worker --worker-id <id>
  *   fleetmind nats subscribe --mode pm
- *   fleetmind nats publish --event delegation --task-id <hex> --worker <id> ...
+ *   fleetmind nats progress --task-id <hex> --worker <id> --message <text> ...
+ *   fleetmind nats publish --event delegation|ack|progress|ship|block --task-id <hex> ...
  *
  * Reads NATS connection config from fleet.yaml (delegation.nats).
  */
@@ -181,13 +182,16 @@ Examples:
   nats
     .command("publish")
     .description("Publish a one-shot task event to NATS (testing / ad-hoc)")
-    .requiredOption("--event <type>", "Event type: delegation | ack | ship | block")
+    .requiredOption("--event <type>", "Event type: delegation | ack | progress | ship | block")
     .requiredOption("--task-id <hex>", "Task ID (8-char hex)")
     .requiredOption("--project <slug>", "Project slug")
     .requiredOption("--worker <id>", "Worker agent ID")
     .requiredOption("--delegated-by <id>", "PM bot agent ID")
     .option("--dod <text>", "Definition of done (included in delegation events)")
+    .option("--description <text>", "Feature description (included in delegation events)")
+    .option("--requestor <slack-uid>", "Slack user ID of the human requestor (included in delegation events)")
     .option("--tracker <url>", "Tracker link (included in delegation events)")
+    .option("--message <text>", "Progress message (progress events)")
     .option("--reason <text>", "Free-form reason (block events)")
     .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
     .option("--json", "Output JSON confirmation")
@@ -209,12 +213,15 @@ Examples:
       worker: string;
       delegatedBy: string;
       dod?: string;
+      description?: string;
+      requestor?: string;
       tracker?: string;
+      message?: string;
       reason?: string;
       fleet?: string;
       json?: boolean;
     }) => {
-      const validEvents: TaskEventType[] = ["delegation", "ack", "ship", "block"];
+      const validEvents: TaskEventType[] = ["delegation", "ack", "progress", "ship", "block"];
       if (!validEvents.includes(opts.event as TaskEventType)) {
         log.error(`--event must be one of: ${validEvents.join(", ")}`);
         process.exit(1);
@@ -232,7 +239,10 @@ Examples:
         delegated_by: opts.delegatedBy,
         at: new Date().toISOString(),
         definition_of_done: opts.dod,
+        description: opts.description,
+        requestor: opts.requestor,
         tracker_link: opts.tracker,
+        message: opts.message,
         reason: opts.reason,
       };
 
@@ -242,6 +252,58 @@ Examples:
         console.log(JSON.stringify({ published: true, subject: `${natsCfg.subject_prefix}.${opts.event}`, event }));
       } else {
         log.info(`[nats] published ${opts.event} for task ${opts.taskId}`);
+      }
+    });
+
+  // ── progress ───────────────────────────────────────────────────────
+
+  nats
+    .command("progress")
+    .description("Send a mid-task progress update to the PM bot via NATS")
+    .requiredOption("--task-id <hex>", "Task ID (8-char hex)")
+    .requiredOption("--worker <id>", "Worker agent ID")
+    .requiredOption("--project <slug>", "Project slug")
+    .requiredOption("--delegated-by <id>", "PM bot agent ID")
+    .requiredOption("--message <text>", "Progress update message")
+    .option("--fleet <path-or-name>", "fleet.yaml path or fleet name")
+    .option("--json", "Output JSON confirmation")
+    .addHelpText("after", `
+Examples:
+  # Send a progress update mid-task
+  $ fleetmind nats progress \\
+      --task-id a1b2c3d4 --worker daedalus --project fleetmind-next \\
+      --delegated-by ariadne \\
+      --message "PR open, waiting on review from requestor"
+`)
+    .action(async (opts: {
+      taskId: string;
+      worker: string;
+      project: string;
+      delegatedBy: string;
+      message: string;
+      fleet?: string;
+      json?: boolean;
+    }) => {
+      const fleet = resolveAndLoadFleet(opts.fleet);
+      const natsCfg = getNatsConfig(fleet);
+
+      const event: TaskEvent = {
+        v: "1.0",
+        event: "progress",
+        task_id: opts.taskId,
+        project: opts.project,
+        worker: opts.worker,
+        delegated_by: opts.delegatedBy,
+        at: new Date().toISOString(),
+        message: opts.message,
+      };
+
+      await publishTaskEvent(natsCfg, event);
+
+      if (opts.json) {
+        console.log(JSON.stringify({ published: true, task_id: opts.taskId, message: opts.message }));
+      } else {
+        log.info(`[nats] progress update sent for task ${opts.taskId}`);
       }
     });
 }

@@ -80,6 +80,8 @@ export interface TaskLedgerLike {
     delegation_thread: string;
     delegation_envelope_ts: string;
     tracker_link?: string;
+    description?: string;
+    requestor?: string;
     lifecycle?: "requires-human-signoff" | "shipped-is-done";
     s3_key_template?: string;
   }): Promise<TaskRecord>;
@@ -120,6 +122,10 @@ export interface CreateTaskOptions {
   thread: string;
   envelopeTs: string;
   tracker?: string;
+  /** Slack user ID (U…) of the human who requested this feature */
+  requestor?: string;
+  /** Free-text description of the feature / work context */
+  description?: string;
   lifecycle?: "requires-human-signoff" | "shipped-is-done";
   taskId?: string;
   fleet?: string;
@@ -244,6 +250,8 @@ export async function createTask(
       delegation_thread: opts.thread,
       delegation_envelope_ts: opts.envelopeTs,
       tracker_link: opts.tracker,
+      description: opts.description,
+      requestor: opts.requestor,
       lifecycle: opts.lifecycle,
     });
   } catch (err) {
@@ -405,6 +413,8 @@ Run \`fleetmind task <subcommand> --help\` for examples.
     .requiredOption("--thread <url>", "Delegation thread URL / Slack permalink")
     .requiredOption("--envelope-ts <ts>", "Envelope message timestamp / ID")
     .option("--tracker <url>", "External tracker link (Linear, Jira, etc.)")
+    .option("--requestor <slack-uid>", "Slack user ID (U\u2026) of the human who requested this feature — included in NATS delegation event so workers can open a Slack thread with them directly")
+    .option("--description <text>", "Free-text description of the feature / work context (stored in DDB, included in NATS delegation event)")
     .addOption(
       new Option("--lifecycle <mode>", "Lifecycle policy")
         .choices(["requires-human-signoff", "shipped-is-done"])
@@ -452,6 +462,8 @@ Examples:
           at: record.delegated_at,
           definition_of_done: record.definition_of_done,
           tracker_link: record.tracker_link ?? undefined,
+          description: record.description,
+          requestor: record.requestor,
           delegation_thread: record.delegation_thread,
           delegation_envelope_ts: record.delegation_envelope_ts,
         });
