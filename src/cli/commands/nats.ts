@@ -111,7 +111,10 @@ Examples:
         log.info(`[nats] starting ${opts.mode} subscriber…`);
       }
 
-      const ledger = opts.mode === "worker" ? makeLedger(fleet) : undefined;
+      // Both modes need a ledger:
+      //   worker — acks incoming delegations
+      //   pm     — signs off tasks on ship, records blocked state
+      const ledger = makeLedger(fleet);
 
       const cleanup = await subscribeTaskEvents(
         natsCfg,
@@ -128,7 +131,7 @@ Examples:
           }
 
           // Worker mode: auto-ack inbound delegations via DDB.
-          if (opts.mode === "worker" && event.event === "delegation" && ledger) {
+          if (opts.mode === "worker" && event.event === "delegation") {
             try {
               await ledger.ackTask(event.task_id, event.worker, event.project);
               if (!opts.json) {
@@ -149,14 +152,49 @@ Examples:
             }
           }
 
-          // PM mode: receive worker events and verify / reconcile DDB state.
-          if (opts.mode === "pm" && (event.event === "ship" || event.event === "block")) {
-            // In pm mode we don't write DDB — workers already do that.
-            // This subscriber acts as a push-based wake signal for the PM bot.
-            // External orchestration (OpenClaw session, EventBridge) can hook
-            // into this stream to trigger PM bot turns without polling.
-            if (!opts.json) {
-              log.info(`[nats] ↑ pm received ${event.event} for task ${event.task_id} — wake signal ready`);
+          // PM mode: advance DDB lifecycle on worker terminal events.
+          if (opts.mode === "pm") {
+            if (event.event === "ship") {
+              // Worker shipped and human approved — PM signs off: shipped → signed_off.
+              try {
+                await ledger.signoffTask(event.task_id, event.project);
+                if (!opts.json) {
+                  log.info(`[nats] ✓ task ${event.task_id} signed off in DDB (shipped→signed_off)`);
+                } else {
+                  process.stdout.write(JSON.stringify({
+                    _type: "signoff_result",
+                    task_id: event.task_id,
+                    status: "signed_off",
+                  }) + "\n");
+                }
+              } catch (err) {
+                if (err instanceof TaskConditionError) {
+                  log.warn(`[nats] task ${event.task_id} signoff condition error (already signed_off?): ${err.message}`);
+                } else {
+                  log.error(`[nats] task ${event.task_id} signoff failed: ${err}`);
+                }
+              }
+            }
+
+            if (event.event === "block") {
+              // Worker is blocked — log for visibility; DDB already updated by worker.
+              if (!opts.json) {
+                const reasonSuffix = event.reason ? `: ${event.reason}` : "";
+                log.warn(`[nats] task ${event.task_id} blocked by ${event.worker}${reasonSuffix}`);
+              } else {
+                process.stdout.write(JSON.stringify({
+                  _type: "block_received",
+                  task_id: event.task_id,
+                  worker: event.worker,
+                  reason: event.reason,
+                }) + "\n");
+              }
+            }
+
+            if (event.event === "progress") {
+              if (!opts.json) {
+                log.info(`[nats] task ${event.task_id} progress from ${event.worker}: ${event.message ?? "(no message)"}`);
+              }
             }
           }
         }

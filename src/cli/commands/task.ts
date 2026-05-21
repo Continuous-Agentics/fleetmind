@@ -75,7 +75,7 @@ export interface TaskLedgerLike {
     worker: string;
     delegated_by: string;
     definition_of_done: string;
-    delegation_thread: string;
+    delegation_thread?: string;
     delegation_envelope_ts?: string;
     tracker_link?: string;
     description?: string;
@@ -117,7 +117,8 @@ export interface CreateTaskOptions {
   worker: string;
   delegatedBy: string;
   dod: string;
-  thread: string;
+  /** Slack permalink to delegation thread. Optional for NATS-only fleets. */
+  thread?: string;
   /** Slack message TS of the delegation envelope. Optional for NATS-only fleets
    *  where there is no Slack envelope. */
   envelopeTs?: string;
@@ -410,7 +411,7 @@ Run \`fleetmind task <subcommand> --help\` for examples.
     .requiredOption("--worker <id>", "Worker bot identifier (Slack user ID or agent ID)")
     .requiredOption("--delegated-by <id>", "PM bot identifier")
     .requiredOption("--dod <text>", "Definition of done")
-    .requiredOption("--thread <url>", "Delegation thread URL / Slack permalink")
+    .option("--thread <url>", "Delegation thread URL / Slack permalink. Optional for NATS-only fleets where the architecture discussion may not have a Slack permalink.")
     .option("--envelope-ts <ts>", "Delegation envelope message timestamp (Slack TS). Optional for NATS-only fleets where no Slack envelope exists.")
     .option("--tracker <url>", "External tracker link (Linear, Jira, etc.)")
     .option("--requestor <slack-uid>", "Slack user ID (U\u2026) of the human who requested this feature — included in NATS delegation event so workers can open a Slack thread with them directly")

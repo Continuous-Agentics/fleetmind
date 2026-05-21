@@ -126,7 +126,7 @@ export class TaskLedger {
       delegated_at: now,
       lifecycle: input.lifecycle ?? "requires-human-signoff",
       definition_of_done: input.definition_of_done,
-      delegation_thread: input.delegation_thread,
+      delegation_thread: input.delegation_thread ?? "",
       delegation_envelope_ts: input.delegation_envelope_ts ?? "",
       tracker_link: input.tracker_link ?? null,
       ...(input.description ? { description: input.description } : {}),
