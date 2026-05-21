@@ -26,14 +26,14 @@ import { log } from "../../utils/log.js";
 function getNatsConfig(fleet: ReturnType<typeof resolveAndLoadFleet>) {
   const d = fleet.delegation;
   if (!d?.enabled) {
-    log.error("Delegation is not enabled in this fleet. Set delegation.enabled = true in fleet.yaml.");
-    process.exit(1);
+    log.info("[nats] delegation not enabled in fleet.yaml — exiting cleanly.");
+    process.exit(0);
   }
   if (!d.nats) {
-    log.error(
-      "NATS is not configured for this fleet. Set delegation.nats in fleet.yaml."
-    );
-    process.exit(1);
+    // Exit 0 so systemd path-activated units don't retry-loop when NATS
+    // isn't configured. The unit is always written; the service self-quiesces.
+    log.info("[nats] delegation.nats not configured in fleet.yaml — exiting cleanly.");
+    process.exit(0);
   }
   return d.nats;
 }
