@@ -195,6 +195,12 @@ export function renderAgentOpenClawJson(
       port: oc.gateway.port,
       mode: oc.gateway.mode,
       bind: oc.gateway.bind,
+      auth: {
+        mode: "token",
+        // Token generated at bootstrap and stored in Secrets Manager.
+        // fetch-agent-secrets writes it to the env file as <AGENT_UPPER>_GATEWAY_TOKEN.
+        token: `\${${agentId.toUpperCase().replace(/-/g, "_")}_GATEWAY_TOKEN}`,
+      },
     },
     hooks: {
       internal: {
@@ -426,11 +432,15 @@ export function writeOutputs(
   const agentPaths: Record<string, string> = {};
   for (const agent of fleet.agents.list) {
     const agentOcPath = path.join(ocBase, agent.id, "openclaw.json");
+    const agentOcBasePath = path.join(ocBase, agent.id, "openclaw.base.json");
     fs.mkdirSync(path.dirname(agentOcPath), { recursive: true });
-    fs.writeFileSync(
-      agentOcPath,
-      JSON.stringify(renderAgentOpenClawJson(fleet, agent.id), null, 2)
-    );
+    const rendered = renderAgentOpenClawJson(fleet, agent.id);
+    const renderedJson = JSON.stringify(rendered, null, 2);
+    fs.writeFileSync(agentOcPath, renderedJson);
+    // openclaw.base.json — required by OpenClaw 2026.5.19+ as a baseline
+    // config reference. Without it, gateway refuses to start. Write the same
+    // content as openclaw.json so the security check always passes.
+    fs.writeFileSync(agentOcBasePath, renderedJson);
     agentPaths[agent.id] = agentOcPath;
     written[`openclaw_json:${agent.id}`] = agentOcPath;
   }
