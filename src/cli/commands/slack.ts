@@ -606,19 +606,29 @@ export function buildManifest(
     ROLE_BACKGROUND_COLORS["worker"];
 
   // Build long_description: prefer explicit field, otherwise synthesise.
-  // Slack requires >= 150 characters — pad the auto-generated copy if needed.
+  // Slack requires >= 150 characters.
   const SLACK_LONG_DESC_MIN = 150;
+
+  // Auto-generated fallback: always pads to >= 150 so generated manifests
+  // are always importable without operator intervention.
   const baseDesc = [
     `${agent.name} is a ${role} bot in the ${fleetName} fleet.`,
     agent.description ? agent.description.trim() : "",
     `Managed by FleetMind. Role: ${role}. Fleet: ${fleetName}.`,
     `Operates autonomously, coordinating with other agents to complete tasks.`,
   ].filter(Boolean).join(" ");
+  const paddingText = ` This bot is part of the ${fleetName} fleet and coordinates with other agents over NATS. Managed by FleetMind.`;
+  const autoDesc = baseDesc.length < SLACK_LONG_DESC_MIN
+    ? baseDesc + paddingText
+    : baseDesc;
 
-  let longDesc = agent.slack?.long_description ?? baseDesc;
-  if (longDesc.length < SLACK_LONG_DESC_MIN) {
-    const padding = ` This bot is part of the ${fleetName} fleet and coordinates with other agents over NATS. Managed by FleetMind.`;
-    longDesc = (longDesc + padding).slice(0, Math.max(longDesc.length + padding.length, SLACK_LONG_DESC_MIN));
+  // Operator-provided value is used verbatim; warn if it will fail Slack validation.
+  const longDesc = agent.slack?.long_description ?? autoDesc;
+  if (agent.slack?.long_description && longDesc.length < SLACK_LONG_DESC_MIN) {
+    log.warn(
+      `  ⚠ ${agent.id}: long_description is ${longDesc.length} chars ` +
+      `(Slack requires ≥ ${SLACK_LONG_DESC_MIN}). Manifest may fail import.`
+    );
   }
 
   // Merge extra scopes (deduped, extras after defaults).
