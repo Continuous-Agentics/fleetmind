@@ -265,7 +265,7 @@ export async function runOnboard(
       if (channelIds.length > 0) {
         // Write channel IDs back to fleet.yaml
         yamlContent = yamlContent.replace(
-          new RegExp(`(id:\\s*${agent.id}[\\s\\S]*?channels:\\s*)\\["C_REPLACE_ME"\\]`),
+          new RegExp(`(id:\\s*${agent.id}[\\s\\S]*?channels:\\s*)\\[\\s*"C_REPLACE_ME"\\s*\\]`),
           `$1[${channelIds.map(c => `"${c}"`).join(", ")}]`
         );
       }
