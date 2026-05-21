@@ -577,6 +577,21 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
         ...(agent.delegation ? { delegation: agent.delegation } : {}),
       },
       roster,
+      // agents.list satisfies FleetSchema required by fleetmind CLI commands
+      // (e.g. nats subscribe). Contains this agent + routing-safe roster entries.
+      list: [
+        {
+          id: agent.id,
+          name: agent.name,
+          emoji: agent.emoji,
+          role: agent.role,
+          orchestrator: agent.orchestrator ?? false,
+          model: agent.model ?? fleet.agents.defaults.model,
+          skills: agent.skills ?? [],
+          ...(agent.delegation ? { delegation: agent.delegation } : {}),
+        },
+        ...roster,
+      ],
     },
   };
 
