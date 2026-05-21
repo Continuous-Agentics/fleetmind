@@ -1,6 +1,6 @@
 {
   "name": "@continuous-agentics/fleetmind-next",
-  "version": "0.7.0-nats.4",
+  "version": "0.7.0-nats.5",
   "description": "Deploy and manage OpenClaw multi-agent fleets",
   "keywords": [
     "ai",

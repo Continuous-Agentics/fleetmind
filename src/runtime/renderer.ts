@@ -354,21 +354,6 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
 export function renderTerraformVars(fleet: Fleet): string {
   const agentNames = fleet.agents.list.map((a) => `"${a.id}"`).join(", ");
 
-  // Derive wake_target_session_key from the PM (orchestrator) agent's first
-  // Slack channel. Used by the EventBridge wake target to SSM-invoke the PM
-  // on terminal task events (DDB Streams path).
-  // With NATS transport the subscriber handles terminal events directly, so
-  // this key is not needed — emit an empty string to leave the rule dormant.
-  const natsEnabled = !!(fleet.delegation?.nats?.servers?.length);
-  const pmAgent = fleet.agents.list.find((a) => a.orchestrator);
-  const pmChannels = pmAgent?.slack.channels ?? [];
-  const wakeKey =
-    natsEnabled
-      ? ""
-      : pmAgent && pmChannels.length > 0
-        ? `agent:main:slack:channel:${pmChannels[0]}`
-        : "";
-
   // Derive agent_orchestrators map from fleet.yaml. Drives task-ledger's IAM
   // policy split (pm vs worker) and the wake target Name tag derivation.
   const orchestratorEntries = fleet.agents.list
@@ -400,10 +385,6 @@ export function renderTerraformVars(fleet: Fleet): string {
     `agent_ports = {`,
     agentPortEntries,
     `}`,
-    ``,
-    `# Wake target for the DDB Streams → EventBridge SSM-invoke path.`,
-    `# Empty when NATS is configured — the NATS subscriber handles terminal events.`,
-    `wake_target_session_key = "${wakeKey}"`,
     ``,
     `# NOTE: instance_type, aws_region, and other infrastructure vars are not`,
     `# derived from fleet.yaml — set them in your workspace tfvars manually.`,
