@@ -20,7 +20,7 @@ delegation:
   s3_bucket: gg-sandbox-narratives-251714435910   # MUST be globally unique; add 6-char suffix
   nats:
     servers:
-      - nats://localhost:4222
+      - nats://REPLACE_ME:4222  # set to your NATS server URL (Cloud Map DNS or IP)
 
 agents:
   defaults:

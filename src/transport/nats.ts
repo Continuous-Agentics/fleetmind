@@ -46,8 +46,11 @@ export interface TaskEvent {
   project: string;
   /** Worker agent ID. */
   worker: string;
-  /** PM bot agent ID. */
-  delegated_by: string;
+  /**
+   * PM bot agent ID. Present in delegation events; optional in worker→PM
+   * events (ack/progress/ship/block) since the PM already knows the task.
+   */
+  delegated_by?: string;
   /** ISO 8601 timestamp of this event. */
   at: string;
   /**
@@ -129,7 +132,10 @@ export async function openNatsConnection(cfg: NatsConfig): Promise<NatsConnectio
   if (cfg.creds_file) {
     // Dynamic import so the creds path resolver only loads when needed.
     const { credsAuthenticator } = await import("nats");
-    const { readFileSync } = await import("fs");
+    const { readFileSync, existsSync } = await import("fs");
+    if (!existsSync(cfg.creds_file)) {
+      throw new Error(`NATS creds_file not found: ${cfg.creds_file}`);
+    }
     const creds = readFileSync(cfg.creds_file);
     opts.authenticator = credsAuthenticator(creds);
   }

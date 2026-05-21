@@ -503,19 +503,15 @@ Examples:
             : `Task ${opts.taskId} acknowledged (status: accepted)`,
           opts.json ?? false
         );
-        // Publish ack event to NATS if transport includes it.
-        const record = await ledger.getTask(opts.taskId);
-        if (record) {
-          await maybePublishNats(fleet.delegation, {
-            v: "1.0",
-            event: "ack",
-            task_id: record.task_id,
-            project: record.project,
-            worker: record.worker,
-            delegated_by: record.delegated_by,
-            at: record.accepted_at ?? new Date().toISOString(),
-          });
-        }
+        // Publish ack event to NATS. Build from opts — no extra DDB round-trip.
+        await maybePublishNats(fleet.delegation, {
+          v: "1.0",
+          event: "ack",
+          task_id: opts.taskId,
+          project: opts.project ?? "",
+          worker: opts.worker,
+          at: new Date().toISOString(),
+        });
       } catch (err) { handleError(err); }
     });
 
@@ -548,19 +544,15 @@ Examples:
             : `Task ${opts.taskId} shipped (status: shipped)`,
           opts.json ?? false
         );
-        // Publish ship event to NATS if transport includes it.
-        const record = await ledger.getTask(opts.taskId);
-        if (record) {
-          await maybePublishNats(fleet.delegation, {
-            v: "1.0",
-            event: "ship",
-            task_id: record.task_id,
-            project: record.project,
-            worker: record.worker,
-            delegated_by: record.delegated_by,
-            at: record.shipped_at ?? new Date().toISOString(),
-          });
-        }
+        // Publish ship event to NATS. Build from opts — no extra DDB round-trip.
+        await maybePublishNats(fleet.delegation, {
+          v: "1.0",
+          event: "ship",
+          task_id: opts.taskId,
+          project: opts.project ?? "",
+          worker: opts.worker,
+          at: new Date().toISOString(),
+        });
       } catch (err) { handleError(err); }
     });
 
@@ -593,19 +585,15 @@ Examples:
             : `Task ${opts.taskId} blocked (status: blocked)`,
           opts.json ?? false
         );
-        // Publish block event to NATS if transport includes it.
-        const record = await ledger.getTask(opts.taskId);
-        if (record) {
-          await maybePublishNats(fleet.delegation, {
-            v: "1.0",
-            event: "block",
-            task_id: record.task_id,
-            project: record.project,
-            worker: record.worker,
-            delegated_by: record.delegated_by,
-            at: record.blocked_at ?? new Date().toISOString(),
-          });
-        }
+        // Publish block event to NATS. Build from opts — no extra DDB round-trip.
+        await maybePublishNats(fleet.delegation, {
+          v: "1.0",
+          event: "block",
+          task_id: opts.taskId,
+          project: opts.project ?? "",
+          worker: opts.worker,
+          at: new Date().toISOString(),
+        });
       } catch (err) { handleError(err); }
     });
 
