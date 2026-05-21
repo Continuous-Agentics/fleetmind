@@ -540,12 +540,26 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
       ...(a.slack?.channels ? { channels: a.slack.channels } : {}),
     }));
 
+  // Derive NATS server URL from fleet name if not explicitly set.
+  // Convention: nats://nats.<fleet_name>.internal:4222 (Cloud Map registration).
+  // This means operators never hardcode infra-specific URLs in fleet.yaml.
+  let delegation = fleet.delegation;
+  if (delegation?.nats && (!delegation.nats.servers || delegation.nats.servers.length === 0)) {
+    delegation = {
+      ...delegation,
+      nats: {
+        ...delegation.nats,
+        servers: [`nats://nats.${fleet.fleet.name}.internal:4222`],
+      },
+    };
+  }
+
   const slice = {
     fleet: {
       name: fleet.fleet.name,
       version: fleet.fleet.version,
     },
-    ...(fleet.delegation ? { delegation: fleet.delegation } : {}),
+    ...(delegation ? { delegation } : {}),
     ...(fleet.context ? { context: fleet.context } : {}),
     agents: {
       defaults: {

@@ -130,10 +130,12 @@ export type CronSweepConfig = z.infer<typeof CronSweepSchema>;
  */
 export const NatsConfigSchema = z.object({
   /**
-   * NATS server URLs.  One or more servers for redundancy.
-   * Example: ["nats://nats.fleetmind.internal:4222"]
+   * NATS server URLs. One or more servers for redundancy.
+   * Optional — if omitted, the renderer derives the URL from the fleet name
+   * using the Cloud Map convention: nats://nats.<fleet_name>.internal:4222
+   * Example: ["nats://nats.myfleet.internal:4222"]
    */
-  servers: z.array(z.string()).min(1),
+  servers: z.array(z.string()).min(1).optional(),
   /**
    * Optional credentials file path (nkeys/creds format).
    * If omitted the connection is unauthenticated.

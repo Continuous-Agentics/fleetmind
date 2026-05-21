@@ -201,7 +201,7 @@ describe("DelegationFleetSchema NATS integration", () => {
       ...base,
       nats: { servers: ["nats://nats-1.fleet.internal:4222", "nats://nats-2.fleet.internal:4222"] },
     });
-    assert.equal(cfg.nats!.servers.length, 2);
+    assert.equal(cfg.nats!.servers?.length, 2);
   });
 
   test("disabled fleet does not require nats block", () => {
