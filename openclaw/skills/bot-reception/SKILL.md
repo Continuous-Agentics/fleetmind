@@ -1,121 +1,126 @@
 ---
 name: bot-reception
-version: 1.1.0
+version: 1.2.0
 description: >
-  Protocol for receiving and handling task delegations from a PM bot in
-  fleetmind-managed agent fleets. Use when: (1) you receive a delegation
-  envelope with a Task ID, (2) you need to send a completion or blocker reply
-  back to the PM bot, (3) a human asks you to do something directly. Covers
-  envelope recognition, eyes reaction, DynamoDB ledger lifecycle state
-  management (ack/ship/block via `fleetmind task` CLI), S3 narrative writing
-  via `fleetmind narrative put`, voice discipline, and ACP session heuristic.
+  Protocol for receiving task delegations from a PM bot over NATS transport.
+  Use when: (1) a NATS delegation event arrives, (2) you need to ship or block
+  a task, (3) a human asks you to do something directly. Covers NATS subscriber
+  startup, DDB write-health precheck, delegation event handling, opening a
+  Slack thread with the human requestor, DynamoDB lifecycle management
+  (ack/ship/block via `fleetmind task` CLI), S3 narrative writing via
+  `fleetmind narrative put`, progress events via `fleetmind nats progress`,
+  voice discipline, and ACP session heuristic. Slack is human-facing only —
+  no delegation envelopes are posted or received on Slack.
 ---
 
 # Bot Reception Protocol
 
-## Session boot — DDB write-health precheck (mandatory)
+## Session boot
 
-Before accepting any new delegation, every worker session validates that its
-DDB read/write path works. This is the first thing the session does after boot —
-ahead of envelope handling, ahead of any task-queue work.
+### Step 1: Start the NATS subscriber (mandatory)
 
-Why: a worker with a broken DDB write path will read envelopes, react `:eyes:`,
-and silently fail to record `accepted`/`shipped`/`blocked`. From the PM bot's
-side that looks like a worker accepting work and then ghosting. A no-op precheck
-at boot turns the silent failure into a loud, explicit refusal that humans can
-resolve.
+Before accepting any work, ensure the NATS subscriber is running. Check once
+per session boot; do not re-start if already running.
 
 ```bash
-# A no-op query to exercise the DDB path. Uses the read side;
-# any IAM permission gap, network failure, or config error surfaces here.
+systemctl is-active fleetmind-nats-worker.service 2>/dev/null \
+  || pgrep -f "fleetmind nats subscribe" > /dev/null \
+  || echo "NOT_RUNNING"
+```
+
+If not running:
+
+```bash
+fleetmind nats subscribe --mode worker --worker-id "$AGENT_ID" --json \
+  | while IFS= read -r line; do
+      TYPE=$(echo "$line" | jq -r '._type // .event')
+      case "$TYPE" in
+        delegation) handle_delegation "$line" ;;
+      esac
+    done
+```
+
+The subscriber auto-acks the DDB row on receipt (`delegated → accepted`).
+No separate `fleetmind task ack` call is needed.
+
+### Step 2: DDB write-health precheck (mandatory)
+
+Run after subscriber startup, before doing any work.
+
+Why: a worker with a broken DDB write path will receive delegations and
+silently fail to record `accepted`/`shipped`/`blocked`. A no-op precheck
+at boot turns the silent failure into a loud, explicit refusal.
+
+```bash
 ERR=$(fleetmind query pending --limit 1 --json 2>&1 >/dev/null)
 RC=$?
 
 if [ $RC -ne 0 ]; then
-  # Post ONCE in the worker channel and refuse new delegations.
-  # Use a memory flag so we don't re-post on every boot when the gap persists.
   if [ ! -f memory/ddb-write-unhealthy.flag ]; then
-    # message tool: top-level post in the worker channel
-    # Body: ":warning: DDB write path unhealthy — refusing new work until resolved. Error: <first-line of ERR>"
     echo "unhealthy at $(date -u +%Y-%m-%dT%H:%M:%SZ): $ERR" > memory/ddb-write-unhealthy.flag
   fi
   echo "ABORT: DDB write path unhealthy. Refusing new delegations until resolved."
   exit 1
 fi
 
-# Healthy. Clear the flag if it existed (auto-recovery is fine).
 rm -f memory/ddb-write-unhealthy.flag
 ```
 
-*Behaviour while unhealthy:*
-- Do NOT react `:eyes:` to delegation envelopes.
+*While unhealthy:*
+- Do NOT ack any delegation. Publish a NATS block event so the PM bot knows.
 - Do NOT update DDB.
 - Do NOT do the work.
-- Do post one threaded reply on any *new* envelope:
-  `":warning: DDB write path unhealthy — not accepting new work until verified. See top-level notice in this channel."`
-  Use the same memory flag to ensure at most one such reply per envelope.
-- The unhealthy flag self-clears on the next clean precheck. Workers do NOT
-  post a "recovered" notice; the next successful `accepted`/`shipped` write
-  is implicit recovery.
+- The unhealthy flag self-clears on the next clean precheck.
 
-## Envelope Recognition
 
-The PM bot delegation envelope looks like this:
-
-```
-@<your-bot> — task assignment
-
-*Task:* <one-line summary>
-*Task ID:* <8-char hex>
-*Context:* <brief>
-*Definition of done:* <criteria>
-
-React :eyes: when started. Reply in this thread (mentioning @<pm-bot>) when done or blocked.
-```
-
-If the message has `Task ID:` and `React :eyes:` — it's a delegation. Act immediately.
-
-### Multi-worker channels: confirm you're the recipient
-
-Check the first `@-mention` followed by `— task assignment` at the top of the
-envelope. If it is not YOUR bot — exit silently. No reaction, no reply, no
-"that's not for me" message. The PM bot already knows who they delegated to.
-
-Examples of "exit silently":
-- An envelope addressed to another worker mentions you in the Context — you
-  wake on the `@-mention`, recognize it's not your delegation, do nothing.
-- Another worker posts a ✅ reply in their own thread — you wake on the channel
-  message, recognize it's not yours, do nothing.
-- A human asks another worker about their work — you wake, recognize it's not
-  yours, do nothing.
-
-*The only exception:* if a human explicitly `@-mentions` you directly with a
-non-envelope task or question (no `Task ID:` line), handle it per
-§ Handling Human Requests. The exit-silently rule applies only to delegation
-envelopes and worker-to-worker traffic.
 
 ## On Receiving a Delegation
 
-1. **Write the task to `memory/task-queue.md`** under `## In Progress` with
-   task ID and source thread ts. Do this *before* any other action — this is
-   the crash-recovery record. If the session crashes between this write and
-   the `:eyes:` reaction, the task is not lost.
-2. **React `:eyes:`** to the delegation message.
-3. **Read the task record from DynamoDB:**
-   ```bash
-   fleetmind task get --task-id <8-char-hex> --json
-   ```
-   Store the `project` slug and `task_s3_key` from the response. Never hardcode them.
+The subscriber emits one JSON line per delegation event:
 
-4. **Acknowledge the delegation (DDB: delegated → accepted):**
-   ```bash
-   fleetmind task ack \
-     --task-id <task_id> \
-     --worker <your-agent-id-or-slack-user-id> \
-     --project <project-slug>     # from step 3; saves a GetItem round-trip
+```json
+{
+  "v": "1.0",
+  "event": "delegation",
+  "task_id": "a1b2c3d4",
+  "project": "my-project",
+  "worker": "forge",
+  "delegated_by": "conductor",
+  "at": "2026-05-20T23:00:00Z",
+  "definition_of_done": "All tests pass and PR merged.",
+  "description": "Refactor the auth module to use JWT instead of sessions.",
+  "requestor": "U0ASYLGHU9E",
+  "tracker_link": "https://linear.app/acme/issue/ENG-42"
+}
+```
+
+### Steps
+
+1. **Write to `memory/task-queue.md`** under `## In Progress` — crash recovery:
    ```
-   If this fails with a condition error: the task may already be accepted (rare).
-   Log and proceed; do not retry indefinitely.
+   - **<task_id>** — <description> | started <date> | requestor: <slack_uid> | thread_ts: (pending)
+   ```
+
+2. **DDB auto-acks** via the subscriber. Confirm `status === "accepted"` in the
+   `ack_result` JSON line.
+
+3. **Read the task record from DynamoDB** to get `project` and `task_s3_key`:
+   ```bash
+   fleetmind task get --task-id <task_id> --json
+   ```
+
+4. **Open a Slack thread with the requestor.** Post in your dev channel,
+   @-mention the requestor:
+   ```
+   @<requestor> — picked up [<tracker_id>]: <title>
+
+   <one-sentence description of what you'll build>
+   Done when: <definition of done verbatim>
+   <tracker_link if present>
+
+   Let me know if anything needs clarification before I start.
+   ```
+   Store the Slack thread `ts` in `memory/task-queue.md` (`thread_ts: <ts>`).
 
 5. *(Optional)* Read prior task narratives for context:
    ```bash
@@ -127,7 +132,26 @@ envelopes and worker-to-worker traffic.
 
 6. **Do the work silently.** See Voice Discipline below.
 
-7. When done or blocked: write the narrative to S3, update DDB, then post the reply.
+7. When done or blocked: write the narrative to S3, update DDB, then post in
+   the requestor's Slack thread.
+
+---
+
+## Mid-task: Progress Updates
+
+At meaningful milestones (PR open, test suite passing, waiting on review):
+
+```bash
+fleetmind nats progress \
+  --task-id <task_id> \
+  --worker "$AGENT_ID" \
+  --project <project> \
+  --delegated-by <pm_bot_id> \
+  --message "PR open at https://github.com/.../pull/42 — awaiting review"
+```
+
+Also post a brief update in the requestor's Slack thread so they know
+where things stand. Keep it short — one or two sentences.
 
 ---
 
@@ -238,13 +262,11 @@ needs refinement.
 
 ---
 
-## On Completion: Slack Reply
+## On Completion
 
-After the S3 + DDB writes succeed, post a threaded reply mentioning the PM bot:
+After the S3 + DDB writes succeed, post in the *requestor's* Slack thread:
 
 ```
-@<pm-bot> — task-id: <8-char hex>
-
 ✅ Done.
 
 Summary: <what was done — one paragraph max>
@@ -252,24 +274,33 @@ Links: <PR / preview deploy / docs>
 What I didn't do: <scope cuts, gotchas, follow-ups>
 ```
 
+`fleetmind task ship` automatically publishes a `fleetmind.task.<id>.ship`
+NATS event — the PM bot receives it and closes out the DDB lifecycle.
+No separate reply to the PM bot is needed.
+
 The "What I didn't do" line is mandatory.
 
-## On Blocker: Slack Reply
+## On Blocker
+
+Post in the requestor's Slack thread:
 
 ```
-@<pm-bot> — task-id: <8-char hex>
-
 ⛔ Blocked.
 
 Reason: <what's missing or wrong>
 Need: <what would unblock — info, decision, dep fix, etc.>
 ```
 
+`fleetmind task block` publishes `fleetmind.task.<id>.block` — the PM bot
+receives it automatically.
+
 ## After Completion
 
-- On human sign-off (PM bot handles the DDB `signed_off` transition)
-- On PR merge (PM bot handles the DDB `merged` transition)
-- `abandoned` is PM-only: if asked to abandon, ping the PM bot in the thread
+- On human sign-off: PM bot handles the DDB `signed_off` transition on receipt
+  of the `ship` NATS event.
+- On PR merge: PM bot handles the DDB `merged` transition.
+- `abandoned` is PM-only: if asked to abandon, the PM bot calls
+  `fleetmind task abandon`.
 
 ---
 
@@ -292,16 +323,19 @@ If you can't write 2-5 non-obvious bullets, use `[]`.
 
 ## Voice Discipline (Mandatory)
 
-**Never post in chat:**
-- "Working..." / "Let me run X" / "Now I'll do Y"
-- Shell commands or tool calls being executed
-- "Not tagged on this one" (exit silently when it's not your delegation)
-- Another worker's blocker or progress
+**In Slack (human-facing only):**
+- Open a thread with the requestor on delegation receipt ✅
+- Post progress updates and clarifying questions in that thread ✅
+- Post the final completion or blocker summary in that thread ✅
+- Do NOT narrate tool calls ("I'm now running...") ❌
+- Do NOT post raw NATS event JSON ❌
+- Do NOT post in the PM bot's planning channel ❌
 
-**Post only:**
-- `:eyes:` reaction on your own delegation
-- One clarifying question if genuinely ambiguous (your delegation only)
-- The completion or blocker reply in your own delegation thread
+**NATS (agent-to-agent — never visible to humans):**
+- `delegation` — received from PM bot ✅
+- `ack` — auto-published by subscriber ✅
+- `progress` — you publish at milestones ✅
+- `ship` / `block` — published by `fleetmind task ship/block` ✅
 
 ---
 
@@ -384,29 +418,41 @@ log on next heartbeat via its reconciliation pass.
 
 ## Update task-queue.md
 
-On receipt: add to `## In Progress` (before `:eyes:` reaction — crash-recovery record).
-On completion/blocked: move to `## Done` or `## Blocked` with outcome note.
+On receipt: add to `## In Progress` before starting any work (crash-recovery record).
+Update `thread_ts` once the Slack thread with the requestor is opened.
+On completion/blocked: move to `## Recently Shipped` or `## Blocked` with outcome note.
+
+```
+## In Progress
+- **<task_id>** — <description> | started <date> | requestor: <slack_uid> | thread_ts: <ts>
+
+## Recently Shipped
+- **<task_id>** — <description> | shipped <date> | PR: <url>
+```
 
 ---
 
 ## Changelog
 
-- **1.1.0 (2026-05-11)** — Port substantive protocol improvements from Carpe POC
-  v2.5.0–v2.5.1 (generalized; Carpe-specific channel IDs, bot IDs, and AWS table
-  names stripped):
-  - New § Session boot — DDB write-health precheck: every worker session does a
-    no-op `fleetmind query` at boot before accepting any new delegation. On
-    failure, posts once in the worker channel and refuses new work until
-    verified. Closes the silent-worker failure mode where a broken DDB write
-    path looked indistinguishable from a healthy worker that ghosted.
-  - task-queue-before-:eyes: ordering (v2.5.1 fix): `memory/task-queue.md` is
-    now written *before* the `:eyes:` reaction. This prevents the dark-period
-    bug where a session crash between `:eyes:` and the task-queue write left
-    the bot appearing to accept work it had no record of.
-  - New § Informal-task ledger: non-trivial dev-channel work that isn't a PM
-    bot delegation (direct human asks, self-initiated repo touches, infra
-    writes, >5-min debug sessions) now gets a `lifecycle: informal` TASK# row.
-    PM bot reconciliation adopts these rows automatically; signoff watchdog
-    ignores them. Closes the visibility gap where meaningful worker activity
-    was invisible to the PM bot.
+- **1.2.0 (2026-05-21)** — Rewrite for NATS-only transport (CON-115):
+  - Removed Slack envelope recognition entirely. Delegation arrives via NATS
+    subscriber, not a Slack message with `Task ID:` / `React :eyes:`.
+  - Session boot now has two steps: NATS subscriber startup (new) then DDB
+    write-health precheck. DDB unhealthy → publish NATS block event instead
+    of posting in Slack channel.
+  - "On Receiving a Delegation" rewritten: handle NATS JSON event, open Slack
+    thread with the human requestor (not a reaction in a bot channel), store
+    `thread_ts` in task-queue.md.
+  - New § Mid-task Progress Updates: `fleetmind nats progress` at milestones
+    + brief update in the requestor's Slack thread.
+  - Completion/blocker replies go in the requestor's Slack thread, not a
+    reply mentioning the PM bot. `fleetmind task ship/block` publishes the
+    NATS event automatically; PM bot receives and closes DDB lifecycle.
+  - Voice discipline rewritten: Slack is human-facing only; NATS is
+    agent-to-agent only.
+  - task-queue.md now tracks `thread_ts` for the requestor's Slack thread.
+  - `bot-delegation-nats` and `bot-reception-nats` standalone skills removed;
+    NATS transport is now the only transport in these core skills.
+- **1.1.0 (2026-05-11)** — DDB write-health precheck, informal-task ledger,
+  task-queue-before-eyes ordering.
 - **1.0.0** — Initial release.
