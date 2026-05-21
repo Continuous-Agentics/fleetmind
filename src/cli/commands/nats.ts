@@ -154,6 +154,30 @@ Examples:
 
           // PM mode: advance DDB lifecycle on worker terminal events.
           if (opts.mode === "pm") {
+            // Wake the OpenClaw PM session via the webhooks plugin when ship/block
+            // events arrive. Opt-in: only fires when OPENCLAW_WEBHOOK_URL and
+            // OPENCLAW_WEBHOOK_SECRET are set in the environment (via EnvironmentFile).
+            // Derive webhook URL from OPENCLAW_GATEWAY_PORT (set in systemd unit)
+            // and use GATEWAY_TOKEN (from EnvironmentFile) as the shared secret.
+            // Both env vars are available in the PM subscriber's process environment.
+            const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT ?? "18789";
+            const webhookUrl = process.env.OPENCLAW_WEBHOOK_URL
+              ?? `http://localhost:${gatewayPort}/plugins/webhooks/nats-events`;
+            const webhookSecret = process.env.OPENCLAW_WEBHOOK_SECRET ?? process.env.GATEWAY_TOKEN;
+            if (webhookSecret && (event.event === "ship" || event.event === "block")) {
+              const goal = event.event === "ship"
+                ? `Task ${event.task_id} shipped by ${event.worker}. Summary: ${event.message ?? "(no summary)"}`
+                : `Task ${event.task_id} blocked by ${event.worker}. Reason: ${event.reason ?? "(no reason)"}` ;
+              fetch(webhookUrl, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "Authorization": `Bearer ${webhookSecret}`,
+                },
+                body: JSON.stringify({ action: "create_flow", goal, status: "queued" }),
+              }).catch((err) => log.warn(`[nats] webhook wake failed: ${err}`));
+            }
+
             if (event.event === "ship") {
               // Worker shipped and human approved — PM signs off: shipped → signed_off.
               try {
