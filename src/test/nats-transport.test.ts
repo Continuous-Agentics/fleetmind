@@ -7,7 +7,7 @@
  *   3. E2E flow simulation: create → delegation event → ack → ship
  *      using an in-process mock NATS connection (no real server required)
  *   4. Schema validation: NatsConfig + DelegationFleetSchema nats field
- *   5. maybePublishNats: no-op when transport = "slack", publishes when "nats"/"both"
+ *   5. maybePublishNats: no-op when delegation.nats is absent, publishes when configured
  *
  * Live NATS server integration test is in nats-transport.integration.test.ts
  * (skipped unless NATS_SERVERS env var is set).

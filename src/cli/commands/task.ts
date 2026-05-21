@@ -76,7 +76,7 @@ export interface TaskLedgerLike {
     delegated_by: string;
     definition_of_done: string;
     delegation_thread: string;
-    delegation_envelope_ts: string;
+    delegation_envelope_ts?: string;
     tracker_link?: string;
     description?: string;
     requestor?: string;
@@ -118,7 +118,9 @@ export interface CreateTaskOptions {
   delegatedBy: string;
   dod: string;
   thread: string;
-  envelopeTs: string;
+  /** Slack message TS of the delegation envelope. Optional for NATS-only fleets
+   *  where there is no Slack envelope. */
+  envelopeTs?: string;
   tracker?: string;
   /** Slack user ID (U…) of the human who requested this feature */
   requestor?: string;
@@ -409,7 +411,7 @@ Run \`fleetmind task <subcommand> --help\` for examples.
     .requiredOption("--delegated-by <id>", "PM bot identifier")
     .requiredOption("--dod <text>", "Definition of done")
     .requiredOption("--thread <url>", "Delegation thread URL / Slack permalink")
-    .requiredOption("--envelope-ts <ts>", "Envelope message timestamp / ID")
+    .option("--envelope-ts <ts>", "Delegation envelope message timestamp (Slack TS). Optional for NATS-only fleets where no Slack envelope exists.")
     .option("--tracker <url>", "External tracker link (Linear, Jira, etc.)")
     .option("--requestor <slack-uid>", "Slack user ID (U\u2026) of the human who requested this feature — included in NATS delegation event so workers can open a Slack thread with them directly")
     .option("--description <text>", "Free-text description of the feature / work context (stored in DDB, included in NATS delegation event)")
@@ -508,7 +510,7 @@ Examples:
           v: "1.0",
           event: "ack",
           task_id: opts.taskId,
-          project: opts.project ?? "",
+          project: opts.project,
           worker: opts.worker,
           at: new Date().toISOString(),
         });
@@ -549,7 +551,7 @@ Examples:
           v: "1.0",
           event: "ship",
           task_id: opts.taskId,
-          project: opts.project ?? "",
+          project: opts.project,
           worker: opts.worker,
           at: new Date().toISOString(),
         });
@@ -590,7 +592,7 @@ Examples:
           v: "1.0",
           event: "block",
           task_id: opts.taskId,
-          project: opts.project ?? "",
+          project: opts.project,
           worker: opts.worker,
           at: new Date().toISOString(),
         });

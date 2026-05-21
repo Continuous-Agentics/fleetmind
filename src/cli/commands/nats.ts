@@ -31,7 +31,7 @@ function getNatsConfig(fleet: ReturnType<typeof resolveAndLoadFleet>) {
   }
   if (!d.nats) {
     log.error(
-      "NATS is not configured for this fleet. Set delegation.nats in fleet.yaml and set delegation_transport to 'nats' or 'both'."
+      "NATS is not configured for this fleet. Set delegation.nats in fleet.yaml."
     );
     process.exit(1);
   }

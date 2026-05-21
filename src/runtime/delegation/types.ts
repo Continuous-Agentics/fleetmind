@@ -68,7 +68,8 @@ export const TaskRecordSchema = z.object({
   definition_of_done: z.string(),
   /** Slack permalink or equivalent coordination-channel URL */
   delegation_thread: z.string(),
-  delegation_envelope_ts: z.string(),
+  /** Slack TS of the delegation envelope message. Empty string for NATS-only fleets. */
+  delegation_envelope_ts: z.string().default(""),
   tracker_link: z.string().nullable().optional(),
   /** Optional free-text title for the task (updatable via task update --title) */
   title: z.string().optional(),
@@ -148,7 +149,8 @@ export interface CreateTaskInput {
   worker: string;
   definition_of_done: string;
   delegation_thread: string;
-  delegation_envelope_ts: string;
+  /** Slack TS of the delegation envelope message. Optional for NATS-only fleets. */
+  delegation_envelope_ts?: string;
   tracker_link?: string | null;
   lifecycle?: Lifecycle;
   /** Free-text description of the feature / work context */

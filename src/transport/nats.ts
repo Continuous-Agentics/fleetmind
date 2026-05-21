@@ -8,7 +8,9 @@
  *
  *   {prefix}.delegation.{worker_id}        – PM → worker: new task delegation
  *   {prefix}.task.{task_id}.ack            – worker → PM: task acknowledged
- *   {prefix}.task.{task_id}.ship           – worker → PM: task shipped
+ *   {prefix}.task.{task_id}.ack            – worker → PM: task acknowledged (auto on delegation receipt)
+ *   {prefix}.task.{task_id}.progress       – worker → PM: mid-task progress update
+ *   {prefix}.task.{task_id}.ship           – worker → PM: task shipped (human approved)
  *   {prefix}.task.{task_id}.block          – worker → PM: task blocked
  *
  * All messages are JSON-encoded TaskEvent objects.
@@ -42,8 +44,11 @@ export interface TaskEvent {
   event: TaskEventType;
   /** 8-char hex task ID. */
   task_id: string;
-  /** Project slug. */
-  project: string;
+  /**
+   * Project slug. Present in all events when known; optional in worker→PM
+   * events (ack/progress/ship/block) where the worker may not have it.
+   */
+  project?: string;
   /** Worker agent ID. */
   worker: string;
   /**
@@ -140,9 +145,7 @@ export async function openNatsConnection(cfg: NatsConfig): Promise<NatsConnectio
     opts.authenticator = credsAuthenticator(creds);
   }
 
-  log.info(`[nats] connecting to ${cfg.servers.join(", ")}`);
   const nc = await connect(opts);
-  log.info(`[nats] connected to ${nc.getServer()}`);
   return nc;
 }
 
