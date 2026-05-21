@@ -56,18 +56,18 @@ export function renderAgentOpenClawJson(
       agentId: agent.id,
       match: {
         channel: "slack",
-        accountId: agent.slack.account_id,
+        accountId: agent.slack?.account_id,
       },
     },
   ];
 
   // Slack accounts — only this agent's account (no groupPolicy here; it lives at top level)
   const slackAccounts: Record<string, unknown> = {
-    [agent.slack.account_id]: {
+    [agent.slack?.account_id ?? agent.id]: {
       enabled: true,
-      botToken: agent.slack.bot_token,
-      appToken: agent.slack.app_token,
-      webhookPath: `/slack/${agent.slack.account_id}`,
+      botToken: agent.slack?.bot_token,
+      appToken: agent.slack?.app_token,
+      webhookPath: `/slack/${agent.slack?.account_id}`,
     },
   };
 
@@ -76,7 +76,7 @@ export function renderAgentOpenClawJson(
   // and collect their bot_user_id values for the users allowlist.
   const perChannelEntries: Record<string, unknown> = {};
   // Filter out placeholder channel IDs — they break Slack channel startup.
-  const agentChannels = (agent.slack.channels ?? []).filter(
+  const agentChannels = (agent.slack?.channels ?? []).filter(
     (c) => /^C[A-Z0-9]+$/.test(c)
   );
   for (let i = 0; i < agentChannels.length; i++) {
@@ -85,15 +85,15 @@ export function renderAgentOpenClawJson(
     const botUserIds: string[] = [];
     for (const other of agents.list) {
       if (other.id === agentId) continue;
-      const otherChannels = other.slack.channels ?? [];
+      const otherChannels = other.slack?.channels ?? [];
       if (!otherChannels.includes(channelId)) continue;
-      if (!other.slack.bot_user_id) {
+      if (!other.slack?.bot_user_id) {
         process.stderr.write(
           `[fleetmind renderer] WARNING: agent "${other.id}" shares channel ${channelId} with "${agentId}" but has no bot_user_id — skipping bot-specific users allowlist entry for that agent.\n`
         );
         continue;
       }
-      botUserIds.push(other.slack.bot_user_id);
+      botUserIds.push(other.slack?.bot_user_id);
     }
     // Always include "*" wildcard so human users are never blocked by the per-channel
     // users allowlist. OpenClaw's authorizeSlackBotRoomMessage filters out "*" from the
@@ -259,18 +259,18 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
     agentId: agent.id,
     match: {
       channel: "slack",
-      accountId: agent.slack.account_id,
+      accountId: agent.slack?.account_id,
     },
   }));
 
   // Slack accounts (no per-account groupPolicy; lives at top level as "allowlist")
   const slackAccounts: Record<string, unknown> = {};
   for (const agent of agents.list) {
-    slackAccounts[agent.slack.account_id] = {
+    slackAccounts[agent.slack?.account_id ?? agent.id] = {
       enabled: true,
-      botToken: agent.slack.bot_token,
-      appToken: agent.slack.app_token,
-      webhookPath: `/slack/${agent.slack.account_id}`,
+      botToken: agent.slack?.bot_token,
+      appToken: agent.slack?.app_token,
+      webhookPath: `/slack/${agent.slack?.account_id}`,
     };
   }
 
