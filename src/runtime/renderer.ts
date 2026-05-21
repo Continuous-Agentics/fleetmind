@@ -75,7 +75,10 @@ export function renderAgentOpenClawJson(
   // For each channel this agent operates in, find all OTHER agents that share it
   // and collect their bot_user_id values for the users allowlist.
   const perChannelEntries: Record<string, unknown> = {};
-  const agentChannels = agent.slack.channels ?? [];
+  // Filter out placeholder channel IDs — they break Slack channel startup.
+  const agentChannels = (agent.slack.channels ?? []).filter(
+    (c) => /^C[A-Z0-9]+$/.test(c)
+  );
   for (let i = 0; i < agentChannels.length; i++) {
     const channelId = agentChannels[i]!;
     const requireMention = i > 0; // first channel = home, always responsive
@@ -110,11 +113,15 @@ export function renderAgentOpenClawJson(
   const a2aAllow = [...new Set(agent.agent_to_agent.can_send_to)].sort();
 
   // Plugins — this agent's list (fall back to fleet defaults)
+  // Always include 'slack' when a Slack channel is configured — it must be
+  // registered in plugins.entries so OpenClaw discovers the installed channel
+  // provider (@openclaw/slack). Without this it silently skips Slack startup.
   const agentPlugins = agent.plugins ?? defaults.plugins;
   const pluginEntries: Record<string, unknown> = {};
   for (const plugin of [...agentPlugins].sort()) {
     pluginEntries[plugin] = { enabled: true };
   }
+  pluginEntries["slack"] = { enabled: true };
 
   // agents.defaults.params — forward cacheRetention (and any future top-level params)
   // agents.defaults.models — forward per-model param overrides (e.g. long TTL for Sonnet)
@@ -200,6 +207,8 @@ export function renderAgentOpenClawJson(
       },
     },
     plugins: {
+      // allow list prevents "non-bundled plugins may auto-load" warning.
+      allow: ["slack"],
       entries: pluginEntries,
     },
     commands: {
@@ -341,6 +350,8 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
       },
     },
     plugins: {
+      // allow list prevents "non-bundled plugins may auto-load" warning.
+      allow: ["slack"],
       entries: pluginEntries,
     },
     commands: {
