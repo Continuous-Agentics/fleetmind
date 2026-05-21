@@ -690,7 +690,7 @@ export async function runPushFleet(
             // stale binary if the upgrade fails.
             const upgradeFlag = opts.upgradeCli === 'latest'
               ? '--latest'
-              : `--version ${opts.upgradeCli}`;
+              : `--to ${opts.upgradeCli}`;
             commands.push(`sudo fleetmind self-upgrade ${upgradeFlag} --apply`);
           }
           commands.push(`sudo -u ec2-user fleetmind pull-self ${pullSelfArgs}`);
