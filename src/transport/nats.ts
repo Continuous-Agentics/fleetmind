@@ -7,7 +7,6 @@
  * Subject naming convention (all relative to `subject_prefix`, default "fleetmind"):
  *
  *   {prefix}.delegation.{worker_id}        – PM → worker: new task delegation
- *   {prefix}.task.{task_id}.ack            – worker → PM: task acknowledged
  *   {prefix}.task.{task_id}.ack            – worker → PM: task acknowledged (auto on delegation receipt)
  *   {prefix}.task.{task_id}.progress       – worker → PM: mid-task progress update
  *   {prefix}.task.{task_id}.ship           – worker → PM: task shipped (human approved)
@@ -165,9 +164,9 @@ export async function publishTaskEvent(
     const subject = resolvePublishSubject(cfg.subject_prefix, event);
     const payload = sc.encode(JSON.stringify(event));
     nc.publish(subject, payload);
-    log.info(`[nats] published ${event.event} → ${subject}`);
-    // Flush to ensure delivery before closing.
+    // Flush before logging so we only claim success after delivery.
     await nc.flush();
+    log.info(`[nats] published ${event.event} → ${subject}`);
   } finally {
     await nc.drain();
   }
