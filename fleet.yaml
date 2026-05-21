@@ -18,6 +18,9 @@ delegation:
   aws_region: us-west-2
   table_name: gg-sandbox-tasks
   s3_bucket: gg-sandbox-narratives-251714435910   # MUST be globally unique; add 6-char suffix
+  nats:
+    servers:
+      - nats://localhost:4222
 
 agents:
   defaults:

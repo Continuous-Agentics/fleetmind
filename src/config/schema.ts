@@ -122,16 +122,7 @@ export const CronSweepSchema = z.object({
 
 export type CronSweepConfig = z.infer<typeof CronSweepSchema>;
 
-// ── NATS transport config ─────────────────────────────────────────────────────
-
-/**
- * Which transports are used when the PM bot delivers a task delegation.
- * - "slack": Slack channel message only (legacy default)
- * - "nats": NATS subject publish only
- * - "both": publish to both Slack and NATS simultaneously
- */
-export const DelegationTransportSchema = z.enum(["slack", "nats", "both"]).default("slack");
-export type DelegationTransport = z.infer<typeof DelegationTransportSchema>;
+// ── NATS config ────────────────────────────────────────────────────────────
 
 /**
  * NATS connection config embedded in fleet delegation settings.
@@ -174,12 +165,7 @@ export const DelegationFleetSchema = z.object({
   s3_key_template: z.string().default("v0/projects/{project}/tasks/{date}-{task_id}.md"),
   aws_region: z.string().optional(),
   /**
-   * Which transport(s) to use for delegation delivery.
-   * Defaults to "slack" for backwards compatibility.
-   */
-  delegation_transport: DelegationTransportSchema,
-  /**
-   * NATS connection config.  Required when delegation_transport is "nats" or "both".
+   * NATS connection config. Required when delegation.enabled = true.
    */
   nats: NatsConfigSchema.optional(),
 }).superRefine((val, ctx) => {
@@ -190,10 +176,10 @@ export const DelegationFleetSchema = z.object({
     if (!val.s3_bucket) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "delegation.s3_bucket is required when delegation.enabled = true" });
     }
-    const transport = val.delegation_transport ?? "slack";
-    if ((transport === "nats" || transport === "both") && !val.nats) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "delegation.nats is required when delegation_transport is 'nats' or 'both'" });
-    }
+    // Note: delegation.nats is required to publish task events, but not for
+    // read-only commands (narrative get, query). Validated at publish time
+    // in the CLI commands rather than at schema parse time so that minimal
+    // fleet configs built from a name (no fleet.yaml) still work for queries.
   }
 });
 

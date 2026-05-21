@@ -170,45 +170,44 @@ describe("DelegationFleetSchema NATS integration", () => {
     aws_region: "us-west-2",
   };
 
-  test("default transport is slack — no nats block needed", () => {
+  test("enabled fleet without nats block is valid for read-only commands", () => {
+    // nats is validated at publish time, not schema parse time.
+    // Allows buildMinimalFleet (query/narrative commands with no fleet.yaml)
+    // to work without a NATS config.
     const cfg = DelegationFleetSchema.parse(base);
-    assert.equal(cfg.delegation_transport, "slack");
+    assert.equal(cfg.enabled, true);
     assert.equal(cfg.nats, undefined);
   });
 
-  test("nats transport requires nats block", () => {
+  test("enabled fleet without table_name fails", () => {
     assert.throws(
-      () => DelegationFleetSchema.parse({ ...base, delegation_transport: "nats" }),
-      /delegation\.nats is required/
+      () => DelegationFleetSchema.parse({ enabled: true, s3_bucket: "b", nats: { servers: ["nats://localhost:4222"] } }),
+      /table_name is required/
     );
   });
 
-  test("both transport requires nats block", () => {
-    assert.throws(
-      () => DelegationFleetSchema.parse({ ...base, delegation_transport: "both" }),
-      /delegation\.nats is required/
-    );
-  });
-
-  test("nats transport with nats block is valid", () => {
+  test("valid config with nats block", () => {
     const cfg = DelegationFleetSchema.parse({
       ...base,
-      delegation_transport: "nats",
       nats: { servers: ["nats://localhost:4222"] },
     });
-    assert.equal(cfg.delegation_transport, "nats");
     assert.ok(cfg.nats);
     assert.deepEqual(cfg.nats.servers, ["nats://localhost:4222"]);
+    assert.equal(cfg.nats.subject_prefix, "fleetmind");
   });
 
-  test("both transport with nats block is valid", () => {
+  test("valid config with multiple NATS servers", () => {
     const cfg = DelegationFleetSchema.parse({
       ...base,
-      delegation_transport: "both",
-      nats: { servers: ["nats://nats.fleet.internal:4222"] },
+      nats: { servers: ["nats://nats-1.fleet.internal:4222", "nats://nats-2.fleet.internal:4222"] },
     });
-    assert.equal(cfg.delegation_transport, "both");
-    assert.ok(cfg.nats);
+    assert.equal(cfg.nats!.servers.length, 2);
+  });
+
+  test("disabled fleet does not require nats block", () => {
+    const cfg = DelegationFleetSchema.parse({ enabled: false });
+    assert.equal(cfg.enabled, false);
+    assert.equal(cfg.nats, undefined);
   });
 });
 

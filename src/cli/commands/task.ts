@@ -30,7 +30,7 @@ import { log } from "../../utils/log.js";
 // ── NATS helper ────────────────────────────────────────────────────────────
 
 /**
- * Publish a task event to NATS if the fleet config includes NATS transport.
+ * Publish a task event to NATS.
  * Never throws — NATS failures are logged but do not fail the CLI command.
  */
 async function maybePublishNats(
@@ -38,8 +38,6 @@ async function maybePublishNats(
   event: TaskEvent
 ): Promise<void> {
   if (!delegation?.nats) return;
-  const transport = delegation.delegation_transport ?? "slack";
-  if (transport === "slack") return;
   try {
     await publishTaskEvent(delegation.nats, event);
   } catch (err) {
