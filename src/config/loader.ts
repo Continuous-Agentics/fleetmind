@@ -56,14 +56,29 @@ export function resolveFleetSource(flag?: string): FleetSource {
   const agentEnvPath = "/etc/fleetmind/agent.env";
   if (fs.existsSync(agentEnvPath)) {
     const envText = fs.readFileSync(agentEnvPath, "utf-8");
-    const match = envText.match(/^FLEET_NAME=(.+)$/m);
-    if (match && match[1]) {
-      return { kind: "name", name: match[1].trim() };
+    const nameMatch = envText.match(/^FLEET_NAME=(.+)$/m);
+    if (!nameMatch?.[1]) {
+      throw new Error(
+        `Found ${agentEnvPath} but it does not contain FLEET_NAME. ` +
+          "Check your bootstrap configuration."
+      );
     }
-    throw new Error(
-      `Found ${agentEnvPath} but it does not contain FLEET_NAME. ` +
-        "Check your bootstrap configuration."
-    );
+    // Prefer the full workspace fleet.yaml when WORKSPACE_BASE + AGENT_ID are
+    // present — the minimal name-based config lacks NATS, Slack, and other
+    // delegation settings that live in the pushed fleet.yaml.
+    const wsBaseMatch = envText.match(/^WORKSPACE_BASE=(.+)$/m);
+    const agentIdMatch = envText.match(/^AGENT_ID=(.+)$/m);
+    if (wsBaseMatch?.[1] && agentIdMatch?.[1]) {
+      const wsFleet = path.join(
+        wsBaseMatch[1].trim(),
+        agentIdMatch[1].trim(),
+        "fleet.yaml"
+      );
+      if (fs.existsSync(wsFleet)) {
+        return { kind: "file", path: wsFleet };
+      }
+    }
+    return { kind: "name", name: nameMatch[1].trim() };
   }
 
   // Case 4 — fleet.yaml in CWD
