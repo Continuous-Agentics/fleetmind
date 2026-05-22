@@ -122,29 +122,6 @@ export function renderAgentOpenClawJson(
     pluginEntries[plugin] = { enabled: true };
   }
   pluginEntries["slack"] = { enabled: true };
-  // PM bots: enable the OpenClaw webhooks plugin so the NATS PM subscriber
-  // can POST ship/block events to wake the conductor session.
-  // Route secret reuses GATEWAY_TOKEN (already in EnvironmentFile).
-  if (agent.orchestrator) {
-    pluginEntries["webhooks"] = {
-      enabled: true,
-      config: {
-        routes: {
-          "nats-events": {
-            path: "/plugins/webhooks/nats-events",
-            sessionKey: `agent:${agentId}:main`,
-            secret: {
-              source: "env",
-              provider: "default",
-              id: "GATEWAY_TOKEN",
-            },
-            description: "NATS PM subscriber ship/block wake endpoint",
-          },
-        },
-      },
-    };
-  }
-
   // agents.defaults.params — forward cacheRetention (and any future top-level params)
   // agents.defaults.models — forward per-model param overrides (e.g. long TTL for Sonnet)
   const defaultsParams = defaults.params && Object.keys(defaults.params).length > 0

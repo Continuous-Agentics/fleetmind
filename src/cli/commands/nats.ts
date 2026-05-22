@@ -11,6 +11,7 @@
  */
 
 import { Command } from "commander";
+import { execFile } from "node:child_process";
 import { resolveAndLoadFleet } from "../../config/loader.js";
 import {
   subscribeTaskEvents,
@@ -48,6 +49,25 @@ function makeLedger(fleet: ReturnType<typeof resolveAndLoadFleet>): TaskLedger {
 }
 
 // ── Register ──────────────────────────────────────────────────────────────────
+
+// Wake an OpenClaw agent via the local gateway CLI.
+// Uses OPENCLAW_GATEWAY_TOKEN (alias of GATEWAY_TOKEN) for auth.
+// Non-blocking — fires and forgets with a timeout.
+function wakeAgent(agentId: string, message: string, port: string = "18789"): void {
+  const token = process.env.GATEWAY_TOKEN ?? process.env.OPENCLAW_GATEWAY_TOKEN;
+  const args = [
+    "agent",
+    "--agent", agentId,
+    "--message", message,
+    "--gateway", `ws://localhost:${port}`,
+  ];
+  if (token) args.push("--gateway-token", token);
+  const ocBin = process.env.OPENCLAW_BIN ?? "openclaw";
+  execFile(ocBin, args, { timeout: 15000 }, (err) => {
+    if (err) log.warn(`[nats] wakeAgent(${agentId}) failed: ${err.message}`);
+  });
+}
+
 
 export function registerNats(program: Command): void {
   const nats = program
@@ -130,8 +150,15 @@ Examples:
             log.info(`[nats] ← ${event.event} on ${subject}: task=${event.task_id} project=${event.project} worker=${event.worker}`);
           }
 
-          // Worker mode: auto-ack inbound delegations via DDB.
+          // Worker mode: auto-ack inbound delegations via DDB + wake OpenClaw session.
           if (opts.mode === "worker" && event.event === "delegation") {
+            // Wake the worker agent so it starts processing the delegation immediately.
+            const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT ?? "18789";
+            const workerId = opts.workerId ?? event.worker;
+            if (workerId) {
+              const msg = `NATS: Task ${event.task_id} delegated to you. Description: ${event.description ?? "(see DDB)"}`;
+              wakeAgent(workerId, msg, gatewayPort);
+            }
             try {
               await ledger.ackTask(event.task_id, event.worker, event.project);
               if (!opts.json) {
@@ -154,28 +181,16 @@ Examples:
 
           // PM mode: advance DDB lifecycle on worker terminal events.
           if (opts.mode === "pm") {
-            // Wake the OpenClaw PM session via the webhooks plugin when ship/block
+            // Wake the OpenClaw PM session via gateway CLI on ship/block
             // events arrive. Opt-in: only fires when OPENCLAW_WEBHOOK_URL and
             // OPENCLAW_WEBHOOK_SECRET are set in the environment (via EnvironmentFile).
-            // Derive webhook URL from OPENCLAW_GATEWAY_PORT (set in systemd unit)
-            // and use GATEWAY_TOKEN (from EnvironmentFile) as the shared secret.
-            // Both env vars are available in the PM subscriber's process environment.
             const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT ?? "18789";
-            const webhookUrl = process.env.OPENCLAW_WEBHOOK_URL
-              ?? `http://localhost:${gatewayPort}/plugins/webhooks/nats-events`;
-            const webhookSecret = process.env.OPENCLAW_WEBHOOK_SECRET ?? process.env.GATEWAY_TOKEN;
-            if (webhookSecret && (event.event === "ship" || event.event === "block")) {
-              const goal = event.event === "ship"
-                ? `Task ${event.task_id} shipped by ${event.worker}. Summary: ${event.message ?? "(no summary)"}`
-                : `Task ${event.task_id} blocked by ${event.worker}. Reason: ${event.reason ?? "(no reason)"}` ;
-              fetch(webhookUrl, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "Authorization": `Bearer ${webhookSecret}`,
-                },
-                body: JSON.stringify({ action: "create_flow", goal, status: "queued" }),
-              }).catch((err) => log.warn(`[nats] webhook wake failed: ${err}`));
+            if (event.event === "ship" || event.event === "block") {
+              const pmAgentId = fleet.agents.list.find(a => a.orchestrator)?.id ?? "conductor";
+              const msg = event.event === "ship"
+                ? `NATS: Task ${event.task_id} shipped by ${event.worker}. ${event.message ?? ""}`
+                : `NATS: Task ${event.task_id} blocked by ${event.worker}. ${event.reason ?? ""}`;
+              wakeAgent(pmAgentId, msg, gatewayPort);
             }
 
             if (event.event === "ship") {
