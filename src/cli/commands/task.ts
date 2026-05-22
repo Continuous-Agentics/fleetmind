@@ -37,9 +37,19 @@ async function maybePublishNats(
   delegation: DelegationFleetConfig | undefined,
   event: TaskEvent
 ): Promise<void> {
-  if (!delegation?.nats) return;
+  if (!delegation?.nats) {
+    log.warn(`[nats] skipped ${event.event}/${event.task_id}: delegation.nats not configured in fleet.yaml`);
+    return;
+  }
+  const servers = delegation.nats.servers ?? [];
+  if (servers.length === 0) {
+    log.warn(`[nats] skipped ${event.event}/${event.task_id}: delegation.nats.servers is empty`);
+    return;
+  }
+  log.info(`[nats] publishing ${event.event}/${event.task_id} → ${servers.join(", ")}`);
   try {
     await publishTaskEvent(delegation.nats, event);
+    log.info(`[nats] published ${event.event}/${event.task_id} ✓`);
   } catch (err) {
     log.warn(`[nats] publish failed for ${event.event}/${event.task_id}: ${err}`);
   }
