@@ -63,9 +63,9 @@ export function resolveFleetSource(flag?: string): FleetSource {
           "Check your bootstrap configuration."
       );
     }
-    // Prefer the full workspace fleet.yaml when WORKSPACE_BASE + AGENT_ID are
-    // present — the minimal name-based config lacks NATS, Slack, and other
-    // delegation settings that live in the pushed fleet.yaml.
+    // On bot instances, WORKSPACE_BASE and AGENT_ID are always present.
+    // The workspace fleet.yaml is the full config (includes NATS, Slack, etc).
+    // The minimal name-based config only has DDB — never use it on instances.
     const wsBaseMatch = envText.match(/^WORKSPACE_BASE=(.+)$/m);
     const agentIdMatch = envText.match(/^AGENT_ID=(.+)$/m);
     if (wsBaseMatch?.[1] && agentIdMatch?.[1]) {
@@ -77,7 +77,13 @@ export function resolveFleetSource(flag?: string): FleetSource {
       if (fs.existsSync(wsFleet)) {
         return { kind: "file", path: wsFleet };
       }
+      throw new Error(
+        `Bot instance has WORKSPACE_BASE + AGENT_ID in ${agentEnvPath} but ` +
+          `workspace fleet.yaml not found at ${wsFleet}. ` +
+          `Run 'fleetmind push fleet' to deploy the workspace.`
+      );
     }
+    // Operator machine: no workspace, use minimal name-based config.
     return { kind: "name", name: nameMatch[1].trim() };
   }
 
