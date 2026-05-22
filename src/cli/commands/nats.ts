@@ -53,17 +53,14 @@ function makeLedger(fleet: ReturnType<typeof resolveAndLoadFleet>): TaskLedger {
 // Wake an OpenClaw agent via the local gateway CLI.
 // Uses OPENCLAW_GATEWAY_TOKEN (alias of GATEWAY_TOKEN) for auth.
 // Non-blocking — fires and forgets with a timeout.
-function wakeAgent(agentId: string, message: string, port: string = "18789"): void {
+function wakeAgent(agentId: string, message: string, _port: string = "18789"): void {
   const token = process.env.GATEWAY_TOKEN ?? process.env.OPENCLAW_GATEWAY_TOKEN;
-  const args = [
-    "agent",
-    "--agent", agentId,
-    "--message", message,
-    "--gateway", `ws://localhost:${port}`,
-  ];
-  if (token) args.push("--gateway-token", token);
+  const args = ["agent", "--agent", agentId, "--message", message];
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // openclaw agent reads OPENCLAW_GATEWAY_TOKEN for gateway auth
+  if (token) env["OPENCLAW_GATEWAY_TOKEN"] = token;
   const ocBin = process.env.OPENCLAW_BIN ?? "openclaw";
-  execFile(ocBin, args, { timeout: 15000 }, (err) => {
+  execFile(ocBin, args, { timeout: 15000, env }, (err) => {
     if (err) log.warn(`[nats] wakeAgent(${agentId}) failed: ${err.message}`);
   });
 }
