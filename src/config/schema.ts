@@ -205,7 +205,21 @@ export const AgentSchema = z.object({
   role: AgentRoleSchema.default("worker"),
   model: z.string().optional(),
   persona: PersonaSchema.default({}),
-  slack: SlackAccountSchema,
+  /**
+   * Slack account config.
+   *
+   * Required in master fleet.yaml (has credentials: bot_token, app_token).
+   *
+   * Optional in per-agent fleet.yaml slices (renderer intentionally strips
+   * slack credentials for security — per-agent configs are deployed to EC2
+   * and should not contain credentials).
+   *
+   * NATS subscription and delegation flows do not read slack IDs or
+   * credentials from fleet.yaml. Rendering functions (renderOpenClawJson,
+   * renderTerraformVars, renderAgentOpenClawJson) validate presence early
+   * when needed.
+   */
+  slack: SlackAccountSchema.optional(),
   /** Optional per-agent Anthropic configuration. */
   anthropic: AnthropicAgentSchema.optional(),
   skills: z.array(SkillRefSchema).default([]),
