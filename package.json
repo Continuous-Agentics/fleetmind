@@ -1,6 +1,6 @@
 {
   "name": "@continuous-agentics/fleetmind",
-  "version": "0.7.0-beta.16",
+  "version": "0.7.0-beta.17",
   "description": "Deploy and manage OpenClaw multi-agent fleets",
   "keywords": [
     "ai",
@@ -23,7 +23,8 @@
   "homepage": "https://github.com/Continuous-Agentics/fleetmind#readme",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com",
-    "access": "restricted"
+    "access": "restricted",
+    "tag": "beta"
   },
   "files": [
     "dist/cli",
