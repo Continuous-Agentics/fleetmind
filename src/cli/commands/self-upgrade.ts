@@ -72,7 +72,7 @@ export interface SelfUpgradeDeps {
 // ── Options ───────────────────────────────────────────────────────────────────
 
 export interface SelfUpgradeOptions {
-  version?: string;
+  to?: string;
   latest: boolean;
   apply: boolean;
   restart: boolean;
@@ -197,22 +197,22 @@ export async function runSelfUpgrade(
   }
 
   // ── Step 2: Validate flags ────────────────────────────────────────────────
-  const hasVersion = opts.version !== undefined && opts.version !== "";
+  const hasVersion = opts.to !== undefined && opts.to !== "";
   const hasLatest = opts.latest;
 
   if (!hasVersion && !hasLatest) {
-    log.error("Specify exactly one of --version <semver> or --latest.");
+    log.error("Specify exactly one of --to <semver> or --latest.");
     process.exit(1);
   }
 
   if (hasVersion && hasLatest) {
-    log.error("--version and --latest are mutually exclusive. Specify only one.");
+    log.error("--to and --latest are mutually exclusive. Specify only one.");
     process.exit(1);
   }
 
   // ── Step 3: Determine target version string ────────────────────────────
   // For --latest, npm resolves "latest" tag at install time.
-  const targetTag = hasVersion ? opts.version! : "latest";
+  const targetTag = hasVersion ? opts.to! : "latest";
   const targetPkg = `${PACKAGE_NAME}@${targetTag}`;
 
   // ── Step 4: Read current version ─────────────────────────────────────────
@@ -314,10 +314,10 @@ export async function runSelfUpgrade(
     log.step("Verifying installed version...");
     const installedVersion = readCurrentVersion();
 
-    if (hasVersion && installedVersion !== opts.version) {
+    if (hasVersion && installedVersion !== opts.to) {
       log.error(
         `Version mismatch after install.\n` +
-          `  requested: ${opts.version}\n` +
+          `  requested: ${opts.to}\n` +
           `  installed: ${installedVersion}\n` +
           "npm may have served a cached or different version. Try clearing the npm cache."
       );
@@ -353,7 +353,7 @@ export function registerSelfUpgrade(program: Command): void {
     .description(
       "Upgrade the fleetmind CLI in-place by pulling from GitHub Packages (must run as root)"
     )
-    .option("--version <semver>", "Install a specific version (mutually exclusive with --latest)")
+    .option("--to <semver>", "Install a specific version (mutually exclusive with --latest)")
     .option("--latest", "Install the latest version from the GitHub Packages registry", false)
     .option(
       "--apply",
@@ -365,10 +365,10 @@ export function registerSelfUpgrade(program: Command): void {
     .addHelpText('after', `
 Examples:
   # Dry-run: preview what would happen (no changes made)
-  $ sudo fleetmind self-upgrade --version 0.5.0
+  $ sudo fleetmind self-upgrade --to 0.5.0
 
   # Install a specific version
-  $ sudo fleetmind self-upgrade --version 0.5.0 --apply
+  $ sudo fleetmind self-upgrade --to 0.5.0 --apply
 
   # Install the latest version
   $ sudo fleetmind self-upgrade --latest --apply
@@ -380,7 +380,7 @@ Note: this command must run as root (sudo). It fetches the GitHub Packages token
 from SSM, installs via npm, then scrubs the .npmrc immediately after.
 `)
     .action(async (opts: {
-      version?: string;
+      to?: string;
       latest: boolean;
       apply: boolean;
       restart: boolean;
@@ -388,7 +388,7 @@ from SSM, installs via npm, then scrubs the .npmrc immediately after.
     }) => {
       try {
         await runSelfUpgrade({
-          version: opts.version,
+          to: opts.to,
           latest: opts.latest,
           apply: opts.apply,
           restart: opts.restart,

@@ -30,6 +30,9 @@ delegation:
   table_name: ${name}-tasks
   s3_bucket: ${name}-ledger
   aws_region: us-west-2
+  nats:
+    servers:
+      - nats://localhost:4222
 `.trim();
   fs.writeFileSync(filePath, yaml, "utf-8");
 }

@@ -9,7 +9,7 @@
  *   - --latest --apply: install runs with "latest" tag
  *   - Dry-run (no --apply): no install, prints what would happen
  *   - Missing --version AND --latest: process.exit(1)
- *   - Both --version and --latest: process.exit(1)
+ *   - Both --to and --latest: process.exit(1)
  *   - SSM fetch fails: process.exit(1), .npmrc not written
  *   - npm install fails: process.exit(2), .npmrc scrubbed
  *   - Version mismatch post-install: process.exit(3)
@@ -114,7 +114,7 @@ function makeDeps(overrides: Partial<SelfUpgradeDeps> = {}): SelfUpgradeDeps & {
 
 function baseOpts(overrides: Partial<SelfUpgradeOptions> = {}): SelfUpgradeOptions {
   return {
-    version: undefined,
+    to: undefined,
     latest: false,
     apply: false,
     restart: false,
@@ -136,10 +136,10 @@ describe("runSelfUpgrade — validation", () => {
     assert.deepEqual(Object.keys(deps.written), [], ".npmrc should not be written");
   });
 
-  test("exits 1 when both --version and --latest provided", async () => {
+  test("exits 1 when both --to and --latest provided", async () => {
     const deps = makeDeps();
     const code = await withExitCapture(() =>
-      runSelfUpgrade(baseOpts({ version: "0.4.3", latest: true }), deps)
+      runSelfUpgrade(baseOpts({ to: "0.4.3", latest: true }), deps)
     );
     assert.equal(code, 1, "should exit 1 for conflicting flags");
     assert.deepEqual(deps.npmCalls, [], "no npm install should run");
@@ -148,7 +148,7 @@ describe("runSelfUpgrade — validation", () => {
   test("exits 1 when not running as root", async () => {
     const deps = makeDeps({ getEuid: () => 1000 });
     const code = await withExitCapture(() =>
-      runSelfUpgrade(baseOpts({ version: "0.4.3" }), deps)
+      runSelfUpgrade(baseOpts({ to: "0.4.3" }), deps)
     );
     assert.equal(code, 1, "should exit 1 for non-root");
     assert.deepEqual(Object.keys(deps.written), [], ".npmrc should not be written");
@@ -159,7 +159,7 @@ describe("runSelfUpgrade — dry-run (no --apply)", () => {
   test("prints what would happen but does not install or write .npmrc", async () => {
     const deps = makeDeps();
     const code = await withExitCapture(() =>
-      runSelfUpgrade(baseOpts({ version: "0.4.3" }), deps)
+      runSelfUpgrade(baseOpts({ to: "0.4.3" }), deps)
     );
     // Dry-run should complete without exit
     assert.equal(code, null, "should not call process.exit in dry-run");
@@ -183,7 +183,7 @@ describe("runSelfUpgrade — happy path (--apply)", () => {
       readCurrentVersion: () => "0.4.3",
     });
     const code = await withExitCapture(() =>
-      runSelfUpgrade(baseOpts({ version: "0.4.3", apply: true }), deps)
+      runSelfUpgrade(baseOpts({ to: "0.4.3", apply: true }), deps)
     );
 
     assert.equal(code, null, "should not exit on happy path");
@@ -241,7 +241,7 @@ describe("runSelfUpgrade — happy path (--apply)", () => {
     // For portability, we verify the restartFn is NOT called when restart=false.
     const deps = makeDeps();
     await withExitCapture(() =>
-      runSelfUpgrade(baseOpts({ version: "0.4.3", apply: true }), deps)
+      runSelfUpgrade(baseOpts({ to: "0.4.3", apply: true }), deps)
     );
     assert.deepEqual(deps.restarted, [], "restart should not be called without --restart");
   });
@@ -256,7 +256,7 @@ describe("runSelfUpgrade — failure paths", () => {
     };
     const deps = makeDeps({ ssmClient: failingSsm });
     const code = await withExitCapture(() =>
-      runSelfUpgrade(baseOpts({ version: "0.4.3", apply: true }), deps)
+      runSelfUpgrade(baseOpts({ to: "0.4.3", apply: true }), deps)
     );
     assert.equal(code, 1, "should exit 1 on SSM failure");
     assert.deepEqual(Object.keys(deps.written), [], ".npmrc should NOT be written if SSM fails");
@@ -270,7 +270,7 @@ describe("runSelfUpgrade — failure paths", () => {
       },
     });
     const code = await withExitCapture(() =>
-      runSelfUpgrade(baseOpts({ version: "0.4.3", apply: true }), deps)
+      runSelfUpgrade(baseOpts({ to: "0.4.3", apply: true }), deps)
     );
     assert.equal(code, 2, "should exit 2 on npm install failure");
     assert.ok(
@@ -292,7 +292,7 @@ describe("runSelfUpgrade — failure paths", () => {
       })(),
     });
     const code = await withExitCapture(() =>
-      runSelfUpgrade(baseOpts({ version: "0.4.3", apply: true }), deps)
+      runSelfUpgrade(baseOpts({ to: "0.4.3", apply: true }), deps)
     );
     assert.equal(code, 3, "should exit 3 on post-install version mismatch");
     // .npmrc should be scrubbed even on version mismatch
@@ -320,7 +320,7 @@ describe("runSelfUpgrade — failure paths", () => {
       },
     });
     await withExitCapture(() =>
-      runSelfUpgrade(baseOpts({ version: "0.4.3", apply: true }), deps)
+      runSelfUpgrade(baseOpts({ to: "0.4.3", apply: true }), deps)
     );
     assert.ok(
       lifecycleLog.indexOf("write:/tmp/fleetmind-upgrade.npmrc") < lifecycleLog.indexOf("remove:/tmp/fleetmind-upgrade.npmrc"),

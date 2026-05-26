@@ -8,7 +8,7 @@ fleet:
   description: "Test fleet on gg-sandbox — validate fleetmind end-to-end"
 
 skills_repo:
-  local: ./openclaw            # use bundled fleetmind role templates + skills
+  local: ./openclaw # use bundled fleetmind role templates + skills
 
 secrets:
   provider: env
@@ -17,7 +17,10 @@ delegation:
   enabled: true
   aws_region: us-west-2
   table_name: gg-sandbox-tasks
-  s3_bucket: gg-sandbox-narratives-251714435910   # MUST be globally unique; add 6-char suffix
+  s3_bucket: gg-sandbox-narratives-251714435910 # MUST be globally unique; add 6-char suffix
+  nats:
+    servers:
+      - nats://REPLACE_ME:4222 # set to your NATS server URL (Cloud Map DNS or IP)
 
 agents:
   defaults:
@@ -33,7 +36,7 @@ agents:
       role: pm
       description: "PM bot — gg-sandbox test fleet"
       orchestrator: true
-      model: anthropic/claude-sonnet-4-6   # PM gets a bit more horsepower
+      model: anthropic/claude-sonnet-4-6 # PM gets a bit more horsepower
       persona:
         soul: |
           You are Conductor, the project-manager bot for the gg-sandbox test fleet.
@@ -41,23 +44,24 @@ agents:
           the loop on every assignment.
       slack:
         account_id: conductor
-        bot_user_id: "U0B34DGUL1G"          # Conductor's Slack bot user_id (captured via auth.test)
-        channels: ["C0B2NNJEFKR", "C0B324RF1QW"]  # PM home + delegation channel
+        bot_user_id: "U0B34DGUL1G" # Conductor's Slack bot user_id (captured via auth.test)
+        channels: [ "C0B2NNJEFKR", "C0B324RF1QW" ] # PM home + delegation channel
         bot_token: "${CONDUCTOR_BOT_TOKEN}"
         app_token: "${CONDUCTOR_APP_TOKEN}"
-        background_color: "#2C3E50"        # Slack App manifest display colour
+        background_color: "#2C3E50" # Slack App manifest display colour
         long_description: >
-          Conductor is the project-manager bot for Grace's gg-sandbox test fleet (Continuous-Agentics/fleetmind).
-          It receives tasks from humans, delegates work to specialty worker bots (Forge), tracks tasks in a
-          DynamoDB ledger, and closes the loop on every delegation. Runs on dedicated EC2 in AWS account
-          251714435910 (us-west-2).
+          Conductor is the project-manager bot for Grace's gg-sandbox test fleet
+          (Continuous-Agentics/fleetmind). It receives tasks from humans,
+          delegates work to specialty worker bots (Forge), tracks tasks in a
+          DynamoDB ledger, and closes the loop on every delegation. Runs on
+          dedicated EC2 in AWS account 251714435910 (us-west-2).
       skills:
         - name: bot-delegation
           source: fleetmind
       agent_to_agent:
-        can_send_to: [forge]
+        can_send_to: [ forge ]
       delegation:
-        worker_bots: [forge]
+        worker_bots: [ forge ]
         sweeps:
           - name: conductor-sweep-forge
             worker_id: forge
@@ -79,20 +83,24 @@ agents:
         # TODO: run `fleetmind secrets auth-test --agent forge` (or equivalent) to capture
         # Forge's bot user_id from Slack auth.test, then fill in bot_user_id below.
         # bot_user_id: "U_FORGE"
-        channels: ["C0B324RF1QW"]          # delegation channel only
+        channels: [ "C0B324RF1QW" ] # delegation channel only
         bot_token: "${FORGE_BOT_TOKEN}"
         app_token: "${FORGE_APP_TOKEN}"
-        background_color: "#8B4513"        # Slack App manifest display colour (role default)
+        background_color: "#8B4513" # Slack App manifest display colour (role default)
         long_description: >
-          Forge is the backend specialty worker bot for Grace's gg-sandbox test fleet
-          (Continuous-Agentics/fleetmind). It receives task envelopes from Conductor (the PM bot),
-          acknowledges with :eyes:, ships work back through a DynamoDB task ledger, and posts completion
-          summaries. Runs on dedicated EC2 in AWS account 251714435910 (us-west-2).
+          Forge is the backend specialty worker bot for Grace's gg-sandbox test
+          fleet (Continuous-Agentics/fleetmind). It receives task envelopes from
+          Conductor (the PM bot), acknowledges with :eyes:, ships work back
+          through a DynamoDB task ledger, and posts completion summaries. Runs
+          on dedicated EC2 in AWS account 251714435910 (us-west-2).
       skills:
         - name: bot-reception
           source: fleetmind
+        - name: structured-pr-review
+          source: clawhub
+          author: ggettert
       agent_to_agent:
-        can_send_to: [conductor]
+        can_send_to: [ conductor ]
       delegation:
         specialty: backend
 

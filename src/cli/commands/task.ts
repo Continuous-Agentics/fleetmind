@@ -23,7 +23,37 @@ import { readFileSync } from "fs";
 import { resolveAndLoadFleet } from "../../config/loader.js";
 import { TaskLedger, TaskConditionError } from "../../runtime/delegation/ddb.js";
 import type { TaskRecord } from "../../runtime/delegation/types.js";
+import type { DelegationFleetConfig } from "../../config/schema.js";
+import { publishTaskEvent, type TaskEvent } from "../../transport/nats.js";
 import { log } from "../../utils/log.js";
+
+// ── NATS helper ────────────────────────────────────────────────────────────
+
+/**
+ * Publish a task event to NATS.
+ * Never throws — NATS failures are logged but do not fail the CLI command.
+ */
+async function maybePublishNats(
+  delegation: DelegationFleetConfig | undefined,
+  event: TaskEvent
+): Promise<void> {
+  if (!delegation?.nats) {
+    log.warn(`[nats] skipped ${event.event}/${event.task_id}: delegation.nats not configured in fleet.yaml`);
+    return;
+  }
+  const servers = delegation.nats.servers ?? [];
+  if (servers.length === 0) {
+    log.warn(`[nats] skipped ${event.event}/${event.task_id}: delegation.nats.servers is empty`);
+    return;
+  }
+  log.info(`[nats] publishing ${event.event}/${event.task_id} → ${servers.join(", ")}`);
+  try {
+    await publishTaskEvent(delegation.nats, event);
+    log.info(`[nats] published ${event.event}/${event.task_id} ✓`);
+  } catch (err) {
+    log.warn(`[nats] publish failed for ${event.event}/${event.task_id}: ${err}`);
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -55,9 +85,11 @@ export interface TaskLedgerLike {
     worker: string;
     delegated_by: string;
     definition_of_done: string;
-    delegation_thread: string;
-    delegation_envelope_ts: string;
+    delegation_thread?: string;
+    delegation_envelope_ts?: string;
     tracker_link?: string;
+    description?: string;
+    requestor?: string;
     lifecycle?: "requires-human-signoff" | "shipped-is-done";
     s3_key_template?: string;
   }): Promise<TaskRecord>;
@@ -95,9 +127,16 @@ export interface CreateTaskOptions {
   worker: string;
   delegatedBy: string;
   dod: string;
-  thread: string;
-  envelopeTs: string;
+  /** Slack permalink to delegation thread. Optional for NATS-only fleets. */
+  thread?: string;
+  /** Slack message TS of the delegation envelope. Optional for NATS-only fleets
+   *  where there is no Slack envelope. */
+  envelopeTs?: string;
   tracker?: string;
+  /** Slack user ID (U…) of the human who requested this feature */
+  requestor?: string;
+  /** Free-text description of the feature / work context */
+  description?: string;
   lifecycle?: "requires-human-signoff" | "shipped-is-done";
   taskId?: string;
   fleet?: string;
@@ -222,6 +261,8 @@ export async function createTask(
       delegation_thread: opts.thread,
       delegation_envelope_ts: opts.envelopeTs,
       tracker_link: opts.tracker,
+      description: opts.description,
+      requestor: opts.requestor,
       lifecycle: opts.lifecycle,
     });
   } catch (err) {
@@ -380,9 +421,11 @@ Run \`fleetmind task <subcommand> --help\` for examples.
     .requiredOption("--worker <id>", "Worker bot identifier (Slack user ID or agent ID)")
     .requiredOption("--delegated-by <id>", "PM bot identifier")
     .requiredOption("--dod <text>", "Definition of done")
-    .requiredOption("--thread <url>", "Delegation thread URL / Slack permalink")
-    .requiredOption("--envelope-ts <ts>", "Envelope message timestamp / ID")
+    .option("--thread <url>", "Delegation thread URL / Slack permalink. Optional for NATS-only fleets where the architecture discussion may not have a Slack permalink.")
+    .option("--envelope-ts <ts>", "Delegation envelope message timestamp (Slack TS). Optional for NATS-only fleets where no Slack envelope exists.")
     .option("--tracker <url>", "External tracker link (Linear, Jira, etc.)")
+    .option("--requestor <slack-uid>", "Slack user ID (U\u2026) of the human who requested this feature — included in NATS delegation event so workers can open a Slack thread with them directly")
+    .option("--description <text>", "Free-text description of the feature / work context (stored in DDB, included in NATS delegation event)")
     .addOption(
       new Option("--lifecycle <mode>", "Lifecycle policy")
         .choices(["requires-human-signoff", "shipped-is-done"])
@@ -409,7 +452,8 @@ Examples:
       --tracker https://linear.app/acme/issue/ENG-42
 `)
     .action(async (opts: CreateTaskOptions) => {
-      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
+      const fleet = resolveAndLoadFleet(opts.fleet);
+      const ledger = makeLedger(fleet);
       try {
         const record = await createTask(opts, ledger);
         output(
@@ -418,6 +462,22 @@ Examples:
             : `Created task ${record.task_id} for project ${record.project} (status: delegated)`,
           opts.json ?? false
         );
+        // Publish delegation event to NATS if transport is nats or both.
+        await maybePublishNats(fleet.delegation, {
+          v: "1.0",
+          event: "delegation",
+          task_id: record.task_id,
+          project: record.project,
+          worker: record.worker,
+          delegated_by: record.delegated_by,
+          at: record.delegated_at,
+          definition_of_done: record.definition_of_done,
+          tracker_link: record.tracker_link ?? undefined,
+          description: record.description,
+          requestor: record.requestor,
+          delegation_thread: record.delegation_thread,
+          delegation_envelope_ts: record.delegation_envelope_ts,
+        });
       } catch (err) {
         if (err instanceof TaskConditionError) {
           log.error(err.message);
@@ -446,7 +506,8 @@ Examples:
   $ fleetmind task ack --task-id a1b2c3d4 --worker forge --project website-rewrite
 `)
     .action(async (opts: WorkerTaskOptions) => {
-      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
+      const fleet = resolveAndLoadFleet(opts.fleet);
+      const ledger = makeLedger(fleet);
       try {
         await ackTask(opts, ledger);
         output(
@@ -455,6 +516,15 @@ Examples:
             : `Task ${opts.taskId} acknowledged (status: accepted)`,
           opts.json ?? false
         );
+        // Publish ack event to NATS. Build from opts — no extra DDB round-trip.
+        await maybePublishNats(fleet.delegation, {
+          v: "1.0",
+          event: "ack",
+          task_id: opts.taskId,
+          project: opts.project,
+          worker: opts.worker,
+          at: new Date().toISOString(),
+        });
       } catch (err) { handleError(err); }
     });
 
@@ -477,7 +547,8 @@ Examples:
   $ fleetmind task ship --task-id a1b2c3d4 --worker forge --project website-rewrite
 `)
     .action(async (opts: WorkerTaskOptions) => {
-      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
+      const fleet = resolveAndLoadFleet(opts.fleet);
+      const ledger = makeLedger(fleet);
       try {
         await shipTask(opts, ledger);
         output(
@@ -486,6 +557,15 @@ Examples:
             : `Task ${opts.taskId} shipped (status: shipped)`,
           opts.json ?? false
         );
+        // Publish ship event to NATS. Build from opts — no extra DDB round-trip.
+        await maybePublishNats(fleet.delegation, {
+          v: "1.0",
+          event: "ship",
+          task_id: opts.taskId,
+          project: opts.project,
+          worker: opts.worker,
+          at: new Date().toISOString(),
+        });
       } catch (err) { handleError(err); }
     });
 
@@ -508,7 +588,8 @@ Examples:
   $ fleetmind task block --task-id a1b2c3d4 --worker forge --project api-refactor
 `)
     .action(async (opts: WorkerTaskOptions) => {
-      const ledger = makeLedger(resolveAndLoadFleet(opts.fleet));
+      const fleet = resolveAndLoadFleet(opts.fleet);
+      const ledger = makeLedger(fleet);
       try {
         await blockTask(opts, ledger);
         output(
@@ -517,6 +598,15 @@ Examples:
             : `Task ${opts.taskId} blocked (status: blocked)`,
           opts.json ?? false
         );
+        // Publish block event to NATS. Build from opts — no extra DDB round-trip.
+        await maybePublishNats(fleet.delegation, {
+          v: "1.0",
+          event: "block",
+          task_id: opts.taskId,
+          project: opts.project,
+          worker: opts.worker,
+          at: new Date().toISOString(),
+        });
       } catch (err) { handleError(err); }
     });
 

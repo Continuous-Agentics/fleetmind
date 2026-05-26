@@ -1,19 +1,19 @@
 ---
 name: bot-delegation
-version: 1.1.0
+version: 1.2.0
 description: >
-  Delegate concrete dev work from a project-manager bot to worker bots,
-  track through completion, and report back to the planning channel.
+  Delegate concrete dev work from a project-manager bot to worker bots via
+  NATS transport, track through completion, and report back to the human.
   Covers specialty-based worker routing, task ID generation, writing the
-  DynamoDB task record via `fleetmind task create`, posting the delegation
-  envelope in the target channel, watching for acknowledgement and threaded
-  replies, escalating stale tasks on heartbeat, and closing the loop.
+  DynamoDB task record via `fleetmind task create` (which auto-publishes the
+  NATS delegation event), subscribing to worker events (ack/progress/ship/block),
+  escalating stale tasks on heartbeat, and closing the loop. Slack is
+  human-facing only — no delegation envelopes are posted in worker channels.
   Use when: (1) a planning conversation produces a concrete task with a clear
-  definition of done and an assignee, (2) a worker bot reply lands and needs
-  processing, (3) a heartbeat finds an active delegation past its deadline,
-  (4) a DDB_TERMINAL_WAKE signal arrives.
-  Triggers on phrases like "delegate this", "assign this", "hand off to
-  <worker>", or any reply from a worker bot in an active delegation thread.
+  definition of done and an assignee, (2) a worker NATS event arrives,
+  (3) a heartbeat finds a stale delegation, (4) a DDB_TERMINAL_WAKE signal
+  arrives. Triggers on phrases like "delegate this", "assign this", or
+  "hand off to <worker>".
 ---
 
 # Bot Delegation Protocol
@@ -42,13 +42,44 @@ the heavy lifting so the skill stays focused on coordination logic.
 The audit log (`memory/active-delegations.md`) is a human-readable supplement;
 DDB is the live source of truth. Always query DDB for programmatic decisions.
 
+## Session boot — PM subscriber startup (mandatory)
+
+Before handling any work, ensure the NATS PM subscriber is running.
+
+```bash
+systemctl is-active fleetmind-nats-pm.service 2>/dev/null \
+  || pgrep -f "fleetmind nats subscribe.*--mode pm" > /dev/null \
+  || echo "NOT_RUNNING"
+```
+
+If not running:
+
+```bash
+fleetmind nats subscribe --mode pm --json \
+  | while IFS= read -r line; do
+      EVENT=$(echo "$line" | jq -r '.event // empty')
+      TASK_ID=$(echo "$line" | jq -r '.task_id // empty')
+      case "$EVENT" in
+        ack)      handle_worker_ack "$line" ;;
+        progress) handle_worker_progress "$line" ;;
+        ship)     handle_worker_ship "$line" ;;
+        block)    handle_worker_block "$line" ;;
+      esac
+    done
+```
+
+This subscriber replaces sweep cron jobs. Workers push events; the PM bot
+reacts to them. Leave `delegation.sweeps` empty or omit it in `fleet.yaml`.
+
+---
+
 ## When to start a delegation
 
 Only when the task is concrete. It MUST have:
 - One-line summary
 - Definition of done (what "done" looks like, not how)
 - Assignee bot (worker agent ID from fleet.yaml)
-- Target channel
+- Human requestor Slack UID (so the worker can open a thread with them)
 
 If any are missing, push back to the human first. Do not delegate vague work.
 
@@ -71,15 +102,21 @@ Before posting the envelope, create the ledger record:
 ```bash
 fleetmind task create \
   --project <project-slug> \
-  --worker <worker-agent-id-or-slack-id> \
+  --worker <worker-agent-id> \
   --delegated-by <pm-bot-id> \
   --dod "<definition of done>" \
-  --thread "<coordination-thread-url>" \
-  --envelope-ts "<placeholder-ts-or-draft>" \
+  --description "<what needs to be built — context for the worker>" \
+  --requestor "<human_slack_uid>" \
+  --tracker "<linear_or_jira_url>" \
+  --thread "<slack_permalink_to_planning_discussion>" \
   --lifecycle requires-human-signoff \
   --task-id "${TASK_ID}" \
   --json
 ```
+
+`fleetmind task create` automatically publishes the `delegation` event to
+`fleetmind.delegation.<worker_id>` when NATS is configured. No separate
+publish step is needed.
 
 If `task create` exits non-zero with "already exists": regenerate the task ID.
 If it fails with a network/permissions error: proceed with posting the envelope
@@ -118,28 +155,14 @@ and all transition timestamps (`accepted_at`, `shipped_at`, etc.). Terminal task
 UTC date, and task ID. It is stored in DDB at write time. The worker writes to
 that exact path when done; the PM bot can fetch it later without listing S3.
 
-### 3. Post the delegation envelope
+### 3. Delegation is sent via NATS
 
-In the worker's channel (do NOT reply in a thread — this must be a new top-level
-message):
+`fleetmind task create` (step 2) handles the publish. The worker receives a
+NATS delegation event containing `task_id`, `description`, `definition_of_done`,
+`requestor`, and `tracker_link`. No Slack envelope is posted.
 
-```
-@<worker-bot> — task assignment
-
-*Task:* <one-line summary>
-*Task ID:* <8-char hex>
-*Context:* <2-3 sentences, links if any>
-*Definition of done:* <what "done" looks like>
-
-React :eyes: when started. Reply in this thread (mentioning @<pm-bot>) when done or blocked.
-```
-
-Do NOT include external tracker IDs in the envelope — workers don't use them.
-
-**Multi-worker channels:** when multiple worker bots share a channel, never
-`@-mention` any worker other than the recipient inside the envelope body — even
-in the Context section. Other workers wake on every `@-mention`. Use plain
-display names for any incidental references.
+The worker opens a Slack thread directly with the human requestor — the PM
+bot is not involved in that thread unless the human escalates.
 
 ### 4. Update the audit log
 
@@ -153,14 +176,17 @@ Minimum fields:
 - `thread`: the envelope message timestamp
 - `ledger_ddb_key`: `TASK#<task_id>`
 
-### 5. Watch for responses
+### 5. Watch for worker events
 
-| Signal | Action |
+Events arrive via the PM subscriber started in § Session boot.
+
+| NATS event | Action |
 |--------|--------|
-| `:eyes:` reaction on the envelope | Status → acked in audit log; extend deadline +10 min |
-| Worker threaded reply with ship terminal (✅, "done", "shipped", "PR merged") | Close the loop (step 7) |
-| Worker threaded reply with block terminal (⛔, "blocked", "stuck", "need help") | Close as blocked (step 7) |
-| `DDB_TERMINAL_WAKE: TASK#<task_id>` message from the wake script | See § DDB Terminal Wake |
+| `ack` from worker | Status → acked in audit log; extend deadline +10 min |
+| `progress` from worker | Log update; optionally surface to human if warranted |
+| `ship` from worker | Close the loop (step 7) |
+| `block` from worker | Close as blocked (step 7) |
+| `DDB_TERMINAL_WAKE: TASK#<task_id>` | See § DDB Terminal Wake (fallback path) |
 | Heartbeat finds expired deadline | See § Escalation |
 
 **Semantic terminal signals**: ✅ and ⛔ are canonical examples, not literal
@@ -526,10 +552,7 @@ Load these only when the task you're handling needs them:
 - *[references/active-delegations-format.md](references/active-delegations-format.md)* —
   exact block template for `memory/active-delegations.md`, field semantics, and
   the reopen-on-reship procedure.
-- *[references/envelope-template.md](references/envelope-template.md)* —
-  canonical delegation envelope shape, multi-worker channel discipline
-  (never @-mention non-recipient workers in the body), and what to keep out
-  of envelopes.
+
 - *[references/sub-agent-task-templates.md](references/sub-agent-task-templates.md)* —
   canonical, copy-pasteable `task:` briefs for every delegation-lifecycle
   sub-agent (close-the-loop, In-Review, signoff, blocked). Each template embeds
@@ -549,35 +572,23 @@ Load these only when the task you're handling needs them:
 
 ## Changelog
 
-- **1.1.0 (2026-05-11)** — Port substantive protocol improvements from Carpe POC
-  v1.9.0–v1.11.0 (generalized; Carpe-specific names, channels, and AWS/Linear
-  references stripped):
-  - § 5a rewritten with DDB-first idempotency: `last-handled-terminal-at`
-    comparison against DDB terminal timestamps replaces simple audit-log
-    Closed-section check. Closes the dark-period bug where a re-ship after
-    close silently dropped because the prior close record short-circuited.
-  - Reopen-on-reship: when DDB has a newer terminal timestamp than the
-    audit-log's `last-handled-terminal-at`, block moves silently from
-    `## Closed` to `## Active` and a fresh close-the-loop is spawned.
-  - New § Signoff Watchdog: heartbeat nagging for `shipped` +
-    `requires-human-signoff` tasks >4h with per-task cooldown. Prevents
-    silent stalls where a worker ships but no human notices.
-  - New § Reconciliation: session-boot + heartbeat DDB vs audit-log diff;
-    adopts missing blocks, closes merged/abandoned rows, triggers
-    reopen-on-reship for stale closed blocks. Drift summary only when drift > 0.
-  - § 7 completion checklist: 4-box pre-done check (planning post / audit-log
-    move / DDB close / `last-handled-terminal-at` set) to prevent the
-    post-and-stop failure mode where the planning summary was sent but the
-    block was left in `## Active` forever.
-  - § 7a NO_REPLY sub-agent discipline: non-negotiable rule for all spawned
-    sub-agents (close-the-loop, In-Review, signoff, blocked, envelope-drivers).
-    Sub-agents report back via tool return value, not Slack.
-  - Canonical sub-agent task templates added to
-    `references/sub-agent-task-templates.md` (variants a–d). All spawn calls
-    reference the file; no ad-hoc composition.
-  - `active-delegations-format.md` added to references with reopen-on-reship
-    procedure.
-  - `envelope-template.md` added to references: canonical envelope shape,
-    multi-worker channel discipline (never @-mention non-recipient workers in
-    the envelope body — they wake on every mention), and the keep-it-out list.
+- **1.2.0 (2026-05-21)** — Rewrite for NATS-only transport (CON-115):
+  - New § Session boot — PM subscriber startup: start `fleetmind nats
+    subscribe --mode pm` before handling any work. This is the replacement
+    for sweep cron jobs — workers push events, PM bot reacts.
+  - `fleetmind task create` now includes `--description`, `--requestor`,
+    and `--tracker` flags. Removed `--envelope-ts` (no envelope). The command
+    auto-publishes the NATS delegation event — no separate publish step.
+  - § 3 "Post the delegation envelope" replaced with § 3 "Delegation is sent
+    via NATS". No Slack envelope is posted in the worker's channel.
+  - § 5 table updated: `:eyes:` reaction and threaded reply signals replaced
+    with NATS `ack`/`progress`/`ship`/`block` events from the subscriber.
+    `DDB_TERMINAL_WAKE` retained as a fallback path.
+  - `references/envelope-template.md` removed from reference files (no
+    envelope format to maintain).
+  - `bot-delegation-nats` and `bot-reception-nats` standalone skills removed;
+    NATS transport is now the only transport in these core skills.
+- **1.1.0 (2026-05-11)** — DDB-first idempotency, reopen-on-reship, signoff
+  watchdog, reconciliation, § 7 completion checklist, NO_REPLY sub-agent
+  discipline, canonical sub-agent task templates.
 - **1.0.0** — Initial release.

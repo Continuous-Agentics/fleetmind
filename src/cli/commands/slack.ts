@@ -606,10 +606,30 @@ export function buildManifest(
     ROLE_BACKGROUND_COLORS["worker"];
 
   // Build long_description: prefer explicit field, otherwise synthesise.
-  const longDesc =
-    agent.slack?.long_description ??
-    `${agent.name} is a ${role} bot for the ${fleetName} fleet.\n` +
-      `${agent.description ?? ""}`.trim();
+  // Slack requires >= 150 characters.
+  const SLACK_LONG_DESC_MIN = 150;
+
+  // Auto-generated fallback: always pads to >= 150 so generated manifests
+  // are always importable without operator intervention.
+  const baseDesc = [
+    `${agent.name} is a ${role} bot in the ${fleetName} fleet.`,
+    agent.description ? agent.description.trim() : "",
+    `Managed by FleetMind. Role: ${role}. Fleet: ${fleetName}.`,
+    `Operates autonomously, coordinating with other agents to complete tasks.`,
+  ].filter(Boolean).join(" ");
+  const paddingText = ` This bot is part of the ${fleetName} fleet and coordinates with other agents over NATS. Managed by FleetMind.`;
+  const autoDesc = baseDesc.length < SLACK_LONG_DESC_MIN
+    ? baseDesc + paddingText
+    : baseDesc;
+
+  // Operator-provided value is used verbatim; warn if it will fail Slack validation.
+  const longDesc = agent.slack?.long_description ?? autoDesc;
+  if (agent.slack?.long_description && longDesc.length < SLACK_LONG_DESC_MIN) {
+    log.warn(
+      `  ⚠ ${agent.id}: long_description is ${longDesc.length} chars ` +
+      `(Slack requires ≥ ${SLACK_LONG_DESC_MIN}). Manifest may fail import.`
+    );
+  }
 
   // Merge extra scopes (deduped, extras after defaults).
   const extraScopes = agent.slack?.extra_scopes ?? [];
@@ -709,15 +729,6 @@ export async function generateManifests(
 
   for (const agent of targets) {
     const manifest = buildManifest(agent, fleetName);
-
-    // Slack requires long_description >= 150 characters.
-    const longDesc = (manifest.display_information as Record<string, unknown>).long_description as string;
-    if (longDesc.length < 150) {
-      log.warn(
-        `  ⚠ ${agent.id}: long_description is ${longDesc.length} chars (Slack requires ≥ 150). ` +
-        `Set a longer agents.list[].slack.long_description in fleet.yaml to avoid a manifest error.`
-      );
-    }
 
     const yaml = yamlStringify(manifest, { lineWidth: 0 });
     const filePath = path.join(outDir, `${agent.id}.yaml`);

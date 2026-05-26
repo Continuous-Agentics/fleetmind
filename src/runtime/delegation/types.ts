@@ -67,13 +67,20 @@ export const TaskRecordSchema = z.object({
   lifecycle: LifecycleSchema,
   definition_of_done: z.string(),
   /** Slack permalink or equivalent coordination-channel URL */
-  delegation_thread: z.string(),
-  delegation_envelope_ts: z.string(),
+  /** Slack permalink to the delegation thread. Empty string for NATS-only fleets. */
+  delegation_thread: z.string().default(""),
+  /** Slack TS of the delegation envelope message. Empty string for NATS-only fleets. */
+  delegation_envelope_ts: z.string().default(""),
   tracker_link: z.string().nullable().optional(),
   /** Optional free-text title for the task (updatable via task update --title) */
   title: z.string().optional(),
   /** Optional extended description (updatable via task update --description) */
   description: z.string().optional(),
+  /**
+   * Slack user ID (U…) of the human who requested this feature.
+   * Used by workers to open a Slack thread with the requestor on delegation receipt.
+   */
+  requestor: z.string().optional(),
   /** S3 key for the narrative .md — e.g. "v0/projects/my-proj/tasks/2026-01-01-a1b2c3d4.md" */
   task_s3_key: z.string(),
   /** TTL epoch seconds */
@@ -142,10 +149,16 @@ export interface CreateTaskInput {
   delegated_by: string;
   worker: string;
   definition_of_done: string;
-  delegation_thread: string;
-  delegation_envelope_ts: string;
+  /** Slack permalink to the delegation thread. Optional for NATS-only fleets. */
+  delegation_thread?: string;
+  /** Slack TS of the delegation envelope message. Optional for NATS-only fleets. */
+  delegation_envelope_ts?: string;
   tracker_link?: string | null;
   lifecycle?: Lifecycle;
+  /** Free-text description of the feature / work context */
+  description?: string;
+  /** Slack user ID (U…) of the human who requested this feature */
+  requestor?: string;
   /** Override the delegated_at timestamp (defaults to now) */
   delegated_at?: string;
   /** S3 key template; defaults to DEFAULT_S3_KEY_TEMPLATE */

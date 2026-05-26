@@ -122,6 +122,36 @@ export const CronSweepSchema = z.object({
 
 export type CronSweepConfig = z.infer<typeof CronSweepSchema>;
 
+// ── NATS config ────────────────────────────────────────────────────────────
+
+/**
+ * NATS connection config embedded in fleet delegation settings.
+ * Used by both the PM bot publisher and the worker subscriber.
+ */
+export const NatsConfigSchema = z.object({
+  /**
+   * NATS server URLs. One or more servers for redundancy.
+   * Optional — if omitted, the renderer derives the URL from the fleet name
+   * using the Cloud Map convention: nats://nats.<fleet_name>.internal:4222
+   * Example: ["nats://nats.myfleet.internal:4222"]
+   */
+  servers: z.array(z.string()).min(1).optional(),
+  /**
+   * Optional credentials file path (nkeys/creds format).
+   * If omitted the connection is unauthenticated.
+   */
+  creds_file: z.string().optional(),
+  /** Inbox prefix used for request-reply if needed; defaults to "_INBOX". */
+  inbox_prefix: z.string().default("_INBOX"),
+  /** Subject prefix for all fleetmind task events. Default: "fleetmind". */
+  subject_prefix: z.string().default("fleetmind"),
+  /** Connect timeout in milliseconds. Default 5000. */
+  connect_timeout_ms: z.number().int().positive().default(5000),
+  /** Max reconnect attempts (-1 = unlimited). Default -1. */
+  max_reconnect: z.number().int().default(-1),
+});
+export type NatsConfig = z.infer<typeof NatsConfigSchema>;
+
 /** Per-fleet delegation settings. Optional — fleets without delegation work normally. */
 export const DelegationFleetSchema = z.object({
   enabled: z.boolean().default(false),
@@ -136,6 +166,10 @@ export const DelegationFleetSchema = z.object({
    */
   s3_key_template: z.string().default("v0/projects/{project}/tasks/{date}-{task_id}.md"),
   aws_region: z.string().optional(),
+  /**
+   * NATS connection config. Required when delegation.enabled = true.
+   */
+  nats: NatsConfigSchema.optional(),
 }).superRefine((val, ctx) => {
   if (val.enabled) {
     if (!val.table_name) {
@@ -144,6 +178,10 @@ export const DelegationFleetSchema = z.object({
     if (!val.s3_bucket) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "delegation.s3_bucket is required when delegation.enabled = true" });
     }
+    // Note: delegation.nats is required to publish task events, but not for
+    // read-only commands (narrative get, query). Validated at publish time
+    // in the CLI commands rather than at schema parse time so that minimal
+    // fleet configs built from a name (no fleet.yaml) still work for queries.
   }
 });
 
@@ -186,7 +224,10 @@ export const AgentSchema = z.object({
   role: AgentRoleSchema.default("worker"),
   model: z.string().optional(),
   persona: PersonaSchema.default({}),
-  slack: SlackAccountSchema,
+  // Optional — per-agent fleet.yaml slices (pushed to EC2) omit Slack
+  // credentials for security. CLI commands that need Slack (e.g. nats subscribe
+  // posting to threads) read from env vars, not from this field.
+  slack: SlackAccountSchema.optional(),
   /** Optional per-agent Anthropic configuration. */
   anthropic: AnthropicAgentSchema.optional(),
   skills: z.array(SkillRefSchema).default([]),
@@ -281,6 +322,27 @@ export const OutputsSchema = z.object({
   workspace_manifests: z.string().default("./rendered/workspaces/"),
 });
 
+/**
+ * OpenClaw hooks (webhook endpoint) config.
+ * `token` is NOT represented here — it is always rendered as the
+ * `${<AGENT_UPPER>_HOOKS_TOKEN}` env-var placeholder by the renderer so
+ * the actual secret never appears in fleet.yaml or in version control.
+ */
+export const OpenClawHooksSchema = z.object({
+  /** Enable the HTTP hooks endpoint. */
+  enabled: z.boolean().default(true),
+  /** URL path prefix for all hook endpoints (e.g. "/hooks"). */
+  path: z.string().default("/hooks"),
+  /**
+   * Agent IDs that hook requests may target via /hooks/agent.
+   * Defaults to ["main"] — enough for wakeAgent() calls from the NATS
+   * subscriber. Operators can extend this list as needed.
+   */
+  allowed_agent_ids: z.array(z.string()).default(["main"]),
+}).default({});
+
+export type OpenClawHooksConfig = z.infer<typeof OpenClawHooksSchema>;
+
 export const GatewayConfigSchema = z.object({
   port: z.number().default(18789),
   mode: z.string().default("local"),
@@ -289,6 +351,7 @@ export const GatewayConfigSchema = z.object({
 
 export const OpenClawConfigSchema = z.object({
   gateway: GatewayConfigSchema.default({}),
+  hooks: OpenClawHooksSchema,
   session: z.object({ dm_scope: z.string().default("per-channel-peer") }).default({}),
   tools: z.object({
     profile: z.string().default("coding"),

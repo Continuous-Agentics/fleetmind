@@ -56,14 +56,35 @@ export function resolveFleetSource(flag?: string): FleetSource {
   const agentEnvPath = "/etc/fleetmind/agent.env";
   if (fs.existsSync(agentEnvPath)) {
     const envText = fs.readFileSync(agentEnvPath, "utf-8");
-    const match = envText.match(/^FLEET_NAME=(.+)$/m);
-    if (match && match[1]) {
-      return { kind: "name", name: match[1].trim() };
+    const nameMatch = envText.match(/^FLEET_NAME=(.+)$/m);
+    if (!nameMatch?.[1]) {
+      throw new Error(
+        `Found ${agentEnvPath} but it does not contain FLEET_NAME. ` +
+          "Check your bootstrap configuration."
+      );
     }
-    throw new Error(
-      `Found ${agentEnvPath} but it does not contain FLEET_NAME. ` +
-        "Check your bootstrap configuration."
-    );
+    // On bot instances, WORKSPACE_BASE and AGENT_ID are always present.
+    // The workspace fleet.yaml is the full config (includes NATS, Slack, etc).
+    // The minimal name-based config only has DDB — never use it on instances.
+    const wsBaseMatch = envText.match(/^WORKSPACE_BASE=(.+)$/m);
+    const agentIdMatch = envText.match(/^AGENT_ID=(.+)$/m);
+    if (wsBaseMatch?.[1] && agentIdMatch?.[1]) {
+      const wsFleet = path.join(
+        wsBaseMatch[1].trim(),
+        agentIdMatch[1].trim(),
+        "fleet.yaml"
+      );
+      if (fs.existsSync(wsFleet)) {
+        return { kind: "file", path: wsFleet };
+      }
+      throw new Error(
+        `Bot instance has WORKSPACE_BASE + AGENT_ID in ${agentEnvPath} but ` +
+          `workspace fleet.yaml not found at ${wsFleet}. ` +
+          `Run 'fleetmind push fleet' to deploy the workspace.`
+      );
+    }
+    // Operator machine: no workspace, use minimal name-based config.
+    return { kind: "name", name: nameMatch[1].trim() };
   }
 
   // Case 4 — fleet.yaml in CWD

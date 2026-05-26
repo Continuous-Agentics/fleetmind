@@ -56,18 +56,18 @@ export function renderAgentOpenClawJson(
       agentId: agent.id,
       match: {
         channel: "slack",
-        accountId: agent.slack.account_id,
+        accountId: agent.slack?.account_id,
       },
     },
   ];
 
   // Slack accounts — only this agent's account (no groupPolicy here; it lives at top level)
   const slackAccounts: Record<string, unknown> = {
-    [agent.slack.account_id]: {
+    [agent.slack?.account_id ?? agent.id]: {
       enabled: true,
-      botToken: agent.slack.bot_token,
-      appToken: agent.slack.app_token,
-      webhookPath: `/slack/${agent.slack.account_id}`,
+      botToken: agent.slack?.bot_token,
+      appToken: agent.slack?.app_token,
+      webhookPath: `/slack/${agent.slack?.account_id}`,
     },
   };
 
@@ -75,22 +75,25 @@ export function renderAgentOpenClawJson(
   // For each channel this agent operates in, find all OTHER agents that share it
   // and collect their bot_user_id values for the users allowlist.
   const perChannelEntries: Record<string, unknown> = {};
-  const agentChannels = agent.slack.channels ?? [];
+  // Filter out placeholder channel IDs — they break Slack channel startup.
+  const agentChannels = (agent.slack?.channels ?? []).filter(
+    (c) => /^C[A-Z0-9]+$/.test(c)
+  );
   for (let i = 0; i < agentChannels.length; i++) {
     const channelId = agentChannels[i]!;
     const requireMention = i > 0; // first channel = home, always responsive
     const botUserIds: string[] = [];
     for (const other of agents.list) {
       if (other.id === agentId) continue;
-      const otherChannels = other.slack.channels ?? [];
+      const otherChannels = other.slack?.channels ?? [];
       if (!otherChannels.includes(channelId)) continue;
-      if (!other.slack.bot_user_id) {
+      if (!other.slack?.bot_user_id) {
         process.stderr.write(
           `[fleetmind renderer] WARNING: agent "${other.id}" shares channel ${channelId} with "${agentId}" but has no bot_user_id — skipping bot-specific users allowlist entry for that agent.\n`
         );
         continue;
       }
-      botUserIds.push(other.slack.bot_user_id);
+      botUserIds.push(other.slack?.bot_user_id);
     }
     // Always include "*" wildcard so human users are never blocked by the per-channel
     // users allowlist. OpenClaw's authorizeSlackBotRoomMessage filters out "*" from the
@@ -110,12 +113,36 @@ export function renderAgentOpenClawJson(
   const a2aAllow = [...new Set(agent.agent_to_agent.can_send_to)].sort();
 
   // Plugins — this agent's list (fall back to fleet defaults)
+  // Always include 'slack' when a Slack channel is configured — it must be
+  // registered in plugins.entries so OpenClaw discovers the installed channel
+  // provider (@openclaw/slack). Without this it silently skips Slack startup.
   const agentPlugins = agent.plugins ?? defaults.plugins;
   const pluginEntries: Record<string, unknown> = {};
   for (const plugin of [...agentPlugins].sort()) {
     pluginEntries[plugin] = { enabled: true };
   }
-
+  pluginEntries["slack"] = { enabled: true };
+  // Webhooks plugin — NATS subscriber wake endpoint.
+  // The NATS subscriber POSTs create_flow to /plugins/webhooks/nats-wake with
+  // Authorization: Bearer ${OPENCLAW_HOOKS_TOKEN}. The gateway validates it
+  // against the same OPENCLAW_HOOKS_TOKEN env var in its EnvironmentFile.
+  pluginEntries["webhooks"] = {
+    enabled: true,
+    config: {
+      routes: {
+        "nats-wake": {
+          path: "/plugins/webhooks/nats-wake",
+          sessionKey: `agent:${agentId}:main`,
+          secret: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_HOOKS_TOKEN",
+          },
+          description: "NATS subscriber wake endpoint — internal only",
+        },
+      },
+    },
+  };
   // agents.defaults.params — forward cacheRetention (and any future top-level params)
   // agents.defaults.models — forward per-model param overrides (e.g. long TTL for Sonnet)
   const defaultsParams = defaults.params && Object.keys(defaults.params).length > 0
@@ -124,6 +151,14 @@ export function renderAgentOpenClawJson(
   const defaultsModels = defaults.models && Object.keys(defaults.models).length > 0
     ? defaults.models
     : undefined;
+
+  // Hooks config — fall back to sensible defaults when oc.hooks is absent
+  // (fleet objects built without going through FleetSchema.parse may omit it).
+  const hooksConfig = oc.hooks ?? { enabled: true, path: "/hooks", allowed_agent_ids: ["main"] };
+  // Canonical env var used by both the gateway (hooks.token + webhooks plugin secret)
+  // and the NATS subscriber (wakeAgent). Written by fetch-agent-secrets from the
+  // <fleet>/agents/<agent>/hooks Secrets Manager secret as OPENCLAW_HOOKS_TOKEN.
+  const hooksTokenVar = "${OPENCLAW_HOOKS_TOKEN}";
 
   return {
     agents: {
@@ -188,8 +223,25 @@ export function renderAgentOpenClawJson(
       port: oc.gateway.port,
       mode: oc.gateway.mode,
       bind: oc.gateway.bind,
+      auth: {
+        mode: "token",
+        // Token generated at bootstrap and stored in Secrets Manager.
+        // fetch-agent-secrets writes it to the env file as <AGENT_UPPER>_GATEWAY_TOKEN.
+        token: `\${${agentId.toUpperCase().replace(/-/g, "_")}_GATEWAY_TOKEN}`,
+      },
     },
     hooks: {
+      // Webhook endpoint config for this agent.
+      // token is generated at bootstrap, stored in Secrets Manager under
+      // <fleet>/agents/<agent>/hooks, and injected as OPENCLAW_HOOKS_TOKEN
+      // by fetch-agent-secrets. Must be distinct from gateway.auth.token
+      // (OpenClaw enforces this at startup).
+      enabled: hooksConfig.enabled,
+      token: hooksTokenVar,
+      path: hooksConfig.path,
+      ...(hooksConfig.allowed_agent_ids.length > 0
+        ? { allowedAgentIds: hooksConfig.allowed_agent_ids }
+        : {}),
       internal: {
         enabled: true,
         entries: {
@@ -200,6 +252,8 @@ export function renderAgentOpenClawJson(
       },
     },
     plugins: {
+      // allow list prevents "non-bundled plugins may auto-load" warning.
+      allow: ["slack", "webhooks"],
       entries: pluginEntries,
     },
     commands: {
@@ -244,18 +298,18 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
     agentId: agent.id,
     match: {
       channel: "slack",
-      accountId: agent.slack.account_id,
+      accountId: agent.slack?.account_id,
     },
   }));
 
   // Slack accounts (no per-account groupPolicy; lives at top level as "allowlist")
   const slackAccounts: Record<string, unknown> = {};
   for (const agent of agents.list) {
-    slackAccounts[agent.slack.account_id] = {
+    slackAccounts[agent.slack?.account_id ?? agent.id] = {
       enabled: true,
-      botToken: agent.slack.bot_token,
-      appToken: agent.slack.app_token,
-      webhookPath: `/slack/${agent.slack.account_id}`,
+      botToken: agent.slack?.bot_token,
+      appToken: agent.slack?.app_token,
+      webhookPath: `/slack/${agent.slack?.account_id}`,
     };
   }
 
@@ -341,6 +395,8 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
       },
     },
     plugins: {
+      // allow list prevents "non-bundled plugins may auto-load" warning.
+      allow: ["slack"],
       entries: pluginEntries,
     },
     commands: {
@@ -354,30 +410,10 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
 export function renderTerraformVars(fleet: Fleet): string {
   const agentNames = fleet.agents.list.map((a) => `"${a.id}"`).join(", ");
 
-  // Derive wake_target_session_key from the PM (orchestrator) agent's first
-  // Slack channel. This is the channel the EventBridge wake target SSM-invokes
-  // when a terminal task event fires. Empty string when the orchestrator has
-  // no channels configured yet (e.g., first render before Slack apps exist) —
-  // the task-ledger module gates the event target on this being non-empty.
-  const pmAgent = fleet.agents.list.find((a) => a.orchestrator);
-  const pmChannels = pmAgent?.slack.channels ?? [];
-  const wakeKey =
-    pmAgent && pmChannels.length > 0
-      ? `agent:main:slack:channel:${pmChannels[0]}`
-      : "";
-
   // Derive agent_orchestrators map from fleet.yaml. Drives task-ledger's IAM
   // policy split (pm vs worker) and the wake target Name tag derivation.
   const orchestratorEntries = fleet.agents.list
     .map((a) => `  ${a.id} = ${a.orchestrator ? "true" : "false"}`)
-    .join("\n");
-
-  // Derive agent_ports: assign sequential ports starting at 18789 by index.
-  // Operators can override per-agent in workspaces/*.tfvars; the derived value
-  // is used when no override is present.
-  const BASE_PORT = 18789;
-  const agentPortEntries = fleet.agents.list
-    .map((a, i) => `  ${a.id} = ${BASE_PORT + i}`)
     .join("\n");
 
   const lines = [
@@ -391,17 +427,6 @@ export function renderTerraformVars(fleet: Fleet): string {
     `agent_orchestrators = {`,
     orchestratorEntries,
     `}`,
-    ``,
-    `# Per-agent gateway ports (sequential from ${BASE_PORT}). Override in workspaces/*.tfvars`,
-    `# if you need specific ports.`,
-    `agent_ports = {`,
-    agentPortEntries,
-    `}`,
-    ``,
-    `# Wake target derived from the PM agent's first Slack channel. Used by the`,
-    `# task-ledger EventBridge target to SSM-invoke the PM on terminal task events.`,
-    `# Empty until the PM's slack.channels is populated in fleet.yaml.`,
-    `wake_target_session_key = "${wakeKey}"`,
     ``,
     `# NOTE: instance_type, aws_region, and other infrastructure vars are not`,
     `# derived from fleet.yaml — set them in your workspace tfvars manually.`,
@@ -446,11 +471,15 @@ export function writeOutputs(
   const agentPaths: Record<string, string> = {};
   for (const agent of fleet.agents.list) {
     const agentOcPath = path.join(ocBase, agent.id, "openclaw.json");
+    const agentOcBasePath = path.join(ocBase, agent.id, "openclaw.base.json");
     fs.mkdirSync(path.dirname(agentOcPath), { recursive: true });
-    fs.writeFileSync(
-      agentOcPath,
-      JSON.stringify(renderAgentOpenClawJson(fleet, agent.id), null, 2)
-    );
+    const rendered = renderAgentOpenClawJson(fleet, agent.id);
+    const renderedJson = JSON.stringify(rendered, null, 2);
+    fs.writeFileSync(agentOcPath, renderedJson);
+    // openclaw.base.json — required by OpenClaw 2026.5.19+ as a baseline
+    // config reference. Without it, gateway refuses to start. Write the same
+    // content as openclaw.json so the security check always passes.
+    fs.writeFileSync(agentOcBasePath, renderedJson);
     agentPaths[agent.id] = agentOcPath;
     written[`openclaw_json:${agent.id}`] = agentOcPath;
   }
@@ -550,12 +579,26 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
       ...(a.slack?.channels ? { channels: a.slack.channels } : {}),
     }));
 
+  // Derive NATS server URL from fleet name if not explicitly set.
+  // Convention: nats://nats.<fleet_name>.internal:4222 (Cloud Map registration).
+  // This means operators never hardcode infra-specific URLs in fleet.yaml.
+  let delegation = fleet.delegation;
+  if (delegation?.nats && (!delegation.nats.servers || delegation.nats.servers.length === 0)) {
+    delegation = {
+      ...delegation,
+      nats: {
+        ...delegation.nats,
+        servers: [`nats://nats.${fleet.fleet.name}.internal:4222`],
+      },
+    };
+  }
+
   const slice = {
     fleet: {
       name: fleet.fleet.name,
       version: fleet.fleet.version,
     },
-    ...(fleet.delegation ? { delegation: fleet.delegation } : {}),
+    ...(delegation ? { delegation } : {}),
     ...(fleet.context ? { context: fleet.context } : {}),
     agents: {
       defaults: {
@@ -573,6 +616,21 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
         ...(agent.delegation ? { delegation: agent.delegation } : {}),
       },
       roster,
+      // agents.list satisfies FleetSchema required by fleetmind CLI commands
+      // (e.g. nats subscribe). Contains this agent + routing-safe roster entries.
+      list: [
+        {
+          id: agent.id,
+          name: agent.name,
+          emoji: agent.emoji,
+          role: agent.role,
+          orchestrator: agent.orchestrator ?? false,
+          model: agent.model ?? fleet.agents.defaults.model,
+          skills: agent.skills ?? [],
+          ...(agent.delegation ? { delegation: agent.delegation } : {}),
+        },
+        ...roster,
+      ],
     },
   };
 
