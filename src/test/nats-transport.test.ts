@@ -329,6 +329,101 @@ describe("E2E delegation flow simulation", () => {
     assert.equal(bus[0].event.reason, "NATS server unreachable");
   });
 
+  // ── PM subscriber lifecycle guard ─────────────────────────────────────────
+
+  /**
+   * Simulates the PM-mode lifecycle guard introduced in fix/nats-lifecycle-signoff-failsafe.
+   *
+   * The guard resolves lifecycle as:
+   *   taskRecord?.lifecycle ?? event.lifecycle ?? 'requires-human-signoff'
+   *
+   * These tests exercise the three cases:
+   *   1. taskRecord has lifecycle=requires-human-signoff  → skip signoff
+   *   2. taskRecord has lifecycle=auto-signoff            → call signoff
+   *   3. taskRecord is null / lifecycle missing           → default to requires-human-signoff, skip
+   */
+
+  type SignoffCall = { taskId: string; project?: string };
+
+  function makeLifecycleGuard(ledgerOverrides: {
+    getTaskResult: { lifecycle?: string } | undefined;
+    signoffCalls: SignoffCall[];
+  }) {
+    const fakeGetTask = async (_taskId: string) => ledgerOverrides.getTaskResult as { lifecycle?: string } | undefined;
+    const fakeSignoffTask = async (taskId: string, project?: string) => {
+      ledgerOverrides.signoffCalls.push({ taskId, project });
+    };
+
+    return async (event: TaskEvent & { lifecycle?: string }) => {
+      let taskRecord: { lifecycle?: string } | undefined;
+      try {
+        taskRecord = await fakeGetTask(event.task_id);
+      } catch {
+        // treat as requires-human-signoff
+      }
+      const lifecycle = taskRecord?.lifecycle ?? event.lifecycle ?? "requires-human-signoff";
+
+      if (lifecycle === "requires-human-signoff") {
+        return "skipped";
+      } else {
+        await fakeSignoffTask(event.task_id, event.project);
+        return "signed_off";
+      }
+    };
+  }
+
+  const baseShipEvent: TaskEvent = {
+    v: "1.0",
+    event: "ship",
+    task_id: "aabbccdd",
+    project: "fleetmind-next",
+    worker: "daedalus",
+    delegated_by: "ariadne",
+    at: "2026-05-26T18:00:00Z",
+  };
+
+  test("lifecycle guard: taskRecord.lifecycle=requires-human-signoff skips auto-signoff", async () => {
+    const calls: SignoffCall[] = [];
+    const guard = makeLifecycleGuard({ getTaskResult: { lifecycle: "requires-human-signoff" }, signoffCalls: calls });
+    const result = await guard(baseShipEvent);
+    assert.equal(result, "skipped");
+    assert.equal(calls.length, 0);
+  });
+
+  test("lifecycle guard: taskRecord.lifecycle=auto-signoff triggers signoff", async () => {
+    const calls: SignoffCall[] = [];
+    const guard = makeLifecycleGuard({ getTaskResult: { lifecycle: "auto-signoff" }, signoffCalls: calls });
+    const result = await guard(baseShipEvent);
+    assert.equal(result, "signed_off");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].taskId, "aabbccdd");
+  });
+
+  test("lifecycle guard: getTask returns null (record missing) defaults to requires-human-signoff, skips signoff", async () => {
+    const calls: SignoffCall[] = [];
+    const guard = makeLifecycleGuard({ getTaskResult: undefined, signoffCalls: calls });
+    const result = await guard(baseShipEvent);
+    assert.equal(result, "skipped");
+    assert.equal(calls.length, 0);
+  });
+
+  test("lifecycle guard: event.lifecycle missing defaults to requires-human-signoff, skips signoff", async () => {
+    const calls: SignoffCall[] = [];
+    const guard = makeLifecycleGuard({ getTaskResult: undefined, signoffCalls: calls });
+    // baseShipEvent has no lifecycle field
+    const result = await guard(baseShipEvent);
+    assert.equal(result, "skipped");
+    assert.equal(calls.length, 0);
+  });
+
+  test("lifecycle guard: event.lifecycle=auto-signoff used when taskRecord is null", async () => {
+    const calls: SignoffCall[] = [];
+    const guard = makeLifecycleGuard({ getTaskResult: undefined, signoffCalls: calls });
+    const result = await guard({ ...baseShipEvent, lifecycle: "auto-signoff" } as TaskEvent & { lifecycle?: string });
+    assert.equal(result, "signed_off");
+    assert.equal(calls.length, 1);
+  });
+
   test("PM subscriber receives all task events via wildcard", async () => {
     const bus: EventBus = [];
     const publish = makeInMemoryPublisher(bus);

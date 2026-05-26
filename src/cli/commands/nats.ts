@@ -191,7 +191,32 @@ Examples:
             }
 
             if (event.event === "ship") {
-              // Worker shipped and human approved — PM signs off: shipped → signed_off.
+              // Fetch the DDB record to check lifecycle. Fail-safe: treat a
+              // missing record or missing lifecycle field as
+              // 'requires-human-signoff' so we never accidentally auto-signoff
+              // a task that needs human review.
+              let taskRecord: Awaited<ReturnType<typeof ledger.getTask>> | undefined;
+              try {
+                taskRecord = await ledger.getTask(event.task_id);
+              } catch (err) {
+                log.warn(`[nats] task ${event.task_id} getTask failed (treating as requires-human-signoff): ${err}`);
+              }
+              const lifecycle =
+                (taskRecord?.lifecycle) ?? (event as unknown as Record<string, unknown>).lifecycle ?? "requires-human-signoff";
+
+              if (lifecycle === "requires-human-signoff") {
+                // Human sign-off required — do not auto-signoff.
+                if (!opts.json) {
+                  log.info(`[nats] task ${event.task_id} lifecycle=requires-human-signoff — skipping auto-signoff; awaiting human review`);
+                } else {
+                  process.stdout.write(JSON.stringify({
+                    _type: "signoff_skipped",
+                    task_id: event.task_id,
+                    reason: "requires-human-signoff",
+                  }) + "\n");
+                }
+              } else {
+              // Lifecycle allows auto-signoff — PM transitions shipped → signed_off.
               try {
                 await ledger.signoffTask(event.task_id, event.project);
                 if (!opts.json) {
@@ -210,6 +235,7 @@ Examples:
                   log.error(`[nats] task ${event.task_id} signoff failed: ${err}`);
                 }
               }
+              } // end else (auto-signoff)
             }
 
             if (event.event === "block") {
