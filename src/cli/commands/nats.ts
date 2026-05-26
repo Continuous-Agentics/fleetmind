@@ -50,18 +50,43 @@ function makeLedger(fleet: ReturnType<typeof resolveAndLoadFleet>): TaskLedger {
 
 // ── Register ──────────────────────────────────────────────────────────────────
 
-// Wake an OpenClaw agent via the local gateway CLI.
-// Uses OPENCLAW_GATEWAY_TOKEN (alias of GATEWAY_TOKEN) for auth.
-// Non-blocking — fires and forgets with a timeout.
-function wakeAgent(agentId: string, message: string, _port: string = "18789"): void {
+// Wake an OpenClaw agent. Two paths:
+//   1. Preferred — POST create_flow to the local webhooks plugin endpoint using
+//      OPENCLAW_HOOKS_TOKEN (written by fetch-agent-secrets from Secrets Manager).
+//      Uses the /plugins/webhooks/nats-wake route configured in openclaw.json.
+//   2. Fallback — openclaw agent CLI using GATEWAY_TOKEN / OPENCLAW_GATEWAY_TOKEN.
+// Non-blocking in both cases — fires and forgets with a timeout.
+function wakeAgent(agentId: string, message: string, port: string = "18789"): void {
+  const hooksToken = process.env.OPENCLAW_HOOKS_TOKEN;
+
+  if (hooksToken) {
+    // Primary: webhooks plugin endpoint (more secure — NATS subscriber never
+    // needs full gateway auth, only the route-scoped hooks token).
+    const url = `http://localhost:${port}/plugins/webhooks/nats-wake`;
+    fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${hooksToken}`,
+      },
+      body: JSON.stringify({ action: "create_flow", goal: message, status: "queued" }),
+    }).catch((err: unknown) => {
+      log.warn(`[nats] wakeAgent(${agentId}) via hooks failed: ${err}`);
+    });
+    return;
+  }
+
+  // Fallback: openclaw agent CLI when hooks token is absent.
   const token = process.env.GATEWAY_TOKEN ?? process.env.OPENCLAW_GATEWAY_TOKEN;
+  if (!token) {
+    log.warn(`[nats] wakeAgent(${agentId}): no OPENCLAW_HOOKS_TOKEN or GATEWAY_TOKEN — skipping wake`);
+    return;
+  }
   const args = ["agent", "--agent", agentId, "--message", message];
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  // openclaw agent reads OPENCLAW_GATEWAY_TOKEN for gateway auth
-  if (token) env["OPENCLAW_GATEWAY_TOKEN"] = token;
+  const env: NodeJS.ProcessEnv = { ...process.env, OPENCLAW_GATEWAY_TOKEN: token };
   const ocBin = process.env.OPENCLAW_BIN ?? "openclaw";
   execFile(ocBin, args, { timeout: 15000, env }, (err) => {
-    if (err) log.warn(`[nats] wakeAgent(${agentId}) failed: ${err.message}`);
+    if (err) log.warn(`[nats] wakeAgent(${agentId}) via CLI failed: ${err.message}`);
   });
 }
 
