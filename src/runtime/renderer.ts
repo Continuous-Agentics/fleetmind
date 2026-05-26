@@ -131,6 +131,11 @@ export function renderAgentOpenClawJson(
     ? defaults.models
     : undefined;
 
+  // Hooks config — fall back to sensible defaults when oc.hooks is absent
+  // (fleet objects built without going through FleetSchema.parse may omit it).
+  const hooksConfig = oc.hooks ?? { enabled: true, path: "/hooks", allowed_agent_ids: ["main"] };
+  const hooksTokenVar = `\${${agentId.toUpperCase().replace(/-/g, "_")}_HOOKS_TOKEN}`;
+
   return {
     agents: {
       defaults: {
@@ -202,6 +207,17 @@ export function renderAgentOpenClawJson(
       },
     },
     hooks: {
+      // Webhook endpoint config for this agent.
+      // token is generated at bootstrap and stored in Secrets Manager under
+      // <fleet>/agents/<agent>/hooks; injected as <AGENT_UPPER>_HOOKS_TOKEN
+      // by fetch-agent-secrets. Must be distinct from gateway.auth.token
+      // (OpenClaw enforces this at startup).
+      enabled: hooksConfig.enabled,
+      token: hooksTokenVar,
+      path: hooksConfig.path,
+      ...(hooksConfig.allowed_agent_ids.length > 0
+        ? { allowedAgentIds: hooksConfig.allowed_agent_ids }
+        : {}),
       internal: {
         enabled: true,
         entries: {
