@@ -442,6 +442,59 @@ describe("renderAgentOpenClawJson — per-agent slice", () => {
 
   // ── unknown agentId throws ─────────────────────────────────────────────────────
 
+  // ── hooks block ──────────────────────────────────────────────────────────────
+
+  test("renderAgentOpenClawJson emits hooks.enabled, token env-var placeholder, path, and allowedAgentIds", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent()];
+    const json = renderAgentOpenClawJson(fleet, "conductor") as { hooks: Record<string, unknown> };
+    const hooks = json.hooks;
+
+    assert.ok(hooks, "hooks block must be present");
+    assert.equal(hooks.enabled, true, "hooks.enabled must be true");
+    assert.equal(hooks.token, "${CONDUCTOR_HOOKS_TOKEN}",
+      "hooks.token must be the CONDUCTOR_HOOKS_TOKEN env-var placeholder");
+    assert.equal(hooks.path, "/hooks", "hooks.path must be /hooks");
+    assert.deepEqual(hooks.allowedAgentIds, ["main"],
+      "hooks.allowedAgentIds must default to [\"main\"]");
+  });
+
+  test("renderAgentOpenClawJson hooks.token uses hyphen-normalised agent id (forge vs my-agent)", () => {
+    const fleet = makeFleet();
+    const myAgent: AgentConfig = { ...makeForgeAgent(), id: "my-agent", name: "My Agent" };
+    fleet.agents.list = [myAgent];
+    const json = renderAgentOpenClawJson(fleet, "my-agent") as { hooks: Record<string, unknown> };
+    assert.equal(json.hooks.token, "${MY_AGENT_HOOKS_TOKEN}",
+      "hyphens in agent id must be normalised to underscores in env-var name");
+  });
+
+  test("renderAgentOpenClawJson hooks.enabled respects fleet openclaw.hooks.enabled=false", () => {
+    const fleet = makeFleet();
+    (fleet.openclaw as Record<string, unknown>).hooks = { enabled: false, path: "/hooks", allowed_agent_ids: ["main"] };
+    fleet.agents.list = [makeConductorAgent()];
+    const json = renderAgentOpenClawJson(fleet, "conductor") as { hooks: Record<string, unknown> };
+    assert.equal(json.hooks.enabled, false, "hooks.enabled must honour fleet config");
+  });
+
+  test("renderAgentOpenClawJson hooks.allowedAgentIds respects custom allowed_agent_ids", () => {
+    const fleet = makeFleet();
+    (fleet.openclaw as Record<string, unknown>).hooks = { enabled: true, path: "/hooks", allowed_agent_ids: ["main", "hooks-agent"] };
+    fleet.agents.list = [makeConductorAgent()];
+    const json = renderAgentOpenClawJson(fleet, "conductor") as { hooks: Record<string, unknown> };
+    assert.deepEqual(json.hooks.allowedAgentIds, ["main", "hooks-agent"]);
+  });
+
+  test("renderAgentOpenClawJson hooks block still includes internal hooks", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [makeConductorAgent()];
+    const json = renderAgentOpenClawJson(fleet, "conductor") as {
+      hooks: { internal: { enabled: boolean; entries: Record<string, unknown> } }
+    };
+    assert.equal(json.hooks.internal.enabled, true);
+    assert.ok(json.hooks.internal.entries["boot-md"], "boot-md hook must be present");
+    assert.ok(json.hooks.internal.entries["session-memory"], "session-memory hook must be present");
+  });
+
   test("renderAgentOpenClawJson throws for unknown agentId", () => {
     const fleet = makeFleet();
     fleet.agents.list = [makeConductorAgent()];

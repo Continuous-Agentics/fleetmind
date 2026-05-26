@@ -322,6 +322,27 @@ export const OutputsSchema = z.object({
   workspace_manifests: z.string().default("./rendered/workspaces/"),
 });
 
+/**
+ * OpenClaw hooks (webhook endpoint) config.
+ * `token` is NOT represented here — it is always rendered as the
+ * `${<AGENT_UPPER>_HOOKS_TOKEN}` env-var placeholder by the renderer so
+ * the actual secret never appears in fleet.yaml or in version control.
+ */
+export const OpenClawHooksSchema = z.object({
+  /** Enable the HTTP hooks endpoint. */
+  enabled: z.boolean().default(true),
+  /** URL path prefix for all hook endpoints (e.g. "/hooks"). */
+  path: z.string().default("/hooks"),
+  /**
+   * Agent IDs that hook requests may target via /hooks/agent.
+   * Defaults to ["main"] — enough for wakeAgent() calls from the NATS
+   * subscriber. Operators can extend this list as needed.
+   */
+  allowed_agent_ids: z.array(z.string()).default(["main"]),
+}).default({});
+
+export type OpenClawHooksConfig = z.infer<typeof OpenClawHooksSchema>;
+
 export const GatewayConfigSchema = z.object({
   port: z.number().default(18789),
   mode: z.string().default("local"),
@@ -330,6 +351,7 @@ export const GatewayConfigSchema = z.object({
 
 export const OpenClawConfigSchema = z.object({
   gateway: GatewayConfigSchema.default({}),
+  hooks: OpenClawHooksSchema,
   session: z.object({ dm_scope: z.string().default("per-channel-peer") }).default({}),
   tools: z.object({
     profile: z.string().default("coding"),
