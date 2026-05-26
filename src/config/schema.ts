@@ -186,7 +186,10 @@ export const AgentSchema = z.object({
   role: AgentRoleSchema.default("worker"),
   model: z.string().optional(),
   persona: PersonaSchema.default({}),
-  slack: SlackAccountSchema,
+  /** Slack account config. Optional in per-agent fleet.yaml slices (which
+   * intentionally omit credentials for security). Required in master fleet.yaml.
+   * Rendering functions validate presence early when needed. */
+  slack: SlackAccountSchema.optional(),
   /** Optional per-agent Anthropic configuration. */
   anthropic: AnthropicAgentSchema.optional(),
   skills: z.array(SkillRefSchema).default([]),
