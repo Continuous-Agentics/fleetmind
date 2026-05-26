@@ -68,6 +68,13 @@ delegation:
   table_name: acme-fleet-tasks                # DDB table name (TF module: name_prefix + 'tasks')
   s3_bucket: acme-fleet-ledger                # S3 bucket  (TF module: name_prefix + 'ledger')
   # s3_key_template: "v0/projects/{project}/tasks/{date}-{task_id}.md"  # default; override only if needed
+  # ── NATS transport (required) ────────────────────────────────────────────
+  # Standard inter-bot messaging transport when delegation is enabled.
+  # Agents discover NATS server via Cloud Map private DNS (<fleet_name>.internal).
+  # Provisioned by var.nats_enabled in terraform-aws-fleetmind (defaults true).
+  # Omit this block entirely for defaults (mode: standard).
+  nats:
+    # mode: standard                              # default; override for 'embedded' (future)
 
 # ── Agents ────────────────────────────────────────────────────────────────────
 agents:

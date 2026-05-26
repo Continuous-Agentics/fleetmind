@@ -80,7 +80,7 @@ Examples:
         console.log(`  Role:        ${a.orchestrator ? chalk.magenta("orchestrator") : "specialist"}`);
         console.log(`  Model:       ${model}`);
         console.log(`  Description: ${a.description || "—"}`);
-        console.log(`  Slack:       ${a.slack.account_id}`);
+        console.log(`  Slack:       ${a.slack?.account_id || '2014'}`);
         console.log(`  Skills:      ${skills}`);
         console.log(`  Plugins:     ${plugins}`);
         console.log(`  Can send to: ${canSend}`);
