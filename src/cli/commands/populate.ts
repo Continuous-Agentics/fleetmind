@@ -12,6 +12,7 @@
  *   3. agent.anthropic.api_key placeholder from fleet.yaml
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -227,6 +228,11 @@ export function resolveSlack(
   return { ok: missing.length === 0, values, missing };
 }
 
+/** Generate a random 32-byte hooks token. Always auto-generated; never read from env. */
+export function generateHooksToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
 export function resolveAnthropic(
   agentId: string,
   anthropicConfig: AgentAnthropicConfig | undefined,
@@ -332,7 +338,7 @@ async function resolveAnthropicInteractive(
 
 export interface PopulateResult {
   agentId: string;
-  secretType: "slack" | "anthropic";
+  secretType: "slack" | "anthropic" | "hooks";
   secretName: string;
   ok: boolean;
   pushed?: boolean;
@@ -388,7 +394,7 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
     // Phase 1: resolve all secrets, prompting for any missing credentials
     interface ReadySecret {
       agentId: string;
-      secretType: "slack" | "anthropic";
+      secretType: "slack" | "anthropic" | "hooks";
       secretName: string;
       data: Record<string, string>;
       keyCount: number;
@@ -418,6 +424,15 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
         secretType: "anthropic",
         secretName: anthropicSecretName,
         data: { ANTHROPIC_API_KEY: anthropicRes.value! },
+        keyCount: 1,
+      });
+
+      // Hooks token — always auto-generated; never read from env
+      ready.push({
+        agentId,
+        secretType: "hooks",
+        secretName: `${fleetName}/agents/${agentId}/hooks`,
+        data: { HOOKS_TOKEN: generateHooksToken() },
         keyCount: 1,
       });
     }
@@ -563,6 +578,33 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
           keyCount: 1,
         });
       }
+    }
+
+    // ── Hooks token — always auto-generated; never read from env ────────────────
+    const hooksSecretName = `${fleetName}/agents/${agentId}/hooks`;
+    const hooksToken = generateHooksToken();
+    if (options.dryRun) {
+      results.push({
+        agentId,
+        secretType: "hooks",
+        secretName: hooksSecretName,
+        ok: true,
+        pushed: false,
+        keyCount: 1,
+      });
+    } else {
+      await client!.send(new PutSecretValueCommand({
+        SecretId: hooksSecretName,
+        SecretString: JSON.stringify({ HOOKS_TOKEN: hooksToken }),
+      }));
+      results.push({
+        agentId,
+        secretType: "hooks",
+        secretName: hooksSecretName,
+        ok: true,
+        pushed: true,
+        keyCount: 1,
+      });
     }
   }
 

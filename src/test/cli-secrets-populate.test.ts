@@ -25,6 +25,7 @@ import {
   resolveValue,
   resolveSlack,
   resolveAnthropic,
+  generateHooksToken,
   loadEnvFile,
   redact,
   populateSecrets,
@@ -232,6 +233,21 @@ describe("redact", () => {
     assert.equal(redact("short"), "***");
   });
 });
+// ── generateHooksToken ────────────────────────────────────────────────────────
+
+describe("generateHooksToken", () => {
+  test("returns a 64-character hex string", () => {
+    const token = generateHooksToken();
+    assert.match(token, /^[0-9a-f]{64}$/);
+  });
+
+  test("returns a different value on each call", () => {
+    const a = generateHooksToken();
+    const b = generateHooksToken();
+    assert.notEqual(a, b, "tokens should be unique");
+  });
+});
+
 
 // ── populateSecrets — dry-run ─────────────────────────────────────────────────
 
@@ -273,7 +289,7 @@ agents:
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("dry-run returns 4 results without calling AWS", async () => {
+  test("dry-run returns 6 results without calling AWS", async () => {
     const opts: PopulateOptions = {
       fleet: fleetFile,
       dryRun: true,
@@ -295,14 +311,17 @@ agents:
     try {
       const results = await populateSecrets(opts);
 
-      // Should have 4 results: conductor/slack, conductor/anthropic, forge/slack, forge/anthropic
-      assert.equal(results.length, 4);
+      // 6 results: conductor/slack, conductor/anthropic, conductor/hooks,
+      //            forge/slack, forge/anthropic, forge/hooks
+      assert.equal(results.length, 6);
 
       const names = results.map((r) => r.secretName);
       assert.ok(names.includes("test-fleet/agents/conductor/slack"));
       assert.ok(names.includes("test-fleet/agents/conductor/anthropic"));
+      assert.ok(names.includes("test-fleet/agents/conductor/hooks"));
       assert.ok(names.includes("test-fleet/agents/forge/slack"));
       assert.ok(names.includes("test-fleet/agents/forge/anthropic"));
+      assert.ok(names.includes("test-fleet/agents/forge/hooks"));
 
       // All dry-run — pushed=false
       for (const r of results) {
@@ -332,9 +351,10 @@ agents:
         agent: ["conductor"],
       });
 
-      assert.equal(results.length, 2);
+      assert.equal(results.length, 3);
       assert.equal(results[0]!.secretName, "test-fleet/agents/conductor/slack");
       assert.equal(results[1]!.secretName, "test-fleet/agents/conductor/anthropic");
+      assert.equal(results[2]!.secretName, "test-fleet/agents/conductor/hooks");
     } finally {
       for (const v of vars) {
         if (savedEnv[v] === undefined) delete process.env[v];
@@ -372,7 +392,7 @@ agents:
     try {
       // Should NOT throw — signing_secret is accepted but ignored
       const results = await populateSecrets({ fleet: legacyFleet, dryRun: true, agent: ["conductor"] });
-      assert.equal(results.length, 2, "conductor produces 2 results even with signing_secret present in yaml");
+      assert.equal(results.length, 3, "conductor produces 3 results even with signing_secret present in yaml");
       assert.ok(results.every((r) => r.ok));
     } finally {
       for (const v of vars) {
@@ -419,7 +439,7 @@ agents:
       });
 
       // Only conductor — no forge results
-      assert.equal(results.length, 2);
+      assert.equal(results.length, 3);
       assert.ok(results.every((r) => r.agentId === "conductor"));
     } finally {
       for (const v of vars) {
@@ -561,7 +581,7 @@ agents:
 
       // No prompts should have been triggered — everything was in env
       assert.equal(promptCalls.length, 0, "promptFn should not have been called when all env vars are set");
-      assert.equal(results.length, 4, "should have 4 results");
+      assert.equal(results.length, 6, "should have 6 results");
       assert.ok(results.every((r) => r.ok));
     } finally {
       restoreVars(saved);
@@ -593,7 +613,7 @@ agents:
         confirmFn: makeConfirmStub(true),
       });
 
-      assert.equal(results.length, 2, "conductor should produce 2 results");
+      assert.equal(results.length, 3, "conductor should produce 3 results");
       assert.ok(results.every((r) => r.ok), "all results should be ok");
       // SLACK_SIGNING_SECRET must not appear in the pushed secret payload
       // (verified indirectly: only 3 prompts fired, none for signing_secret)
@@ -628,7 +648,7 @@ agents:
         confirmFn: makeConfirmStub(true),
       });
 
-      assert.equal(results.length, 2, "should produce 2 results after re-prompt");
+      assert.equal(results.length, 3, "should produce 3 results after re-prompt");
       assert.ok(results.every((r) => r.ok));
     } finally {
       restoreVars(saved);
@@ -666,9 +686,11 @@ agents:
     const combined = summaryLines.join("\n");
     assert.ok(combined.includes("conductor/slack"), "summary should mention conductor/slack");
     assert.ok(combined.includes("conductor/anthropic"), "summary should mention conductor/anthropic");
+    assert.ok(combined.includes("conductor/hooks"), "summary should mention conductor/hooks");
     assert.ok(combined.includes("forge/slack"), "summary should mention forge/slack");
     assert.ok(combined.includes("forge/anthropic"), "summary should mention forge/anthropic");
-    assert.ok(combined.includes("4 secrets"), "summary should state total secret count");
+    assert.ok(combined.includes("forge/hooks"), "summary should mention forge/hooks");
+    assert.ok(combined.includes("6 secrets"), "summary should state total secret count");
   });
 
   // ── Test 5: --interactive + --dry-run runs prompts but skips AWS ──────────────
@@ -697,7 +719,7 @@ agents:
       });
 
       // Prompts ran
-      assert.equal(results.length, 2, "should have 2 dry-run results");
+      assert.equal(results.length, 3, "should have 3 dry-run results");
       assert.ok(results.every((r) => r.pushed === false), "dry-run: pushed should be false");
 
       // Confirm NOT called in dry-run (summary shown but no y/N)
@@ -734,7 +756,7 @@ agents:
       });
 
       // Only conductor results
-      assert.equal(results.length, 2, "only conductor results");
+      assert.equal(results.length, 3, "only conductor results");
       assert.ok(results.every((r) => r.agentId === "conductor"));
 
       // No forge prompts
@@ -763,7 +785,7 @@ agents:
         promptFn: makePromptStub([]),
         confirmFn: makeConfirmStub(true),
       });
-      assert.equal(yesResults.length, 2, "'y' should return results");
+      assert.equal(yesResults.length, 3, "'y' should return results");
 
       // "n" → empty results (aborted)
       // Note: dry-run skips confirmation, so test non-dry-run with mocked confirm
@@ -811,7 +833,7 @@ agents:
       });
 
       assert.equal(promptCalls.length, 0, "no prompts should fire when --from provides all values");
-      assert.equal(results.length, 2, "should have 2 results");
+      assert.equal(results.length, 3, "should have 3 results");
       assert.ok(results.every((r) => r.ok));
     } finally {
       restoreVars(saved);
@@ -841,7 +863,7 @@ agents:
         confirmFn: makeConfirmStub(true),
       });
 
-      assert.equal(results.length, 2, "should produce 2 results");
+      assert.equal(results.length, 3, "should produce 3 results");
       assert.ok(results.every((r) => r.ok));
 
       // Verify no prompt mentioned signing_secret or SLACK_SIGNING_SECRET

@@ -122,6 +122,27 @@ export function renderAgentOpenClawJson(
     pluginEntries[plugin] = { enabled: true };
   }
   pluginEntries["slack"] = { enabled: true };
+  // Webhooks plugin — NATS subscriber wake endpoint.
+  // The NATS subscriber POSTs create_flow to /plugins/webhooks/nats-wake with
+  // Authorization: Bearer ${OPENCLAW_HOOKS_TOKEN}. The gateway validates it
+  // against the same OPENCLAW_HOOKS_TOKEN env var in its EnvironmentFile.
+  pluginEntries["webhooks"] = {
+    enabled: true,
+    config: {
+      routes: {
+        "nats-wake": {
+          path: "/plugins/webhooks/nats-wake",
+          sessionKey: `agent:${agentId}:main`,
+          secret: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_HOOKS_TOKEN",
+          },
+          description: "NATS subscriber wake endpoint — internal only",
+        },
+      },
+    },
+  };
   // agents.defaults.params — forward cacheRetention (and any future top-level params)
   // agents.defaults.models — forward per-model param overrides (e.g. long TTL for Sonnet)
   const defaultsParams = defaults.params && Object.keys(defaults.params).length > 0
@@ -130,6 +151,14 @@ export function renderAgentOpenClawJson(
   const defaultsModels = defaults.models && Object.keys(defaults.models).length > 0
     ? defaults.models
     : undefined;
+
+  // Hooks config — fall back to sensible defaults when oc.hooks is absent
+  // (fleet objects built without going through FleetSchema.parse may omit it).
+  const hooksConfig = oc.hooks ?? { enabled: true, path: "/hooks", allowed_agent_ids: ["main"] };
+  // Canonical env var used by both the gateway (hooks.token + webhooks plugin secret)
+  // and the NATS subscriber (wakeAgent). Written by fetch-agent-secrets from the
+  // <fleet>/agents/<agent>/hooks Secrets Manager secret as OPENCLAW_HOOKS_TOKEN.
+  const hooksTokenVar = "${OPENCLAW_HOOKS_TOKEN}";
 
   return {
     agents: {
@@ -202,6 +231,17 @@ export function renderAgentOpenClawJson(
       },
     },
     hooks: {
+      // Webhook endpoint config for this agent.
+      // token is generated at bootstrap, stored in Secrets Manager under
+      // <fleet>/agents/<agent>/hooks, and injected as OPENCLAW_HOOKS_TOKEN
+      // by fetch-agent-secrets. Must be distinct from gateway.auth.token
+      // (OpenClaw enforces this at startup).
+      enabled: hooksConfig.enabled,
+      token: hooksTokenVar,
+      path: hooksConfig.path,
+      ...(hooksConfig.allowed_agent_ids.length > 0
+        ? { allowedAgentIds: hooksConfig.allowed_agent_ids }
+        : {}),
       internal: {
         enabled: true,
         entries: {
@@ -213,7 +253,7 @@ export function renderAgentOpenClawJson(
     },
     plugins: {
       // allow list prevents "non-bundled plugins may auto-load" warning.
-      allow: ["slack"],
+      allow: ["slack", "webhooks"],
       entries: pluginEntries,
     },
     commands: {
