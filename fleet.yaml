@@ -18,9 +18,6 @@ delegation:
   aws_region: us-west-2
   table_name: gg-sandbox-tasks
   s3_bucket: gg-sandbox-narratives-251714435910   # MUST be globally unique; add 6-char suffix
-  # NATS is the standard delegation transport — enabled by default when delegation is on.
-  # Omit nats or use defaults (mode: standard) for standard Cloud Map discovery.
-  nats: {}
 
 agents:
   defaults:

@@ -122,19 +122,6 @@ export const CronSweepSchema = z.object({
 
 export type CronSweepConfig = z.infer<typeof CronSweepSchema>;
 
-/** NATS transport configuration. Standard delegation transport. */
-export const NatsConfigSchema = z.object({
-  /**
-   * NATS server discovery mode.
-   * - 'standard': Cloud Map private DNS namespace (<fleet_name>.internal)
-   * - 'embedded': future self-hosted mode on PM instance
-   * Default 'standard'.
-   */
-  mode: z.string().default("standard"),
-});
-
-export type NatsConfig = z.infer<typeof NatsConfigSchema>;
-
 /** Per-fleet delegation settings. Optional — fleets without delegation work normally. */
 export const DelegationFleetSchema = z.object({
   enabled: z.boolean().default(false),
@@ -149,12 +136,6 @@ export const DelegationFleetSchema = z.object({
    */
   s3_key_template: z.string().default("v0/projects/{project}/tasks/{date}-{task_id}.md"),
   aws_region: z.string().optional(),
-  /**
-   * NATS transport configuration.
-   * Required when delegation.enabled = true (standard inter-bot messaging transport).
-   * Omit or leave empty for defaults (mode: standard).
-   */
-  nats: NatsConfigSchema.default({}),
 }).superRefine((val, ctx) => {
   if (val.enabled) {
     if (!val.table_name) {
@@ -205,21 +186,7 @@ export const AgentSchema = z.object({
   role: AgentRoleSchema.default("worker"),
   model: z.string().optional(),
   persona: PersonaSchema.default({}),
-  /**
-   * Slack account config.
-   *
-   * Required in master fleet.yaml (has credentials: bot_token, app_token).
-   *
-   * Optional in per-agent fleet.yaml slices (renderer intentionally strips
-   * slack credentials for security — per-agent configs are deployed to EC2
-   * and should not contain credentials).
-   *
-   * NATS subscription and delegation flows do not read slack IDs or
-   * credentials from fleet.yaml. Rendering functions (renderOpenClawJson,
-   * renderTerraformVars, renderAgentOpenClawJson) validate presence early
-   * when needed.
-   */
-  slack: SlackAccountSchema.optional(),
+  slack: SlackAccountSchema,
   /** Optional per-agent Anthropic configuration. */
   anthropic: AnthropicAgentSchema.optional(),
   skills: z.array(SkillRefSchema).default([]),
