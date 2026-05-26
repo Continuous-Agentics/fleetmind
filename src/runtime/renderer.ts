@@ -35,9 +35,6 @@ export function renderAgentOpenClawJson(
   if (!agent) {
     throw new Error(`renderAgentOpenClawJson: agent "${agentId}" not found in fleet`);
   }
-  if (!agent.slack) {
-    throw new Error(`renderAgentOpenClawJson: agent "${agentId}" has no slack config`);
-  }
 
   // Agent list — single entry for this agent only
   // Per-agent workspace_base override falls back to fleet defaults.
@@ -59,18 +56,18 @@ export function renderAgentOpenClawJson(
       agentId: agent.id,
       match: {
         channel: "slack",
-        accountId: agent.slack!.account_id,
+        accountId: agent.slack.account_id,
       },
     },
   ];
 
   // Slack accounts — only this agent's account (no groupPolicy here; it lives at top level)
   const slackAccounts: Record<string, unknown> = {
-    [agent.slack!.account_id]: {
+    [agent.slack.account_id]: {
       enabled: true,
-      botToken: agent.slack!.bot_token,
-      appToken: agent.slack!.app_token,
-      webhookPath: `/slack/${agent.slack!.account_id}`,
+      botToken: agent.slack.bot_token,
+      appToken: agent.slack.app_token,
+      webhookPath: `/slack/${agent.slack.account_id}`,
     },
   };
 
@@ -78,14 +75,13 @@ export function renderAgentOpenClawJson(
   // For each channel this agent operates in, find all OTHER agents that share it
   // and collect their bot_user_id values for the users allowlist.
   const perChannelEntries: Record<string, unknown> = {};
-  const agentChannels = agent.slack!.channels ?? [];
+  const agentChannels = agent.slack.channels ?? [];
   for (let i = 0; i < agentChannels.length; i++) {
     const channelId = agentChannels[i]!;
     const requireMention = i > 0; // first channel = home, always responsive
     const botUserIds: string[] = [];
     for (const other of agents.list) {
       if (other.id === agentId) continue;
-      if (!other.slack) continue;
       const otherChannels = other.slack.channels ?? [];
       if (!otherChannels.includes(channelId)) continue;
       if (!other.slack.bot_user_id) {
@@ -227,13 +223,6 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
   const defaults = agents.defaults;
   const oc = openclaw;
 
-  // All agents must have slack config for full fleet rendering
-  for (const agent of agents.list) {
-    if (!agent.slack) {
-      throw new Error(`renderOpenClawJson: agent "${agent.id}" has no slack config`);
-    }
-  }
-
   // Agent list
   const agentList = agents.list.map((agent) => {
     const model = agent.model ?? defaults.model;
@@ -255,18 +244,18 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
     agentId: agent.id,
     match: {
       channel: "slack",
-      accountId: agent.slack!.account_id,
+      accountId: agent.slack.account_id,
     },
   }));
 
   // Slack accounts (no per-account groupPolicy; lives at top level as "allowlist")
   const slackAccounts: Record<string, unknown> = {};
   for (const agent of agents.list) {
-    slackAccounts[agent.slack!.account_id] = {
+    slackAccounts[agent.slack.account_id] = {
       enabled: true,
-      botToken: agent.slack!.bot_token,
-      appToken: agent.slack!.app_token,
-      webhookPath: `/slack/${agent.slack!.account_id}`,
+      botToken: agent.slack.bot_token,
+      appToken: agent.slack.app_token,
+      webhookPath: `/slack/${agent.slack.account_id}`,
     };
   }
 
@@ -371,12 +360,9 @@ export function renderTerraformVars(fleet: Fleet): string {
   // no channels configured yet (e.g., first render before Slack apps exist) —
   // the task-ledger module gates the event target on this being non-empty.
   const pmAgent = fleet.agents.list.find((a) => a.orchestrator);
-  if (pmAgent && !pmAgent.slack) {
-    throw new Error("PM (orchestrator) agent must have slack config");
-  }
-  const pmChannels = pmAgent?.slack?.channels ?? [];
+  const pmChannels = pmAgent?.slack.channels ?? [];
   const wakeKey =
-    pmAgent && pmAgent.slack && pmChannels.length > 0
+    pmAgent && pmChannels.length > 0
       ? `agent:main:slack:channel:${pmChannels[0]}`
       : "";
 
@@ -551,7 +537,6 @@ export function writeOutputs(
 export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
   const agent = fleet.agents.list.find((a) => a.id === agentId);
   if (!agent) throw new Error(`Agent ${agentId} not found in fleet`);
-  // slack is intentionally omitted from per-agent slices (credentials not distributed)
 
   // Roster: other agents with only routing-safe fields
   const roster = fleet.agents.list
