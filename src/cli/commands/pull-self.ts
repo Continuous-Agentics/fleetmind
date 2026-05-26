@@ -874,6 +874,18 @@ async function defaultDownloadFromS3(
 
 function defaultRestartGateway(agentId: string): void {
   execFileSync("sudo", ["systemctl", "restart", `openclaw-${agentId}`], { stdio: "inherit" });
+  // Reset and restart the NATS subscriber service so it recovers from any
+  // prior failed/throttled state. The path unit alone is not sufficient on
+  // existing instances where the service has entered a failed state with an
+  // exhausted restart counter (systemd will refuse to retry without a reset).
+  try {
+    execFileSync("sudo", ["systemctl", "reset-failed", `fleetmind-nats-${agentId}`], { stdio: "inherit" });
+    execFileSync("sudo", ["systemctl", "restart", `fleetmind-nats-${agentId}`], { stdio: "inherit" });
+  } catch {
+    // Service may not exist on all hosts (e.g. PM bots without a NATS unit).
+    // Log but don't fail the restart.
+    process.stderr.write(`[pull-self] fleetmind-nats-${agentId} not found or failed to restart — skipping\n`);
+  }
 }
 
 // ── Core logic ────────────────────────────────────────────────────────────────
