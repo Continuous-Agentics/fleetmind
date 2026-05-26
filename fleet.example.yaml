@@ -68,6 +68,13 @@ delegation:
   table_name: acme-fleet-tasks                # DDB table name (TF module: name_prefix + 'tasks')
   s3_bucket: acme-fleet-ledger                # S3 bucket  (TF module: name_prefix + 'ledger')
   # s3_key_template: "v0/projects/{project}/tasks/{date}-{task_id}.md"  # default; override only if needed
+  # ── NATS transport (optional) ────────────────────────────────────────
+  # When enabled, agents use NATS (via Cloud Map discovery) instead of Slack
+  # for inter-bot messaging. Provisioned by var.nats_enabled in terraform-aws-fleetmind.
+  # Omit or set nats.enabled: false for Slack-only messaging.
+  nats:
+    enabled: false                              # set to true to enable NATS transport
+    mode: standard                              # 'standard' (Cloud Map DNS) or future alternatives
 
 # ── Agents ────────────────────────────────────────────────────────────────────
 agents:

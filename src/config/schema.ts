@@ -122,6 +122,16 @@ export const CronSweepSchema = z.object({
 
 export type CronSweepConfig = z.infer<typeof CronSweepSchema>;
 
+/** NATS transport configuration for bots. */
+export const NatsConfigSchema = z.object({
+  /** Enable NATS-based inter-bot messaging. Default false — opt-in for feat/nats-transport POC. */
+  enabled: z.boolean().default(false),
+  /** Mode: 'standard' (NATS server discovered via Cloud Map DNS) or 'embedded' (future). */
+  mode: z.string().default("standard"),
+}).optional();
+
+export type NatsConfig = z.infer<typeof NatsConfigSchema>;
+
 /** Per-fleet delegation settings. Optional — fleets without delegation work normally. */
 export const DelegationFleetSchema = z.object({
   enabled: z.boolean().default(false),
@@ -136,6 +146,8 @@ export const DelegationFleetSchema = z.object({
    */
   s3_key_template: z.string().default("v0/projects/{project}/tasks/{date}-{task_id}.md"),
   aws_region: z.string().optional(),
+  /** Optional NATS transport configuration. */
+  nats: NatsConfigSchema,
 }).superRefine((val, ctx) => {
   if (val.enabled) {
     if (!val.table_name) {
