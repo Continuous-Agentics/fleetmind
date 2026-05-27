@@ -491,31 +491,34 @@ export async function runOnboard(
         log.ok("    Slack tokens written");
       }
 
-      // ── Model-provider API keys — one secret per provider the agent uses ──────
+      // ── Model-provider API keys — one combined /model secret holding every
+      //    <PROVIDER>_API_KEY the agent uses (any provider mix, one secret). ──────
       const providers = providersForAgent({
         model: agent.model,
         apiKeys: agent.api_keys,
         defaultModel: fleet.agents.defaults.model,
       });
-      for (const provider of providers) {
-        const keyVar = providerApiKeyVar(provider);                       // e.g. ANTHROPIC_API_KEY
-        const providerSecretId = `${fleetName}/agents/${agent.id}/${provider}`;
-        const existingRaw = await getSecret(providerSecretId, region);
-        const isPlaceholder = !existingRaw || existingRaw.includes("REPLACE_ME");
+      const modelSecretId = `${fleetName}/agents/${agent.id}/model`;
+      const existingRaw = await getSecret(modelSecretId, region);
+      const isPlaceholder = !existingRaw || existingRaw.includes("REPLACE_ME");
 
-        let writeKey = isPlaceholder;
-        if (!isPlaceholder) {
-          writeKey = await confirm(`    ${provider} key already in SM. Override?`, false);
-        }
-        if (writeKey) {
+      let writeKeys = isPlaceholder;
+      if (!isPlaceholder) {
+        writeKeys = await confirm(`    Model keys already in SM. Override?`, false);
+      }
+      if (writeKeys) {
+        const modelKeys: Record<string, string> = {};
+        for (const provider of providers) {
+          const keyVar = providerApiKeyVar(provider);                     // e.g. ANTHROPIC_API_KEY / OPENAI_API_KEY
           const apiKey = await hiddenPrompt(`    ${provider} API key (${keyVar}): `);
-          if (apiKey.trim()) {
-            await putSecret(providerSecretId, { [keyVar]: apiKey.trim() }, region);
-            log.ok(`    ${provider} key written`);
-          }
-        } else {
-          log.ok(`    ${provider} key unchanged`);
+          if (apiKey.trim()) modelKeys[keyVar] = apiKey.trim();
         }
+        if (Object.keys(modelKeys).length > 0) {
+          await putSecret(modelSecretId, modelKeys, region);
+          log.ok(`    model keys written (${Object.keys(modelKeys).join(", ")})`);
+        }
+      } else {
+        log.ok(`    model keys unchanged`);
       }
     }
   }

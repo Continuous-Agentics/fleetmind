@@ -331,16 +331,16 @@ agents:
     try {
       const results = await populateSecrets(opts);
 
-      // 6 results: conductor/slack, conductor/anthropic, conductor/hooks,
-      //            forge/slack, forge/anthropic, forge/hooks
+      // 6 results: conductor/slack, conductor/model, conductor/hooks,
+      //            forge/slack, forge/model, forge/hooks
       assert.equal(results.length, 6);
 
       const names = results.map((r) => r.secretName);
       assert.ok(names.includes("test-fleet/agents/conductor/slack"));
-      assert.ok(names.includes("test-fleet/agents/conductor/anthropic"));
+      assert.ok(names.includes("test-fleet/agents/conductor/model"));
       assert.ok(names.includes("test-fleet/agents/conductor/hooks"));
       assert.ok(names.includes("test-fleet/agents/forge/slack"));
-      assert.ok(names.includes("test-fleet/agents/forge/anthropic"));
+      assert.ok(names.includes("test-fleet/agents/forge/model"));
       assert.ok(names.includes("test-fleet/agents/forge/hooks"));
 
       // All dry-run — pushed=false
@@ -373,7 +373,7 @@ agents:
 
       assert.equal(results.length, 3);
       assert.equal(results[0]!.secretName, "test-fleet/agents/conductor/slack");
-      assert.equal(results[1]!.secretName, "test-fleet/agents/conductor/anthropic");
+      assert.equal(results[1]!.secretName, "test-fleet/agents/conductor/model");
       assert.equal(results[2]!.secretName, "test-fleet/agents/conductor/hooks");
     } finally {
       for (const v of vars) {
@@ -497,9 +497,9 @@ agents:
       assert.ok(slackRes);
       assert.equal(slackRes.ok, true, "slack should resolve from env file");
 
-      const anthropicRes = results.find((r) => r.secretType === "anthropic");
-      assert.ok(anthropicRes);
-      assert.equal(anthropicRes.ok, true, "anthropic should resolve from env file");
+      const modelRes = results.find((r) => r.secretType === "model");
+      assert.ok(modelRes);
+      assert.equal(modelRes.ok, true, "model keys should resolve from env file");
     } finally {
       for (const [k, v] of Object.entries(savedVars)) {
         if (v === undefined) delete process.env[k];
@@ -508,11 +508,11 @@ agents:
     }
   });
 
-  test("derives the secret provider from the agent's model (openai → /openai)", async () => {
+  test("combines every provider key into one /model secret (openai model + google api_key)", async () => {
     const tmpDir3 = fs.mkdtempSync(path.join(os.tmpdir(), "fm-openai-"));
     const openaiFleet = path.join(tmpDir3, "fleet.yaml");
-    // conductor inherits the anthropic default; pixel overrides to openai and
-    // also lists an explicit google api_key → should get BOTH /openai and /google.
+    // pixel overrides to openai and also lists an explicit google api_key →
+    // both land in ONE /model secret (no /anthropic, no per-provider secrets).
     fs.writeFileSync(openaiFleet, `
 fleet:
   name: multi-fleet
@@ -542,11 +542,12 @@ agents:
     try {
       const results = await populateSecrets({ fleet: openaiFleet, dryRun: true, agent: [] });
       const names = new Set(results.map((r) => r.secretName));
-      // openai (from model) + google (from api_keys) → two model-key secrets,
-      // and NO anthropic secret (pixel's model overrode the default).
-      assert.ok(names.has("multi-fleet/agents/pixel/openai"), "should write /openai");
-      assert.ok(names.has("multi-fleet/agents/pixel/google"), "should write /google");
-      assert.ok(!names.has("multi-fleet/agents/pixel/anthropic"), "should NOT write /anthropic");
+      // Exactly one model secret, holding both provider keys.
+      assert.ok(names.has("multi-fleet/agents/pixel/model"), "should write /model");
+      assert.ok(!names.has("multi-fleet/agents/pixel/openai"), "no per-provider /openai");
+      assert.ok(!names.has("multi-fleet/agents/pixel/anthropic"), "no /anthropic");
+      const modelRes = results.find((r) => r.secretName === "multi-fleet/agents/pixel/model")!;
+      assert.equal(modelRes.keyCount, 2, "/model holds OPENAI_API_KEY + GOOGLE_API_KEY");
       assert.ok(results.every((r) => r.ok), "all should resolve from env");
     } finally {
       for (const v of vars) {
@@ -757,10 +758,10 @@ agents:
 
     const combined = summaryLines.join("\n");
     assert.ok(combined.includes("conductor/slack"), "summary should mention conductor/slack");
-    assert.ok(combined.includes("conductor/anthropic"), "summary should mention conductor/anthropic");
+    assert.ok(combined.includes("conductor/model"), "summary should mention conductor/model");
     assert.ok(combined.includes("conductor/hooks"), "summary should mention conductor/hooks");
     assert.ok(combined.includes("forge/slack"), "summary should mention forge/slack");
-    assert.ok(combined.includes("forge/anthropic"), "summary should mention forge/anthropic");
+    assert.ok(combined.includes("forge/model"), "summary should mention forge/model");
     assert.ok(combined.includes("forge/hooks"), "summary should mention forge/hooks");
     assert.ok(combined.includes("6 secrets"), "summary should state total secret count");
   });
