@@ -129,6 +129,12 @@ deploy:
 agents:
   defaults:
     model: anthropic/claude-sonnet-4-6
+    # Optional ordered failover chain OpenClaw tries when `model` fails. Applies
+    # to every agent unless that agent sets its own `fallback_models` (use [] to
+    # opt an agent out / make it strict). Each entry is a "provider/model" string.
+    # fallback_models:
+    #   - openai/gpt-4o
+    #   - google/gemini-2.0-flash
     plugins:
       - anthropic
 

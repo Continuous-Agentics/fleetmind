@@ -8,6 +8,19 @@ import { stringify as yamlStringify } from "yaml";
 import type { Fleet, AgentConfig } from "../config/schema.js";
 import { slackChannel } from "../core/channels.js";
 
+/** An OpenClaw model config object. `fallbacks` is omitted when empty so strict
+ *  (no-fallback) agents keep the bare `{ primary }` shape OpenClaw treats as
+ *  strict. See OpenClaw docs/concepts/model-failover. */
+function modelConfig(primary: string, fallbacks: string[]): { primary: string; fallbacks?: string[] } {
+  return fallbacks.length > 0 ? { primary, fallbacks } : { primary };
+}
+
+/** Fallback models materialized into an agent's model config: the agent's own
+ *  list when set (including an explicit [] = strict), else the fleet default. */
+function agentFallbacks(agent: AgentConfig, defaults: Fleet["agents"]["defaults"]): string[] {
+  return agent.fallback_models ?? defaults.fallback_models ?? [];
+}
+
 /**
  * Build the per-agent openclaw.json slice for a single gateway/EC2 instance.
  *
@@ -48,7 +61,7 @@ export function renderAgentOpenClawJson(
     name: agent.name,
     workspace,
     agentDir,
-    model: { primary: agent.model ?? defaults.model },
+    model: modelConfig(agent.model ?? defaults.model, agentFallbacks(agent, defaults)),
     ...(agent.orchestrator ? { default: true } : {}),
   };
 
@@ -166,7 +179,7 @@ export function renderAgentOpenClawJson(
   return {
     agents: {
       defaults: {
-        model: { primary: defaults.model },
+        model: modelConfig(defaults.model, defaults.fallback_models ?? []),
         ...(defaultsParams ? { params: defaultsParams } : {}),
         ...(defaultsModels
           ? {
@@ -291,7 +304,7 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
       name: agent.name,
       workspace,
       agentDir,
-      model: { primary: model },
+      model: modelConfig(model, agentFallbacks(agent, defaults)),
       ...(agent.orchestrator ? { default: true } : {}),
     };
   });
@@ -340,7 +353,7 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
 
   return {
     agents: {
-      defaults: { model: { primary: defaults.model } },
+      defaults: { model: modelConfig(defaults.model, defaults.fallback_models ?? []) },
       list: agentList,
     },
     bindings,
@@ -609,6 +622,7 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
     role: agent.role,
     orchestrator: agent.orchestrator ?? false,
     model: agent.model ?? fleet.agents.defaults.model,
+    ...(agent.fallback_models ? { fallback_models: agent.fallback_models } : {}),
     skills: agent.skills ?? [],
     ...(agent.target ? { target: agent.target } : {}),
     ...(agent.delegation ? { delegation: agent.delegation } : {}),
@@ -627,6 +641,7 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
     agents: {
       defaults: {
         model: fleet.agents.defaults.model,
+        ...(fleet.agents.defaults.fallback_models ? { fallback_models: fleet.agents.defaults.fallback_models } : {}),
         ...(fleet.agents.defaults.target ? { target: fleet.agents.defaults.target } : {}),
       },
       self: selfEntry,

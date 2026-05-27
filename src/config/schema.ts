@@ -257,6 +257,10 @@ export const AgentSchema = z.object({
   orchestrator: z.boolean().default(false),
   role: AgentRoleSchema.default("worker"),
   model: z.string().optional(),
+  /** Ordered fallback models ("provider/model") OpenClaw tries when this agent's
+   *  primary model fails. Overrides agents.defaults.fallback_models. An empty
+   *  list makes the agent strict (no fallback). */
+  fallback_models: z.array(z.string()).optional(),
   persona: PersonaSchema.default({}),
   /** Runtime host this agent is deployed to — references a key in `targets`.
    *  Optional here; falls back to `agents.defaults.target`. Normalization
@@ -309,6 +313,9 @@ export type AgentModelOverrides = z.infer<typeof AgentModelOverridesSchema>;
 
 export const AgentDefaultsSchema = z.object({
   model: z.string().default("anthropic/claude-sonnet-4-6"),
+  /** Fleet-wide ordered fallback models ("provider/model") materialized into
+   *  every agent's model config unless the agent sets its own fallback_models. */
+  fallback_models: z.array(z.string()).optional(),
   /** Default runtime target for agents that don't set their own `target`. */
   target: TargetIdSchema.optional(),
   plugins: z.array(z.string()).default(["anthropic"]),
