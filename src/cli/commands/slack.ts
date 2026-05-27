@@ -149,6 +149,39 @@ async function callAuthTest(
   }
 }
 
+type FleetDoc = ReturnType<typeof parseDocument>;
+
+/** The items of `agents.list` as the yaml document's own sequence. Throws if
+ *  the node is missing or not a sequence. Shared by the writeback helpers. */
+function agentListItems(doc: FleetDoc): unknown[] {
+  const agentsNode = doc.getIn(["agents", "list"]) as { items: unknown[] } | undefined;
+  if (!agentsNode || !("items" in agentsNode)) {
+    throw new Error("fleet.yaml: agents.list is missing or not a sequence");
+  }
+  return agentsNode.items;
+}
+
+/** Locate the slack entry in agent `i`'s `channels` sequence. Returns its index
+ *  (or -1) plus whether a `channels` list exists at all — callers need that to
+ *  decide between appending to and creating the list. */
+function findSlackChannel(
+  doc: FleetDoc,
+  i: number
+): { slackIdx: number; hasChannelsList: boolean } {
+  const channelsNode = doc.getIn(["agents", "list", i, "channels"]) as
+    | { items: unknown[] }
+    | undefined;
+  if (!channelsNode || !("items" in channelsNode)) {
+    return { slackIdx: -1, hasChannelsList: false };
+  }
+  for (let j = 0; j < channelsNode.items.length; j++) {
+    if (doc.getIn(["agents", "list", i, "channels", j, "provider"]) === "slack") {
+      return { slackIdx: j, hasChannelsList: true };
+    }
+  }
+  return { slackIdx: -1, hasChannelsList: true };
+}
+
 /**
  * Write updated bot_user_id values back into fleet.yaml while preserving
  * comments and formatting, using the `yaml` package's document-level API.
@@ -162,36 +195,17 @@ export function writeFleetYaml(
   const doc = parseDocument(raw);
 
   // Navigate: agents.list[*].channels[provider=slack].bot_user_id
-  const agentsNode = doc.getIn(["agents", "list"]);
-  if (!agentsNode || !("items" in (agentsNode as object))) {
-    throw new Error("fleet.yaml: agents.list is missing or not a sequence");
-  }
-
-  // Iterate using the yaml document's own sequence items
-  const listSeq = agentsNode as { items: unknown[] };
-  for (let i = 0; i < listSeq.items.length; i++) {
+  const items = agentListItems(doc);
+  for (let i = 0; i < items.length; i++) {
     const idVal = doc.getIn(["agents", "list", i, "id"]) as string | undefined;
     if (!idVal || !updates.has(idVal)) continue;
 
     const newUserId = updates.get(idVal)!;
-
-    // Locate the slack entry within this agent's channels sequence.
-    const channelsNode = doc.getIn(["agents", "list", i, "channels"]) as
-      | { items: unknown[] }
-      | undefined;
-    let slackIdx = -1;
-    if (channelsNode && "items" in channelsNode) {
-      for (let j = 0; j < channelsNode.items.length; j++) {
-        if (doc.getIn(["agents", "list", i, "channels", j, "provider"]) === "slack") {
-          slackIdx = j;
-          break;
-        }
-      }
-    }
+    const { slackIdx, hasChannelsList } = findSlackChannel(doc, i);
 
     if (slackIdx >= 0) {
       doc.setIn(["agents", "list", i, "channels", slackIdx, "bot_user_id"], newUserId);
-    } else if (channelsNode && "items" in channelsNode) {
+    } else if (hasChannelsList) {
       // Channels list exists but has no slack entry — append one.
       doc.addIn(
         ["agents", "list", i, "channels"],
@@ -205,6 +219,46 @@ export function writeFleetYaml(
         doc.createNode([{ provider: "slack", bot_user_id: newUserId }])
       );
     }
+  }
+
+  writeFn(fleetPath, doc.toString());
+}
+
+/**
+ * Write Slack channel IDs back into fleet.yaml, preserving comments + formatting.
+ *
+ * Targets the nested `channels:` *list of channel IDs* under each agent's
+ * `channels[provider=slack]` entry — NOT the agent-level `channels` sequence
+ * (which holds the channel configs). The v1 layout had `slack.channels: [...]`
+ * one level up; v2 nests it inside the slack channel entry, so this navigates
+ * the document tree by provider rather than regex-matching a flat shape.
+ *
+ * `updates` maps agent id → the channel IDs to set. Agents missing a slack
+ * entry (or with an empty ID list) are skipped.
+ */
+export function writeSlackChannelIds(
+  fleetPath: string,
+  updates: Map<string, string[]>,
+  writeFn: WriteFn
+): void {
+  const raw = fs.readFileSync(fleetPath, "utf-8");
+  const doc = parseDocument(raw);
+
+  const items = agentListItems(doc);
+  for (let i = 0; i < items.length; i++) {
+    const idVal = doc.getIn(["agents", "list", i, "id"]) as string | undefined;
+    if (!idVal || !updates.has(idVal)) continue;
+
+    const channelIds = updates.get(idVal)!;
+    if (channelIds.length === 0) continue;
+
+    const { slackIdx } = findSlackChannel(doc, i);
+    if (slackIdx < 0) continue; // No slack channel to attach IDs to — skip.
+
+    doc.setIn(
+      ["agents", "list", i, "channels", slackIdx, "channels"],
+      doc.createNode(channelIds)
+    );
   }
 
   writeFn(fleetPath, doc.toString());

@@ -24,11 +24,13 @@ import { test, describe, beforeEach, afterEach } from "node:test";
 import {
   discoverSlackBotUserIds,
   writeFleetYaml,
+  writeSlackChannelIds,
   type DiscoverOptions,
   type SmSendable,
   type HttpFn,
   type WriteFn,
 } from "../cli/commands/slack.js";
+import { parse as parseYaml } from "yaml";
 import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 
 // ── Test fixtures ─────────────────────────────────────────────────────────────
@@ -470,5 +472,76 @@ agents:
     const written = writtenContents[0]!;
     assert.ok(written.includes("1 PM (Conductor)"), "should preserve file header comment");
     assert.ok(written.includes("U_AGENTX"), "should contain the new bot_user_id");
+  });
+});
+
+describe("writeSlackChannelIds — v2 nested channels writeback", () => {
+  // Two agents, each with a v2 nested slack channel entry whose `channels:`
+  // (the channel-ID list) is empty — the shape `fleetmind init` scaffolds.
+  const FLEET_V2 = `
+# fleet.yaml — channel writeback fixture
+fleet:
+  name: test-fleet
+
+agents:
+  list:
+    - id: conductor
+      name: Conductor
+      channels:
+        - provider: slack
+          account_id: conductor
+          bot_token: "\${CONDUCTOR_BOT_TOKEN}"  # keep me
+          channels: []
+    - id: forge
+      name: Forge
+      channels:
+        - provider: slack
+          account_id: forge
+          bot_token: "\${FORGE_BOT_TOKEN}"
+`.trimStart();
+
+  test("writes IDs into the nested slack channels list, not the agent channels seq", () => {
+    const p = path.join(tmpDir, "fleet-v2.yaml");
+    fs.writeFileSync(p, FLEET_V2);
+
+    const written: string[] = [];
+    const writeFn: WriteFn = (_p, content) => written.push(content);
+
+    writeSlackChannelIds(p, new Map([["conductor", ["C123", "C456"]]]), writeFn);
+
+    assert.equal(written.length, 1);
+    const out = written[0];
+    const doc = parseYaml(out);
+    const conductor = doc.agents.list.find((a: { id: string }) => a.id === "conductor");
+    const slack = conductor.channels.find((c: { provider: string }) => c.provider === "slack");
+    // The channel IDs landed in the nested slack `channels` list…
+    assert.deepEqual(slack.channels, ["C123", "C456"]);
+    // …and the agent still has exactly one channel entry (the slack one), i.e.
+    // we did NOT clobber the agent-level channels sequence.
+    assert.equal(conductor.channels.length, 1);
+    // Comment + token reference preserved.
+    assert.ok(out.includes("# keep me"));
+    assert.ok(out.includes("CONDUCTOR_BOT_TOKEN"));
+  });
+
+  test("skips agents not in the update map and empty ID lists", () => {
+    const p = path.join(tmpDir, "fleet-v2b.yaml");
+    fs.writeFileSync(p, FLEET_V2);
+
+    const written: string[] = [];
+    const writeFn: WriteFn = (_p, content) => written.push(content);
+
+    // forge gets an empty list (skip); conductor gets real IDs.
+    writeSlackChannelIds(
+      p,
+      new Map([["conductor", ["C999"]], ["forge", []]]),
+      writeFn
+    );
+
+    const doc = parseYaml(written[0]);
+    const forge = doc.agents.list.find((a: { id: string }) => a.id === "forge");
+    const forgeSlack = forge.channels.find((c: { provider: string }) => c.provider === "slack");
+    // forge had no `channels:` key and an empty update → unchanged (undefined).
+    assert.equal(forgeSlack.channels, undefined);
   });
 });

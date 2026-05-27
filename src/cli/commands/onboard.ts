@@ -27,8 +27,7 @@ import type { Command } from "commander";
 import { loadFleet } from "../../config/loader.js";
 import { slackChannel } from "../../core/channels.js";
 import { log } from "../../utils/log.js";
-import { generateManifests } from "./slack.js";
-import { discoverSlackBotUserIds } from "./slack.js";
+import { generateManifests, discoverSlackBotUserIds, writeSlackChannelIds } from "./slack.js";
 import { storeGithubApp, createGithubApp } from "./github-app.js";
 import {
   SecretsManagerClient,
@@ -250,8 +249,7 @@ export async function runOnboard(
 
     // Channel IDs
     console.log("  Now invite each bot to its Slack channels and copy the channel IDs.\n");
-    const updatedFleetYaml = fs.readFileSync(fleetFile, "utf-8");
-    let yamlContent = updatedFleetYaml;
+    const channelUpdates = new Map<string, string[]>();
 
     for (const agent of agents) {
       const existing = (slackChannel(agent)?.channels ?? []).filter(c => isRealChannelId(c));
@@ -264,16 +262,14 @@ export async function runOnboard(
       const channelInput = await prompt("    Channel IDs: ");
       const channelIds = channelInput.split(",").map(c => c.trim()).filter(Boolean);
       if (channelIds.length > 0) {
-        // Write channel IDs back to fleet.yaml
-        yamlContent = yamlContent.replace(
-          new RegExp(`(id:\\s*${agent.id}[\\s\\S]*?channels:\\s*)\\[\\s*"C_REPLACE_ME"\\s*\\]`),
-          `$1[${channelIds.map(c => `"${c}"`).join(", ")}]`
-        );
+        channelUpdates.set(agent.id, channelIds);
       }
     }
 
-    if (yamlContent !== updatedFleetYaml) {
-      fs.writeFileSync(fleetFile, yamlContent, "utf-8");
+    if (channelUpdates.size > 0) {
+      // Write channel IDs into each agent's slack channel entry via the yaml
+      // document API (preserves comments; targets the v2 nested channels list).
+      writeSlackChannelIds(fleetFile, channelUpdates, (p, content) => fs.writeFileSync(p, content, "utf-8"));
       log.ok("  fleet.yaml updated with channel IDs");
     }
   } else {

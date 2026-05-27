@@ -22,10 +22,41 @@ skills_repo:
 secrets:
   provider: env
 
+# ── Targets (runtime hosts) ───────────────────────────────────────────────────
+# Where each agent runs, how to reach it, and how to (re)start its gateway.
+# Agents reference a target by id (see agents.defaults.target below). The
+# \`provider\` discriminates the host type and selects the per-host block:
+#   aws-ssm → EC2 reached via SSM (requires aws.region)
+#   ssh     → Mac mini / bare metal / VMware guest (requires ssh.host, ssh.user)
+#   local   → the operator machine (dev / single-box deploys)
+targets:
+  conductor-host:
+    provider: aws-ssm
+    os: linux
+    service_manager: systemd
+    workspace_base: /home/ec2-user/.openclaw
+    aws:
+      region: us-west-2          # edit to your region
+  # Example of a non-AWS host (e.g. a Mac mini) — uncomment and point an agent at it:
+  # mac-lab-1:
+  #   provider: ssh
+  #   os: macos
+  #   service_manager: launchd
+  #   workspace_base: /Users/openclaw/.openclaw
+  #   ssh:
+  #     host: mac-lab-1.local
+  #     user: openclaw
+  # Example of a local (operator-machine) host:
+  # local-box:
+  #   provider: local
+  #   os: macos
+  #   service_manager: launchd
+  #   workspace_base: ~/.openclaw
+
 agents:
   defaults:
     model: anthropic/claude-sonnet-4-6
-    workspace_base: /home/ec2-user/.openclaw
+    target: conductor-host       # default host for agents that don't set their own
     plugins:
       - anthropic
 
@@ -39,10 +70,11 @@ agents:
         soul: |
           You are Conductor, an orchestrating AI that coordinates a fleet of specialists.
           Delegate to specialists via sessions_send. Synthesize results for the user.
-      slack:
-        account_id: conductor
-        bot_token: \${CONDUCTOR_BOT_TOKEN}
-        app_token: \${CONDUCTOR_APP_TOKEN}
+      channels:
+        - provider: slack
+          account_id: conductor
+          bot_token: \${CONDUCTOR_BOT_TOKEN}
+          app_token: \${CONDUCTOR_APP_TOKEN}
       skills: []
       plugins: [anthropic]
       agent_to_agent:
@@ -69,6 +101,12 @@ openclaw:
     allow_bots: true
     history_limit: 111
 `;
+
+/** Render the scaffold template with a fleet name + client substituted in.
+ *  Exported so tests can round-trip it through the loader. */
+export function renderInitTemplate(name: string, client: string): string {
+  return TEMPLATE.replace("{NAME}", name).replace("{CLIENT}", client);
+}
 
 export function registerInit(program: Command): void {
   program
@@ -97,7 +135,7 @@ Examples:
 
       const name = opts.name as string;
       const client = (opts.client as string) ?? name;
-      const content = TEMPLATE.replace("{NAME}", name).replace("{CLIENT}", client);
+      const content = renderInitTemplate(name, client);
 
       fs.writeFileSync(output, content, "utf-8");
       fs.mkdirSync("rendered", { recursive: true });
