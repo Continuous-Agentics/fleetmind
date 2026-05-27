@@ -6,6 +6,69 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-05-27
+
+Provider-neutral release: AWS/Slack become **one backend among several**. The
+fleet config moves to a v2 schema and the deploy layer is abstracted behind
+provider interfaces, adding a no-cloud local path (`fleetmind up`) alongside the
+existing AWS/EC2 flow.
+
+### ⚠️ Breaking
+
+- **fleet.yaml is now v2 and v1 files no longer load.** Clean break, no compat
+  shim. Migration:
+  - Add a top-level `targets:` map (hosts, discriminated on `provider`:
+    `aws-ssm | ssh | local`; each carries `os` / `service_manager` /
+    `workspace_base`). Point each agent at one via `target:` (or
+    `agents.defaults.target`).
+  - Move `workspace_base` off `agents.defaults` onto the target(s).
+  - Replace each agent's `slack:` block with a `channels:` entry
+    (`- provider: slack`, …).
+  - Replace `agent.anthropic.api_key` with `agent.api_keys` (a provider→key
+    map). Model API keys are now keyed by provider.
+  See `fleet.example.yaml` and the `fleetmind-template` repo for the v2 shape.
+  Existing v1 fleets must be migrated before upgrading.
+
+### Added
+
+- **`fleetmind up`** — bring a fleet up on the local machine with no cloud.
+  Agents that share a `local` target run in **one** OpenClaw gateway (OpenClaw's
+  native multi-agent model — each agent keeps its own workspace, skills, Slack
+  app, model, and persona). Renders the host's `~/.openclaw/openclaw.json`,
+  writes resolved secrets to `~/.openclaw/.env` (chmod 600; secrets stay as
+  `${VAR}` in the config), provisions each agent's workspace, then delegates the
+  daemon to `openclaw onboard --install-daemon`. `--no-daemon` / `--dry-run`.
+- **Multi-provider models.** `model` is a `provider/model` string (OpenClaw
+  makes the call); `api_keys` maps providers to credentials. `secrets populate`
+  writes one secret per provider (`<fleet>/agents/<id>/<provider>`), preserving
+  the existing `/anthropic` runtime contract.
+- **Fallback models.** `fallback_models` on an agent (or `agents.defaults`)
+  renders to OpenClaw's `model.fallbacks` failover chain (`[]` = strict).
+- **Targets + deploy transport.** Provider interfaces (`ArtifactStore`,
+  `TargetResolver`, `CommandRunner`, `ServiceManager`) with AWS (S3 + SSM) and
+  local (filesystem + launchd) adapters behind a provider factory. Optional
+  `deploy.artifact_store` (`s3 | local-fs | scp`).
+- Per-target rendering: one gateway config per host (AWS one-agent-per-host is
+  the n=1 case; a local box hosts all its agents in one gateway).
+
+### Changed
+
+- Branded, validated identifiers (fleet/agent/target/skill names, NATS subject
+  prefix, workspace base) — anything that survives config parsing is safe to
+  interpolate into paths, shell, S3 keys, systemd units, env vars, and NATS
+  subjects. Cross-references (agent→target, channels) are resolved after parse
+  and fail loud at load time.
+- `push fleet` / `pull-self` are provider-aware (AWS behavior preserved); the
+  on-host model is "smart host, thin command" (the host runs `fleetmind
+  pull-self`).
+
+### Fixed
+
+- `fleetmind init` scaffolded an unloadable (v1) `fleet.yaml`; it now emits v2.
+- `fleetmind onboard` wrote Slack channel IDs via a v1-shaped regex that
+  couldn't match the v2 `channels` layout; rewritten via the YAML document API.
+  Also fixed `secrets populate` still reading the removed `agent.slack` block.
+
 ## [0.6.13] — 2026-05-19
 
 ### Fixed
