@@ -14,7 +14,7 @@
  */
 
 import path from "node:path";
-import type { Fleet } from "../config/schema.js";
+import type { Fleet, TargetProvider } from "../config/schema.js";
 import { resolveOpenClawBaseDir } from "../runtime/renderer.js";
 
 /** Root prefix for all deploy artifacts in the artifact store. */
@@ -60,10 +60,29 @@ export function resolveArtifactBucket(fleet: Fleet): string {
   return `${fleet.fleet.name}-ledger`;
 }
 
-/** The on-host command that pulls and applies the latest workspace bundle. */
-export function buildPullSelfCommand(opts: { restart: boolean; region: string }): string {
+export interface PullSelfCommandOptions {
+  /** The host's target provider — selects how pull-self is invoked. */
+  provider: TargetProvider;
+  restart: boolean;
+  region: string;
+  agentId: string;
+  /** Fleet config path the host loads to learn its target (local/ssh). */
+  fleetPath?: string;
+}
+
+/**
+ * The on-host command that pulls and applies the latest workspace bundle.
+ * Provider-specific: on AWS the SSM command runs as root and drops to ec2-user
+ * and needs the region (for the S3 store); on a local/ssh host it runs as the
+ * connecting user and learns its target by loading the fleet config.
+ */
+export function buildPullSelfCommand(opts: PullSelfCommandOptions): string {
   const restartFlag = opts.restart ? " --restart" : "";
-  return `sudo -u ec2-user fleetmind pull-self --apply${restartFlag} --region ${opts.region}`;
+  if (opts.provider === "aws-ssm") {
+    return `sudo -u ec2-user fleetmind pull-self --apply${restartFlag} --region ${opts.region}`;
+  }
+  const fleetFlag = opts.fleetPath ? ` --fleet ${opts.fleetPath}` : "";
+  return `fleetmind pull-self --apply${restartFlag} --agent ${opts.agentId}${fleetFlag}`;
 }
 
 /** The on-host command that upgrades the fleetmind CLI before applying. */

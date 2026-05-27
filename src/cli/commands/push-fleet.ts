@@ -49,7 +49,7 @@ import {
   type TargetResolver,
   type CommandRunner,
 } from "../../deploy/transport.js";
-import { S3ArtifactStore, SsmTargetResolver, SsmCommandRunner } from "../../deploy/aws.js";
+import { fleetProvider, artifactStoreFor, transportFor } from "../../deploy/factory.js";
 import { log } from "../../utils/log.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -302,10 +302,17 @@ export async function runPushFleet(
   // Plan the deploy: bucket, per-agent artifact keys, and local input paths.
   const plan = buildDeployPlan(fleet, { region, version, localBase, agentIds: targetIds });
 
-  // Construct the deploy-transport providers (AWS adapters by default).
-  const store = (deps.makeArtifactStore ?? ((b, r) => new S3ArtifactStore(b, r)))(plan.bucket, region);
-  const resolver = (deps.makeTargetResolver ?? ((f, r) => new SsmTargetResolver(f, r)))(fleetName, region);
-  const runner = (deps.makeCommandRunner ?? ((r) => new SsmCommandRunner(r)))(region);
+  // Select + construct the deploy-transport providers for the fleet's target
+  // provider (AWS adapters for aws-ssm; local-fs/exec for local). Tests inject
+  // fakes via the deps factories.
+  const provider = fleetProvider(fleet);
+  const fleetPath = path.resolve(fleetFile);
+  const store = deps.makeArtifactStore
+    ? deps.makeArtifactStore(plan.bucket, region)
+    : artifactStoreFor(fleet, { bucket: plan.bucket, region });
+  const transport = transportFor(provider, { fleetName, region });
+  const resolver = deps.makeTargetResolver ? deps.makeTargetResolver(fleetName, region) : transport.resolver;
+  const runner = deps.makeCommandRunner ? deps.makeCommandRunner(region) : transport.runner;
 
   // Acquire fleet-wide lock (prevents concurrent pushes racing on the store)
   if (!opts.noLock && !opts.dryRun) {
@@ -351,7 +358,7 @@ export async function runPushFleet(
       if (!opts.noApply) {
         const instanceId = await resolver.resolveHost(agentId);
         if (instanceId) {
-          const cmd = buildPullSelfCommand({ restart: opts.restart, region });
+          const cmd = buildPullSelfCommand({ provider, restart: opts.restart, region, agentId, fleetPath });
           const cmdId = await runner.run(instanceId, [cmd]);
           log.ok(`  ${agentId}: rollback SSM command sent → ${cmdId}`);
           results.push({ agent_id: agentId, status: "pushed", ssm_command_id: cmdId });
@@ -457,7 +464,7 @@ export async function runPushFleet(
             // stale binary if the upgrade fails.
             commands.push(buildUpgradeCommand(opts.upgradeCli));
           }
-          commands.push(buildPullSelfCommand({ restart: opts.restart, region }));
+          commands.push(buildPullSelfCommand({ provider, restart: opts.restart, region, agentId, fleetPath }));
 
           const label = opts.upgradeCli ? 'upgrade + pull-self' : 'pull-self';
           log.step(`    sending ${label} command to ${instanceId}...`);

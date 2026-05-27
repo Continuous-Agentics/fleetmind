@@ -68,14 +68,27 @@ describe("resolveArtifactBucket", () => {
 });
 
 describe("on-host command builders", () => {
-  it("pull-self includes --apply and --region, and --restart only when asked", () => {
+  it("aws-ssm: runs as ec2-user with --region; --restart only when asked", () => {
     assert.equal(
-      buildPullSelfCommand({ restart: false, region: "us-west-2" }),
+      buildPullSelfCommand({ provider: "aws-ssm", restart: false, region: "us-west-2", agentId: "conductor" }),
       "sudo -u ec2-user fleetmind pull-self --apply --region us-west-2"
     );
     assert.equal(
-      buildPullSelfCommand({ restart: true, region: "eu-west-1" }),
+      buildPullSelfCommand({ provider: "aws-ssm", restart: true, region: "eu-west-1", agentId: "conductor" }),
       "sudo -u ec2-user fleetmind pull-self --apply --restart --region eu-west-1"
+    );
+  });
+
+  it("local: runs as the current user with --agent/--fleet, no sudo or region", () => {
+    assert.equal(
+      buildPullSelfCommand({
+        provider: "local",
+        restart: true,
+        region: "us-west-2",
+        agentId: "conductor",
+        fleetPath: "/work/fleet.yaml",
+      }),
+      "fleetmind pull-self --apply --restart --agent conductor --fleet /work/fleet.yaml"
     );
   });
   it("upgrade uses --latest for 'latest' and --to for a pinned version", () => {
