@@ -10,12 +10,11 @@
  */
 
 import crypto from "node:crypto";
-import { execSync, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Readable } from "node:stream";
 import type { Command } from "commander";
 
 // Resolve the running fleetmind version from package.json so the manifest's
@@ -32,22 +31,6 @@ function resolveFleetmindVersion(): string {
   }
 }
 
-import {
-  S3Client,
-  PutObjectCommand,
-  GetObjectCommand,
-  HeadObjectCommand,
-  CopyObjectCommand,
-  ListObjectsV2Command,
-  DeleteObjectCommand,
-} from "@aws-sdk/client-s3";
-import {
-  SSMClient,
-  SendCommandCommand,
-  DescribeInstanceInformationCommand,
-} from "@aws-sdk/client-ssm";
-
-import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { loadFleet } from "../../config/loader.js";
 import { provisionFleet } from "../../runtime/provisioner.js";
 import { writeOutputs } from "../../runtime/renderer.js";
@@ -56,33 +39,18 @@ import {
   agentArtifactKeys,
   buildPullSelfCommand,
   buildUpgradeCommand,
-  DEPLOY_LOCK_KEY,
-  HISTORY_MAX,
 } from "../../deploy/plan.js";
+import {
+  acquireDeployLock,
+  releaseDeployLock,
+  archiveToHistory as archiveToHistoryGeneric,
+  listHistory,
+  type ArtifactStore,
+  type TargetResolver,
+  type CommandRunner,
+} from "../../deploy/transport.js";
+import { S3ArtifactStore, SsmTargetResolver, SsmCommandRunner } from "../../deploy/aws.js";
 import { log } from "../../utils/log.js";
-
-// ── AWS client helpers ───────────────────────────────────────────────────────
-
-/**
- * Return a configured SSMClient with explicit timeouts and a capped retry count.
- *
- * connectionTimeout: abort quickly if the SSM endpoint is unreachable (network
- *   blip, VPN, misconfigured endpoint) rather than hanging on TCP SYN.
- * requestTimeout: abort if a connected request doesn't complete within 30s.
- * maxAttempts: 2 attempts total (1 retry). Without this the SDK retries 3 times
- *   by default, so a worst-case hang is 3 x requestTimeout + backoff ~= 95s.
- */
-function makeSsmClient(region: string): SSMClient {
-  return new SSMClient({
-    region,
-    requestHandler: new NodeHttpHandler({
-      connectionTimeout: 5_000,
-      requestTimeout: 30_000,
-    }),
-    maxAttempts: 2,
-  });
-}
-
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -126,27 +94,19 @@ export interface PushFleetDeps {
   createTarball?: (stagingDir: string, destPath: string) => Promise<{ sha256: string; sizeBytes: number }>;
 
   /**
-   * Upload a Buffer to S3.
+   * Provider factories — defaults build the AWS adapters from the deploy plan.
+   * Tests inject fakes here. The bucket / fleet name are passed at construction
+   * (not per call) so an adapter binds them once.
    */
-  uploadToS3?: (bucket: string, key: string, body: Buffer, region: string) => Promise<void>;
+  makeArtifactStore?: (bucket: string, region: string) => ArtifactStore;
+  makeTargetResolver?: (fleetName: string, region: string) => TargetResolver;
+  makeCommandRunner?: (region: string) => CommandRunner;
 
-  /**
-   * Look up EC2 instance ID via SSM DescribeInstanceInformation tag filters.
-   * Returns null when the instance isn't registered / not found.
-   */
-  lookupInstance?: (fleetName: string, agentId: string, region: string) => Promise<string | null>;
-
-  /**
-   * Send an SSM run-shell-script command. Returns the command ID.
-   * For --upgrade-cli, multiple commands are passed and run sequentially
-   * with && semantics (pull-self only runs if upgrade exits 0).
-   */
-  sendSsmCommand?: (instanceId: string, commands: string[], region: string) => Promise<string>;
-  /** Override the lock acquire/release for testing. */
-  acquireLock?: (bucket: string, region: string) => Promise<void>;
-  releaseLock?: (bucket: string, region: string) => Promise<void>;
-  /** Override history archiving for testing. */
-  archiveToHistory?: (bucket: string, agentId: string, sha256: string, region: string) => Promise<void>;
+  /** Override the lock acquire/release (e.g. no-op in tests). */
+  acquireLock?: (store: ArtifactStore, lockKey: string) => Promise<void>;
+  releaseLock?: (store: ArtifactStore, lockKey: string) => Promise<void>;
+  /** Override history archiving (e.g. no-op in tests). */
+  archiveToHistory?: (store: ArtifactStore, agentId: string, sha256: string) => Promise<void>;
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────
@@ -282,194 +242,6 @@ async function defaultCreateTarball(
   };
 }
 
-async function defaultUploadToS3(
-  bucket: string,
-  key: string,
-  body: Buffer,
-  region: string
-): Promise<void> {
-  const s3 = new S3Client({ region });
-  await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body }));
-}
-
-async function defaultLookupInstance(
-  fleetName: string,
-  agentId: string,
-  region: string
-): Promise<string | null> {
-  // Tag keys must match the fleetmind:* namespace set by infra/terraform/ec2.tf.
-  // Unprefixed `fleet_name` / `agent_id` tags don't exist on the instances.
-  const ssm = makeSsmClient(region);
-  const resp = await ssm.send(
-    new DescribeInstanceInformationCommand({
-      Filters: [
-        { Key: "tag:fleetmind:fleet_name", Values: [fleetName] },
-        { Key: "tag:fleetmind:agent_id", Values: [agentId] },
-      ],
-    })
-  );
-  const instances = resp.InstanceInformationList ?? [];
-  return instances[0]?.InstanceId ?? null;
-}
-
-async function defaultSendSsmCommand(
-  instanceId: string,
-  commands: string[],
-  region: string
-): Promise<string> {
-  const ssm = makeSsmClient(region);
-  const resp = await ssm.send(
-    new SendCommandCommand({
-      InstanceIds: [instanceId],
-      DocumentName: "AWS-RunShellScript",
-      Parameters: { commands },
-    })
-  );
-  return resp.Command?.CommandId ?? "";
-}
-
-// ── Fleet-wide S3 lock ───────────────────────────────────────────────────────
-
-const LOCK_KEY = DEPLOY_LOCK_KEY;
-const LOCK_TTL_SECONDS = 300;
-
-interface LockInfo {
-  acquired_at: string;
-  holder: string;
-  ttl_seconds: number;
-}
-
-/** Try to acquire the fleet deploy lock. Throws if locked by another operator. */
-async function acquireLock(bucket: string, region: string): Promise<void> {
-  const s3 = new S3Client({ region });
-  const holder = `${process.env.USER ?? 'unknown'}@${os.hostname()}`;
-
-  // Check if a lock exists and whether it has expired.
-  try {
-    const existing = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: LOCK_KEY }));
-    const raw = await existing.Body?.transformToString();
-    if (raw) {
-      const info = JSON.parse(raw) as LockInfo;
-      const ageSeconds = (Date.now() - new Date(info.acquired_at).getTime()) / 1000;
-      if (ageSeconds < info.ttl_seconds) {
-        throw new Error(
-          `Fleet is locked by ${info.holder} (acquired ${Math.round(ageSeconds)}s ago, TTL ${info.ttl_seconds}s). ` +
-          `Wait for the other push to finish, or delete s3://${bucket}/${LOCK_KEY} to force-release.`
-        );
-      }
-      log.dim(`  (stale lock from ${info.holder} expired after ${Math.round(ageSeconds)}s — overriding)`);
-    }
-  } catch (err) {
-    const code = (err as { name?: string }).name;
-    if (code !== 'NoSuchKey' && !(err instanceof Error && err.message.includes('locked by'))) {
-      // Ignore missing key; rethrow lock-held error; ignore other S3 errors (bucket may be new)
-    } else if (err instanceof Error && err.message.includes('locked by')) {
-      throw err;
-    }
-  }
-
-  const lock: LockInfo = {
-    acquired_at: new Date().toISOString(),
-    holder,
-    ttl_seconds: LOCK_TTL_SECONDS,
-  };
-  await s3.send(new PutObjectCommand({
-    Bucket: bucket,
-    Key: LOCK_KEY,
-    Body: JSON.stringify(lock, null, 2),
-    ContentType: "application/json",
-  }));
-  log.dim(`  🔒 lock acquired by ${holder}`);
-}
-
-/** Release the fleet deploy lock. */
-async function releaseLock(bucket: string, region: string): Promise<void> {
-  const s3 = new S3Client({ region });
-  try {
-    await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: LOCK_KEY }));
-    log.dim(`  🔓 lock released`);
-  } catch {
-    // Best-effort release — TTL will expire it if delete fails
-  }
-}
-
-// ── History management ────────────────────────────────────────────────────────
-
-/**
- * Before uploading a new tarball, copy the current one to history.
- * History key: deploy-staging/history/<agent>/<iso-timestamp>-<sha256prefix>.tar.gz
- */
-async function archiveToHistory(
-  bucket: string,
-  agentId: string,
-  currentSha256: string,
-  region: string
-): Promise<void> {
-  const s3 = new S3Client({ region });
-  const keys = agentArtifactKeys(agentId);
-  const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const dst = `${keys.historyPrefix}${ts}-${currentSha256.slice(0, 8)}.tar.gz`;
-
-  try {
-    // Copy existing tarball to history
-    await s3.send(new CopyObjectCommand({
-      Bucket: bucket,
-      CopySource: `${bucket}/${keys.tarball}`,
-      Key: dst,
-    }));
-
-    // Also copy the manifest
-    const manifestDst = dst.replace('.tar.gz', '.manifest.json');
-    await s3.send(new CopyObjectCommand({
-      Bucket: bucket,
-      CopySource: `${bucket}/${keys.manifest}`,
-      Key: manifestDst,
-    }));
-
-    // Prune old history entries (keep last HISTORY_MAX)
-    const list = await s3.send(new ListObjectsV2Command({
-      Bucket: bucket,
-      Prefix: keys.historyPrefix,
-    }));
-    const tarballs = (list.Contents ?? [])
-      .filter(o => o.Key?.endsWith('.tar.gz'))
-      .sort((a, b) => (a.Key ?? '').localeCompare(b.Key ?? ''));
-    const toDelete = tarballs.slice(0, Math.max(0, tarballs.length - HISTORY_MAX));
-    for (const obj of toDelete) {
-      if (obj.Key) {
-        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.Key }));
-        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.Key.replace('.tar.gz', '.manifest.json') }));
-      }
-    }
-  } catch {
-    // History is best-effort — don't fail the push if archiving fails
-    log.dim(`  (history archive skipped — no previous tarball)`);
-  }
-}
-
-/**
- * List available history entries for an agent, newest first.
- */
-export async function listHistory(
-  bucket: string,
-  agentId: string,
-  region: string
-): Promise<{ key: string; manifest?: string; timestamp: string }[]> {
-  const s3 = new S3Client({ region });
-  const list = await s3.send(new ListObjectsV2Command({
-    Bucket: bucket,
-    Prefix: agentArtifactKeys(agentId).historyPrefix,
-  }));
-  return (list.Contents ?? [])
-    .filter(o => o.Key?.endsWith('.tar.gz'))
-    .sort((a, b) => (b.Key ?? '').localeCompare(a.Key ?? ''))  // newest first
-    .map(o => ({
-      key: o.Key!,
-      manifest: o.Key!.replace('.tar.gz', '.manifest.json'),
-      timestamp: o.Key!.split('/').pop()!.split('-').slice(0, 3).join('T').replace('T', ' ').replace(/-/g, ':').substring(0, 19),
-    }));
-}
-
 // ── Core logic ────────────────────────────────────────────────────────────────
 
 export interface PushFleetOptions {
@@ -510,12 +282,9 @@ export async function runPushFleet(
   deps: PushFleetDeps = {}
 ): Promise<PushFleetResult[]> {
   const createTarball = deps.createTarball ?? defaultCreateTarball;
-  const uploadToS3 = deps.uploadToS3 ?? defaultUploadToS3;
-  const lookupInstance = deps.lookupInstance ?? defaultLookupInstance;
-  const sendSsmCommand = deps.sendSsmCommand ?? defaultSendSsmCommand;
-  const acquireLockFn = deps.acquireLock ?? acquireLock;
-  const releaseLockFn = deps.releaseLock ?? releaseLock;
-  const archiveToHistoryFn = deps.archiveToHistory ?? archiveToHistory;
+  const acquireLockFn = deps.acquireLock ?? acquireDeployLock;
+  const releaseLockFn = deps.releaseLock ?? releaseDeployLock;
+  const archiveToHistoryFn = deps.archiveToHistory ?? archiveToHistoryGeneric;
 
   const fleetFile = opts.fleet ?? "fleet.yaml";
   const fleet = loadFleet(fleetFile);
@@ -532,11 +301,15 @@ export async function runPushFleet(
 
   // Plan the deploy: bucket, per-agent artifact keys, and local input paths.
   const plan = buildDeployPlan(fleet, { region, version, localBase, agentIds: targetIds });
-  const bucket = plan.bucket;
 
-  // Acquire fleet-wide lock (prevents concurrent pushes racing on S3)
+  // Construct the deploy-transport providers (AWS adapters by default).
+  const store = (deps.makeArtifactStore ?? ((b, r) => new S3ArtifactStore(b, r)))(plan.bucket, region);
+  const resolver = (deps.makeTargetResolver ?? ((f, r) => new SsmTargetResolver(f, r)))(fleetName, region);
+  const runner = (deps.makeCommandRunner ?? ((r) => new SsmCommandRunner(r)))(region);
+
+  // Acquire fleet-wide lock (prevents concurrent pushes racing on the store)
   if (!opts.noLock && !opts.dryRun) {
-    await acquireLockFn(bucket, region);
+    await acquireLockFn(store, plan.lockKey);
   }
 
   // --upgrade-cli uses a single RunCommand (upgrade && pull-self) rather than
@@ -554,7 +327,7 @@ export async function runPushFleet(
     const n = opts.rollback < 1 ? 1 : opts.rollback;
     for (const agentId of targetIds) {
       log.step(`Rolling back ${agentId} to history entry ${n}...`);
-      const history = await listHistory(bucket, agentId, region);
+      const history = await listHistory(store, agentId);
       if (history.length === 0) {
         log.warn(`  ${agentId}: no history entries found — skipping`);
         results.push({ agent_id: agentId, status: "skipped", reason: "no history" });
@@ -567,20 +340,19 @@ export async function runPushFleet(
         continue;
       }
       log.dim(`  ← restoring ${entry.key.split('/').pop()}`);
-      const s3 = new S3Client({ region });
       const keys = agentArtifactKeys(agentId);
-      // Promote history tarball to current
-      await s3.send(new CopyObjectCommand({ Bucket: bucket, CopySource: `${bucket}/${entry.key}`, Key: keys.tarball }));
+      // Promote history tarball + manifest to current
+      await store.copy(entry.key, keys.tarball);
       if (entry.manifest) {
-        await s3.send(new CopyObjectCommand({ Bucket: bucket, CopySource: `${bucket}/${entry.manifest}`, Key: keys.manifest }));
+        await store.copy(entry.manifest, keys.manifest);
       }
       log.ok(`  ${agentId}: history entry ${n} promoted to current`);
 
       if (!opts.noApply) {
-        const instanceId = await lookupInstance(fleetName, agentId, region);
+        const instanceId = await resolver.resolveHost(agentId);
         if (instanceId) {
           const cmd = buildPullSelfCommand({ restart: opts.restart, region });
-          const cmdId = await sendSsmCommand(instanceId, [cmd], region);
+          const cmdId = await runner.run(instanceId, [cmd]);
           log.ok(`  ${agentId}: rollback SSM command sent → ${cmdId}`);
           results.push({ agent_id: agentId, status: "pushed", ssm_command_id: cmdId });
         } else {
@@ -655,26 +427,26 @@ export async function runPushFleet(
       sizeBytes: tarballSize,
     });
 
-    // Archive current tarball to history before overwriting
+    // Archive current bundle to history before overwriting
     if (!opts.dryRun) {
-      await archiveToHistoryFn(bucket, agentId, tarballHash, region);
+      await archiveToHistoryFn(store, agentId, tarballHash);
     }
 
-    log.step(`    uploading s3://${bucket}/${keys.tarball}...`);
+    log.step(`    uploading s3://${plan.bucket}/${keys.tarball}...`);
     const tarballBuf = fs.readFileSync(tarballPath);
-    await uploadToS3(bucket, keys.tarball, tarballBuf, region);
+    await store.put(keys.tarball, tarballBuf);
 
-    log.step(`    uploading s3://${bucket}/${keys.manifest}...`);
+    log.step(`    uploading s3://${plan.bucket}/${keys.manifest}...`);
     const manifestBuf = Buffer.from(JSON.stringify(manifest, null, 2), "utf-8");
-    await uploadToS3(bucket, keys.manifest, manifestBuf, region);
+    await store.put(keys.manifest, manifestBuf);
 
     log.ok(`  ${agentId}: artifacts uploaded`);
 
-    // Trigger SSM — skip when --no-apply is set
+    // Trigger apply on the host — skip when --no-apply is set
     if (!opts.noApply) {
       try {
         log.step(`    looking up ${agentId} instance in SSM...`);
-        const instanceId = await lookupInstance(fleetName, agentId, region);
+        const instanceId = await resolver.resolveHost(agentId);
         if (!instanceId) {
           log.warn(`  ${agentId}: instance not found in SSM (fleet_name=${fleetName}, agent_id=${agentId}) — skipping SSM trigger`);
           results.push({ agent_id: agentId, status: "pushed", reason: "instance not in SSM" });
@@ -689,7 +461,7 @@ export async function runPushFleet(
 
           const label = opts.upgradeCli ? 'upgrade + pull-self' : 'pull-self';
           log.step(`    sending ${label} command to ${instanceId}...`);
-          const cmdId = await sendSsmCommand(instanceId, commands, region);
+          const cmdId = await runner.run(instanceId, commands);
           log.ok(`  ${agentId}: SSM command sent → ${cmdId}`);
           log.dim(`    follow up: aws ssm get-command-invocation --command-id ${cmdId} --instance-id ${instanceId} --region ${region}`);
           results.push({ agent_id: agentId, status: "pushed", ssm_command_id: cmdId });
@@ -724,7 +496,7 @@ export async function runPushFleet(
 
   } finally {
     if (!opts.noLock && !opts.dryRun) {
-      await releaseLockFn(bucket, region);
+      await releaseLockFn(store, plan.lockKey);
     }
   }
 
