@@ -25,6 +25,7 @@ import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
 import type { Command } from "commander";
 import { loadFleet } from "../../config/loader.js";
+import { slackChannel } from "../../core/channels.js";
 import { log } from "../../utils/log.js";
 import { generateManifests } from "./slack.js";
 import { discoverSlackBotUserIds } from "./slack.js";
@@ -180,8 +181,8 @@ export async function runOnboard(
   const manifestsExist = fs.existsSync(manifestsDir) &&
     fs.readdirSync(manifestsDir).some(f => f.endsWith(".yaml"));
 
-  const allUserIdsSet = agents.every(a => isRealUserId(a.slack?.bot_user_id));
-  const allChannelsSet = agents.every(a => (a.slack?.channels ?? []).every(c => isRealChannelId(c)));
+  const allUserIdsSet = agents.every(a => isRealUserId(slackChannel(a)?.bot_user_id));
+  const allChannelsSet = agents.every(a => (slackChannel(a)?.channels ?? []).every(c => isRealChannelId(c)));
 
   const derivedTfvars = path.join(path.dirname(fleetFile), `workspaces/${fleetName}.derived.tfvars`);
   const tfvarsExist = fs.existsSync(derivedTfvars);
@@ -230,7 +231,7 @@ export async function runOnboard(
   }
 
   // ── Step 3: Collect Slack credentials ──────────────────────────────────────
-  const needsCreds = agents.some(a => !isRealUserId(a.slack?.bot_user_id));
+  const needsCreds = agents.some(a => !isRealUserId(slackChannel(a)?.bot_user_id));
   if (needsCreds) {
     header("Step 3 / 12 — Create Slack Apps + Collect Credentials");
     console.log("  For each agent, create a Slack app from its manifest:");
@@ -253,7 +254,7 @@ export async function runOnboard(
     let yamlContent = updatedFleetYaml;
 
     for (const agent of agents) {
-      const existing = (agent.slack?.channels ?? []).filter(c => isRealChannelId(c));
+      const existing = (slackChannel(agent)?.channels ?? []).filter(c => isRealChannelId(c));
       if (existing.length > 0) {
         log.ok(`    ${agent.name}: channels already set (${existing.join(", ")})`);
         continue;

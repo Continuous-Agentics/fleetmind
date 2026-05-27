@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import chalk from "chalk";
 import { SSMClient, SendCommandCommand, GetCommandInvocationCommand } from "@aws-sdk/client-ssm";
 import { loadFleet } from "../../config/loader.js";
+import { slackChannel } from "../../core/channels.js";
 import { log } from "../../utils/log.js";
 import { lookupInstanceId } from "./pull-workspace.js";
 
@@ -68,7 +69,7 @@ Examples:
           process.exit(1);
         }
 
-        const workspace = path.join(fleet.agents.defaults.workspace_base, `workspace-${a.id}`);
+        const workspace = path.join(fleet.targetForAgent(a).workspace_base, `workspace-${a.id}`);
         const wsExists = fs.existsSync(workspace);
         const model = a.model ?? fleet.agents.defaults.model;
         const skills = a.skills.map((s) => s.name + (s.version ? `@${s.version}` : "")).join(", ") || "—";
@@ -80,7 +81,7 @@ Examples:
         console.log(`  Role:        ${a.orchestrator ? chalk.magenta("orchestrator") : "specialist"}`);
         console.log(`  Model:       ${model}`);
         console.log(`  Description: ${a.description || "—"}`);
-        console.log(`  Slack:       ${a.slack?.account_id ?? 'n/a'}`);
+        console.log(`  Slack:       ${slackChannel(a)?.account_id ?? 'n/a'}`);
         console.log(`  Skills:      ${skills}`);
         console.log(`  Plugins:     ${plugins}`);
         console.log(`  Can send to: ${canSend}`);
@@ -161,8 +162,8 @@ Examples:
         // ── Pre-flight diagnostics ─────────────────────────────────────────
         let preflightResult: PreflightResult = { dashboardUrl: null, authMode: null, authSecret: null };
         if (!opts.skipPreflight) {
-          // Per-agent workspace_base override falls back to fleet defaults.
-          const agentWorkspaceBase = declared.workspace_base ?? fleet.agents.defaults.workspace_base;
+          // Workspace base comes from the agent's resolved runtime target.
+          const agentWorkspaceBase = fleet.targetForAgent(declared).workspace_base;
           preflightResult = await runPreflight(instanceId, agentId, region, agentWorkspaceBase);
           if (!opts.yes) {
             // Tiny inline confirm (avoid pulling in prompts dep). Skip

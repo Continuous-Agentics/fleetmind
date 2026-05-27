@@ -20,6 +20,7 @@ import { parse as parseYaml } from "yaml";
 import { fleetmindPackageRoot } from "./resolver.js";
 import { skillsManifestPath } from "./bot-types.js";
 import { AgentRoleSchema, SkillSourceSchema, type SkillRef } from "../config/schema.js";
+import { SkillNameSchema } from "../core/identifiers.js";
 
 // ---------------------------------------------------------------------------
 // Zod schema for skills.yaml
@@ -27,7 +28,7 @@ import { AgentRoleSchema, SkillSourceSchema, type SkillRef } from "../config/sch
 
 /** One entry in the manifest's `required` list. */
 const ManifestSkillEntrySchema = z.object({
-  name: z.string().min(1),
+  name: SkillNameSchema,
   /** Defaults to "fleetmind" for manifest entries (different from fleet.yaml's
    * shorthand default of "client" — manifests are opinionated about bundled
    * origins). */

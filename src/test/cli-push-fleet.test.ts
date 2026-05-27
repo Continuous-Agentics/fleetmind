@@ -55,13 +55,14 @@ function makeTempFleetYaml(dir: string, agentIds: string[] = ["conductor", "forg
       name: ${id.charAt(0).toUpperCase() + id.slice(1)}
       emoji: 🤖
       orchestrator: ${i === 0}
+      target: test-host
       persona:
         soul: "Test agent ${id}"
-      slack:
-        account_id: ${id}
-        bot_token: "\${${id.toUpperCase()}_BOT_TOKEN}"
-        app_token: "\${${id.toUpperCase()}_APP_TOKEN}"
-        signing_secret: "\${${id.toUpperCase()}_SIGNING_SECRET}"
+      channels:
+        - provider: slack
+          account_id: ${id}
+          bot_token: "\${${id.toUpperCase()}_BOT_TOKEN}"
+          app_token: "\${${id.toUpperCase()}_APP_TOKEN}"
       skills: []`
     )
     .join("");
@@ -69,9 +70,16 @@ function makeTempFleetYaml(dir: string, agentIds: string[] = ["conductor", "forg
   const yaml = `
 fleet:
   name: test-fleet
-agents:
-  defaults:
+targets:
+  test-host:
+    provider: aws-ssm
+    os: linux
+    service_manager: systemd
     workspace_base: /opt/openclaw/workspace
+    aws:
+      region: us-west-2
+agents:
+  defaults: {}
   list:${agentList}
 `.trim();
 

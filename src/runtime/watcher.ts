@@ -62,8 +62,10 @@ export class SkillsWatcher {
 
   /** Get installed skill versions for an agent by reading package.json files. */
   getInstalledVersions(agentId: string): Record<string, string> {
+    const agent = this.fleet.getAgent(agentId);
+    if (!agent) return {};
     const workspace = path.join(
-      this.fleet.agents.defaults.workspace_base,
+      this.fleet.targetForAgent(agent).workspace_base,
       `workspace-${agentId}`
     );
     const skillsDir = path.join(workspace, "skills");
@@ -124,7 +126,7 @@ export class SkillsWatcher {
     }
 
     const workspace = path.join(
-      this.fleet.agents.defaults.workspace_base,
+      this.fleet.targetForAgent(agent).workspace_base,
       `workspace-${agentId}`
     );
     const dest = path.join(workspace, "skills", skillName);

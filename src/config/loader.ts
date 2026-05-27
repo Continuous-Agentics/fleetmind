@@ -5,7 +5,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
-import { FleetSchema, type Fleet, type AgentConfig } from "./schema.js";
+import { FleetSchema } from "./schema.js";
+import { normalizeFleet, type Fleet } from "../core/model.js";
+
+export type { Fleet } from "../core/model.js";
 
 // ── Fleet source resolution ────────────────────────────────────────────────────
 
@@ -129,18 +132,7 @@ export function buildMinimalFleet(name: string): Fleet {
     );
   }
 
-  return {
-    ...result.data,
-    get orchestrator() {
-      return result.data.agents.list.find((a: AgentConfig) => a.orchestrator);
-    },
-    get specialists() {
-      return result.data.agents.list.filter((a: AgentConfig) => !a.orchestrator);
-    },
-    getAgent(id: string) {
-      return result.data.agents.list.find((a: AgentConfig) => a.id === id);
-    },
-  };
+  return normalizeFleet(result.data);
 }
 
 /**
@@ -189,21 +181,5 @@ export function loadFleet(filePath: string): Fleet {
     throw new Error(`Invalid fleet.yaml:\n${issues}`);
   }
 
-  const data = result.data;
-
-  // Attach helper methods
-  const fleet: Fleet = {
-    ...data,
-    get orchestrator() {
-      return data.agents.list.find((a) => a.orchestrator);
-    },
-    get specialists() {
-      return data.agents.list.filter((a) => !a.orchestrator);
-    },
-    getAgent(id: string) {
-      return data.agents.list.find((a) => a.id === id);
-    },
-  };
-
-  return fleet;
+  return normalizeFleet(result.data);
 }

@@ -69,7 +69,7 @@ function makeFleet(skillsLocal?: string): Fleet {
 
 /** Minimal SkillRef for a given source. */
 function skillRef(name: string, source: SkillRef["source"]): SkillRef {
-  return { name, source };
+  return { name: name as SkillRef["name"], source };
 }
 
 // ── fleetmindPackageRoot ───────────────────────────────────────────────────────
@@ -297,7 +297,7 @@ describe("source: clawhub — regression", () => {
 
   test("dry-run logs intent and does not throw", async () => {
     const fleet = makeFleet();
-    const skill: SkillRef = { name: "taskflow", source: "clawhub", author: "continuous-agentics" };
+    const skill: SkillRef = { name: "taskflow" as SkillRef["name"], source: "clawhub", author: "continuous-agentics" };
 
     // In test context `clawhub` CLI is unlikely to be installed, but dry-run
     // must not throw — it just checks for the CLI and logs.
@@ -329,7 +329,7 @@ describe("source: private — regression", () => {
     delete process.env["CA_REGISTRY_TOKEN"];
 
     const fleet = makeFleet();
-    const skill: SkillRef = { name: "ca-fleet-ops", source: "private", version: "1.0.0" };
+    const skill: SkillRef = { name: "ca-fleet-ops" as SkillRef["name"], source: "private", version: "1.0.0" };
 
     try {
       await assert.doesNotReject(
@@ -347,7 +347,7 @@ describe("source: private — regression", () => {
     delete process.env["CA_REGISTRY_TOKEN"];
 
     const fleet = makeFleet();
-    const skill: SkillRef = { name: "ca-fleet-ops", source: "private" };
+    const skill: SkillRef = { name: "ca-fleet-ops" as SkillRef["name"], source: "private" };
 
     try {
       await assert.doesNotReject(

@@ -45,12 +45,14 @@ agents:
   list:
     - id: alpha
       name: Alpha
-      slack:
-        bot_token: "\${ALPHA_BOT_TOKEN}"
+      channels:
+        - provider: slack
+          bot_token: "\${ALPHA_BOT_TOKEN}"
     - id: beta
       name: Beta
-      slack:
-        bot_token: "\${BETA_BOT_TOKEN}"
+      channels:
+        - provider: slack
+          bot_token: "\${BETA_BOT_TOKEN}"
 `.trimStart();
 
 const FLEET_YAML_ONE_SET = `
@@ -61,13 +63,15 @@ agents:
   list:
     - id: alpha
       name: Alpha
-      slack:
-        bot_user_id: "UALPHAEXST"
-        bot_token: "\${ALPHA_BOT_TOKEN}"
+      channels:
+        - provider: slack
+          bot_user_id: "UALPHAEXST"
+          bot_token: "\${ALPHA_BOT_TOKEN}"
     - id: beta
       name: Beta
-      slack:
-        bot_token: "\${BETA_BOT_TOKEN}"
+      channels:
+        - provider: slack
+          bot_token: "\${BETA_BOT_TOKEN}"
 `.trimStart();
 
 const FLEET_YAML_WITH_COMMENTS = `
@@ -78,10 +82,11 @@ agents:
   list:
     - id: forge
       name: Forge
-      slack:
-        # TODO: run \`fleetmind slack discover --agent forge\` to populate
-        # bot_user_id: "U_FORGE"
-        bot_token: "\${FORGE_BOT_TOKEN}"
+      channels:
+        - provider: slack
+          # TODO: run \`fleetmind slack discover --agent forge\` to populate
+          # bot_user_id: "U_FORGE"
+          bot_token: "\${FORGE_BOT_TOKEN}"
 `.trimStart();
 
 beforeEach(() => {
@@ -448,8 +453,9 @@ agents:
   list:
     - id: agentx
       name: AgentX
-      slack:
-        bot_token: "\${AGENTX_BOT_TOKEN}"
+      channels:
+        - provider: slack
+          bot_token: "\${AGENTX_BOT_TOKEN}"
 `.trimStart();
 
     const p = path.join(tmpDir, "fleet2.yaml");

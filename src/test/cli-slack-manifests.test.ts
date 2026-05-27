@@ -55,21 +55,21 @@ agents:
       name: Conductor
       role: pm
       description: "PM bot for test-fleet"
-      slack:
-        account_id: conductor
-        bot_token: "\${CONDUCTOR_BOT_TOKEN}"
-        app_token: "\${CONDUCTOR_APP_TOKEN}"
-        signing_secret: "\${CONDUCTOR_SIGNING_SECRET}"
+      channels:
+        - provider: slack
+          account_id: conductor
+          bot_token: "\${CONDUCTOR_BOT_TOKEN}"
+          app_token: "\${CONDUCTOR_APP_TOKEN}"
 
     - id: forge
       name: Forge
       role: backend-worker
       description: "Backend worker bot for test-fleet"
-      slack:
-        account_id: forge
-        bot_token: "\${FORGE_BOT_TOKEN}"
-        app_token: "\${FORGE_APP_TOKEN}"
-        signing_secret: "\${FORGE_SIGNING_SECRET}"
+      channels:
+        - provider: slack
+          account_id: forge
+          bot_token: "\${FORGE_BOT_TOKEN}"
+          app_token: "\${FORGE_APP_TOKEN}"
 `.trimStart();
 
 const FLEET_WITH_OVERRIDES = `
@@ -82,19 +82,19 @@ agents:
       name: Custom
       role: pm
       description: "Custom pm bot"
-      slack:
-        account_id: custom
-        bot_token: "\${CUSTOM_BOT_TOKEN}"
-        app_token: "\${CUSTOM_APP_TOKEN}"
-        signing_secret: "\${CUSTOM_SIGNING_SECRET}"
-        background_color: "#123456"
-        long_description: "This is my custom long description."
-        extra_scopes:
-          - bookmarks:read
-          - channels:history
-        extra_events:
-          - app_mention
-          - file_shared
+      channels:
+        - provider: slack
+          account_id: custom
+          bot_token: "\${CUSTOM_BOT_TOKEN}"
+          app_token: "\${CUSTOM_APP_TOKEN}"
+          background_color: "#123456"
+          long_description: "This is my custom long description."
+          extra_scopes:
+            - bookmarks:read
+            - channels:history
+          extra_events:
+            - app_mention
+            - file_shared
 `.trimStart();
 
 // ── Setup / teardown ──────────────────────────────────────────────────────────
@@ -187,7 +187,7 @@ describe("buildManifest", () => {
       id: "custom",
       name: "Custom",
       role: "pm",
-      slack: { background_color: "#ABCDEF" },
+      channels: [{ provider: "slack", background_color: "#ABCDEF" }],
     };
     const manifest = buildManifest(agent, "test-fleet");
     const info = manifest.display_information as Record<string, unknown>;
@@ -199,7 +199,7 @@ describe("buildManifest", () => {
       id: "custom",
       name: "Custom",
       role: "pm",
-      slack: { long_description: "My custom long description." },
+      channels: [{ provider: "slack", long_description: "My custom long description." }],
     };
     const manifest = buildManifest(agent, "test-fleet");
     const info = manifest.display_information as Record<string, unknown>;
@@ -211,7 +211,7 @@ describe("buildManifest", () => {
       id: "a",
       name: "A",
       role: "worker",
-      slack: { extra_scopes: ["bookmarks:read", "channels:history"] },
+      channels: [{ provider: "slack", extra_scopes: ["bookmarks:read", "channels:history"] }],
     };
     const manifest = buildManifest(agent, "test-fleet");
     const scopes = (
@@ -234,7 +234,7 @@ describe("buildManifest", () => {
       id: "a",
       name: "A",
       role: "worker",
-      slack: { extra_events: ["file_shared", "app_mention"] },
+      channels: [{ provider: "slack", extra_events: ["file_shared", "app_mention"] }],
     };
     const manifest = buildManifest(agent, "test-fleet");
     const events = (
