@@ -1,6 +1,6 @@
 ---
 name: bot-delegation
-version: 1.2.0
+version: 1.2.1
 description: >
   Delegate concrete dev work from a project-manager bot to worker bots via
   NATS transport, track through completion, and report back to the human.
@@ -87,7 +87,7 @@ If any are missing, push back to the human first. Do not delegate vague work.
 
 ### 1. Generate a task ID
 
-8-character lowercase hex. Used to correlate the delegation envelope, DDB
+8-character lowercase hex. Used to correlate the NATS delegation event, DDB
 record, and S3 narrative.
 
 ```bash
@@ -97,7 +97,7 @@ TASK_ID=$(python3 -c "import secrets; print(secrets.token_hex(4))")
 
 ### 2. Write the task record to DynamoDB
 
-Before posting the envelope, create the ledger record:
+Create the task ledger record:
 
 ```bash
 fleetmind task create \
@@ -119,9 +119,8 @@ fleetmind task create \
 publish step is needed.
 
 If `task create` exits non-zero with "already exists": regenerate the task ID.
-If it fails with a network/permissions error: proceed with posting the envelope
-anyway, log the failure in `memory/active-delegations.md` (field:
-`ledger_write_failed: <reason>`), and retry on the next heartbeat.
+If it fails with a network/permissions error: log the failure in `memory/active-delegations.md` (field:
+`ledger_write_failed: <reason>`) and retry on the next heartbeat.
 
 **Amending task metadata after delegation:**
 If the scope changes after a task is delegated (worker pushback, PM clarification, reassignment),
@@ -173,7 +172,7 @@ for the full template.
 Minimum fields:
 - `task_id`, `created` (ISO timestamp), `deadline` (created + 10 min)
 - `status: pending`, `project`, `worker`
-- `thread`: the envelope message timestamp
+- `Source planning channel` + `Source planning thread`: where the delegation was discussed
 - `ledger_ddb_key`: `TASK#<task_id>`
 
 ### 5. Watch for worker events
@@ -309,8 +308,7 @@ Quiet otherwise. No "everything's fine" pings.
 ### 6.5. When a worker is blocked but the cause can be resolved
 
 `blocked` is NOT terminal-final — it's a pause state that can resume. When a
-worker reports blocked (envelope thread reply, or DDB heartbeat sees `status=
-blocked`), assess whether the cause is something you (or a human in the planning
+worker reports blocked (NATS block event, or DDB heartbeat sees `status=blocked`), assess whether the cause is something you (or a human in the planning
 thread) can resolve:
 
 - *Auth gap, missing credential, missing dependency, infra glitch:* often
@@ -381,7 +379,7 @@ and add it.
 
 *This rule is non-negotiable. It applies to **every** sub-agent spawned from
 this skill — close-the-loop handlers, In-Review handoffs, signoff closers,
-blocked-handlers, envelope-creation drivers, or any future variant.*
+blocked-handlers, or any future variant.*
 
 > **Hard rule for every spawned sub-agent:** Must end its final turn with the
 > literal token `NO_REPLY` and nothing else. Slack writes are limited to
@@ -518,7 +516,7 @@ If they match exactly, **do not post anything**. If they diverge, post one line:
 Tracking drift: audit-log <active> active / <in_review> in-review. DDB: <ddb_active> active / <ddb_in_review> in-review.
 ```
 
-## Planning Queries (before drafting a new envelope)
+## Planning Queries (before creating a new delegation)
 
 Before drafting a new delegation, check prior work for patterns:
 
@@ -534,7 +532,7 @@ fleetmind narrative get --task-id <task_id>
 ```
 
 Scan the `## Learned` sections for patterns relevant to the new task. Name
-specifics in the new delegation envelope when they bear on the work.
+specifics in the new delegation when they bear on the work.
 
 ## Abandoning a task (PM bot only)
 
@@ -561,7 +559,7 @@ Load these only when the task you're handling needs them:
 ## Hard limits
 
 - 🚫 Do NOT delegate ambiguous work. Push back first.
-- 🚫 Do NOT post in worker channels outside of delegation envelopes and active threads.
+- 🚫 Do NOT post in worker channels. Delegation is NATS-only; Slack is human-facing only.
 - 🚫 Do NOT write code, run deploys, or modify infrastructure. Orchestrate.
 - 🚫 Do NOT rely on `active-delegations.md` for live state — query DDB instead.
 - 🚫 Do NOT respond to worker bot messages outside the delegation protocol.
@@ -572,6 +570,10 @@ Load these only when the task you're handling needs them:
 
 ## Changelog
 
+- **1.2.1 (2026-05-27)** — Documentation fix: Step 4 minimum fields now
+  correctly reference `Source planning channel` + `Source planning thread`
+  instead of removed `thread` field. Aligns with active-delegations-format
+  schema.
 - **1.2.0 (2026-05-21)** — Rewrite for NATS-only transport (CON-115):
   - New § Session boot — PM subscriber startup: start `fleetmind nats
     subscribe --mode pm` before handling any work. This is the replacement

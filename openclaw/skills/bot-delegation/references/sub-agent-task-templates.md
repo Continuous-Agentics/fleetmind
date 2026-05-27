@@ -30,7 +30,7 @@ Placeholders are uppercase angle-bracketed tokens. Fill in every one before spaw
 | `<PLANNING_CHANNEL_ID>` | Channel id for the planning/coordination channel |
 | `<PLANNING_THREAD_TS>` | `ts` of the original planning-channel thread root |
 | `<PLANNING_PERMALINK>` | Permalink to the planning thread root |
-| `<DELEGATION_THREAD_PERMALINK>` | Permalink to the envelope in the worker channel |
+| `<REQUESTOR_THREAD_PERMALINK>` | Permalink to the human requestor's planning thread |
 | `<WORKER_NAME>` | Worker bot display name |
 | `<WORKER_REPLY_TS>` | `ts` of the worker's terminal reply |
 | `<TRACKER_LINK>` | Issue tracker URL (or `none`) |
@@ -83,7 +83,7 @@ Concretely for THIS sub-agent:
 Context:
 - Project: `<PROJECT_SLUG>`
 - Worker: <WORKER_NAME>
-- Delegation thread (in worker channel): <DELEGATION_THREAD_PERMALINK>
+- Requestor planning thread: <REQUESTOR_THREAD_PERMALINK>
 - Worker's terminal reply ts: `<WORKER_REPLY_TS>`
 - Planning thread root permalink: <PLANNING_PERMALINK>
 - Planning thread root ts (use as `replyTo`): `<PLANNING_THREAD_TS>`
@@ -166,7 +166,7 @@ Concretely for THIS sub-agent:
 Context:
 - Project: `<PROJECT_SLUG>`
 - Worker: <WORKER_NAME>
-- Delegation thread: <DELEGATION_THREAD_PERMALINK>
+- Requestor thread: <REQUESTOR_THREAD_PERMALINK>
 - Worker's ship reply ts: `<WORKER_REPLY_TS>`
 - Planning thread root ts: `<PLANNING_THREAD_TS>`
 - Tracker link: <TRACKER_LINK>
@@ -303,7 +303,7 @@ Concretely for THIS sub-agent:
 Context:
 - Project: `<PROJECT_SLUG>`
 - Worker: <WORKER_NAME>
-- Delegation thread: <DELEGATION_THREAD_PERMALINK>
+- Requestor thread: <REQUESTOR_THREAD_PERMALINK>
 - Worker's blocked reply ts: `<WORKER_REPLY_TS>`
 - Planning thread root ts: `<PLANNING_THREAD_TS>`
 - Tracker link: <TRACKER_LINK>

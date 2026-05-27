@@ -348,9 +348,9 @@ If you can't write 2-5 non-obvious bullets, use `[]`.
 
 ---
 
-## Informal-task ledger (non-envelope work in bot channels)
+## Informal-task ledger (direct human requests)
 
-Not all meaningful work arrives via a PM bot delegation envelope. A human asks
+Not all meaningful work arrives via a PM bot NATS delegation. A human asks
 you a direct question, you open a PR to fix something you noticed, you run a
 non-trivial debug session in a thread — without a TASK# row, the PM bot is blind
 to a real chunk of dev-channel activity.

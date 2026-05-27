@@ -10,7 +10,6 @@ status — never delete history.
 ## Delegation: <8-char-hex-task-id>
 - Created: <ISO 8601 UTC>
 - Channel: <channel id or name>
-- Thread: <ts of the envelope message>
 - Assignee: <worker agent id or display name>
 - Deadline: <ISO 8601 UTC, created + 10 min>
 - Status: pending | acked | in-review | escalated
@@ -62,8 +61,8 @@ value is newer, the block is moved from `## Closed` back to `## Active`:
 ## Field semantics
 
 - *Status* is the in-flight state. Values:
-  - `pending` — envelope posted, no `:eyes:` ack yet.
-  - `acked` — worker reacted `:eyes:`, work in progress.
+  - `pending` — NATS delegation event published, awaiting worker ack.
+  - `acked` — worker sent NATS ack event, work in progress.
   - `in-review` — worker shipped, awaiting human sign-off (only when DoD requires it).
   - `escalated` — heartbeat hit a missed deadline.
 - *Last update* — refresh on every status change. Heartbeat uses this to compute idle time.
