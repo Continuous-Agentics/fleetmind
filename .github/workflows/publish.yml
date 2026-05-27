@@ -1,11 +1,18 @@
 # publish.yml — Release-on-tag publish to GitHub Packages.
 #
 # Triggers:
-#   - push of any tag matching `vMAJOR.MINOR.PATCH` (strict semver)
-#   - manual `workflow_dispatch` from the GitHub Actions UI for reruns/debug
+#   - push of a STABLE tag `vMAJOR.MINOR.PATCH` → published to the `latest`
+#     dist-tag (the default `npm i` target). Release marked as a full release.
+#   - push of a PRERELEASE tag `vMAJOR.MINOR.PATCH-<suffix>` (e.g.
+#     `v0.8.0-beta.0`) → published to the `beta` dist-tag, so `npm i` does NOT
+#     pick it up; opt in with `npm i @continuous-agentics/fleetmind@beta` or, on
+#     a host, `fleetmind self-upgrade --to 0.8.0-beta.0`. Release marked as a
+#     prerelease. This is the "beta while testing" path.
+#   - manual `workflow_dispatch` from the GitHub Actions UI for reruns/debug.
 #
-# Strict semver regex on the tag prevents typo'd tags (e.g. `v0.5.2.` or
-# `v0.5-prefix`) from triggering an accidental publish.
+# Both tag patterns are anchored on strict MAJOR.MINOR.PATCH so typo'd tags
+# (e.g. `v0.5.2.` or `v0.5-prefix`) don't trigger an accidental publish; the
+# prerelease pattern additionally requires a `-<suffix>`.
 #
 # After a successful publish, the workflow also creates a GitHub Release for
 # the same tag with release notes extracted from CHANGELOG.md.
@@ -15,7 +22,8 @@ name: Publish to GitHub Packages
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+'      # stable      → latest
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'    # prerelease  → beta
   workflow_dispatch:
     inputs:
       confirm:
@@ -59,8 +67,25 @@ jobs:
       - name: Test
         run: npm test
 
+      # Route prerelease tags (v1.2.3-beta.0) to the `beta` dist-tag and stable
+      # tags to `latest`. On manual workflow_dispatch (ref is a branch, not a
+      # tag) default to `latest` — preserves the prior manual-rerun behavior.
+      - name: Determine dist-tag
+        id: disttag
+        run: |
+          set -euo pipefail
+          REF="${GITHUB_REF}"
+          TAG="${REF#refs/tags/}"
+          if [[ "$REF" == refs/tags/* && "$TAG" == *-* ]]; then
+            echo "npm_tag=beta"   >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm_tag=latest"   >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish
-        run: npm publish
+        run: npm publish --tag "${{ steps.disttag.outputs.npm_tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -99,3 +124,4 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: ${{ steps.changelog.outputs.notes }}
+          prerelease: ${{ steps.disttag.outputs.prerelease }}
