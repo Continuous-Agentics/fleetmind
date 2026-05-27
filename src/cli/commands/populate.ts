@@ -1,15 +1,20 @@
 /**
- * `fleetmind secrets populate` — push per-agent Slack + Anthropic credentials
- * from environment variables into AWS Secrets Manager.
+ * `fleetmind secrets populate` — push per-agent Slack + model-provider
+ * credentials from environment variables into AWS Secrets Manager.
  *
- * Secret naming follows the Terraform convention:
+ * Secret naming follows the Terraform convention (one secret per provider, so
+ * the runtime reader keeps consuming `/anthropic` unchanged and new providers
+ * are parallel secrets):
  *   ${fleet_name}/agents/${agent_id}/slack
- *   ${fleet_name}/agents/${agent_id}/anthropic
+ *   ${fleet_name}/agents/${agent_id}/<provider>      e.g. /anthropic, /openai
+ *   ${fleet_name}/agents/${agent_id}/hooks
  *
- * Anthropic key resolution order:
- *   1. ${<AGENT_ID_UPPER>_ANTHROPIC_API_KEY}  (per-agent)
- *   2. ${ANTHROPIC_API_KEY}                    (fleet-wide fallback)
- *   3. agent.anthropic.api_key placeholder from fleet.yaml
+ * FleetMind is provider-neutral: the set of providers an agent needs is derived
+ * from its `model` ("provider/model") plus any explicit `api_keys` entries.
+ * Per-provider key resolution order (provider P):
+ *   1. ${<AGENT_ID_UPPER>_<P_UPPER>_API_KEY}  (per-agent)
+ *   2. agent.api_keys[P] placeholder/literal from fleet.yaml
+ *   3. ${<P_UPPER>_API_KEY}                    (fleet-wide fallback)
  */
 
 import crypto from "node:crypto";
@@ -20,6 +25,11 @@ import yaml from "js-yaml";
 import chalk from "chalk";
 import { SecretsManagerClient, PutSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { log } from "../../utils/log.js";
+import {
+  providerApiKeyVar,
+  agentProviderApiKeyVar,
+  providersForAgent,
+} from "../../core/model-provider.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -42,21 +52,40 @@ interface AgentSlack {
   account_id?: string;
 }
 
-interface AgentAnthropicConfig {
-  api_key?: string;
+/** A raw channel entry from fleet.yaml (v2 `agents.list[].channels`). */
+interface RawChannel {
+  provider?: string;
+  bot_token?: string;
+  app_token?: string;
+  account_id?: string;
 }
 
 interface RawAgent {
   id?: string;
   name?: string;
-  slack?: AgentSlack;
-  anthropic?: AgentAnthropicConfig;
+  /** "provider/model" string; falls back to agents.defaults.model. */
+  model?: string;
+  channels?: RawChannel[];
+  /** Per-provider API-key placeholders/literals. */
+  api_keys?: Record<string, string>;
 }
 
 interface RawFleet {
   fleet?: { name?: string };
   delegation?: { aws_region?: string };
-  agents?: { list?: RawAgent[] };
+  agents?: { defaults?: { model?: string }; list?: RawAgent[] };
+}
+
+/** The Slack channel entry from a raw agent's v2 `channels` list, if any. */
+function rawAgentSlack(agent: RawAgent): AgentSlack | undefined {
+  const ch = agent.channels?.find((c) => c.provider === "slack");
+  if (!ch) return undefined;
+  return { bot_token: ch.bot_token, app_token: ch.app_token, account_id: ch.account_id };
+}
+
+/** The model providers a raw agent needs keys for (see providersForAgent). */
+function agentProviders(agent: RawAgent, defaultsModel: string | undefined): string[] {
+  return providersForAgent({ model: agent.model, apiKeys: agent.api_keys, defaultModel: defaultsModel });
 }
 
 // ── Env-file loader ───────────────────────────────────────────────────────────
@@ -186,7 +215,7 @@ export interface SlackResolution {
   missing: string[];
 }
 
-export interface AnthropicResolution {
+export interface ApiKeyResolution {
   ok: boolean;
   value?: string;
   missing: string[];
@@ -233,28 +262,35 @@ export function generateHooksToken(): string {
   return crypto.randomBytes(32).toString("hex");
 }
 
-export function resolveAnthropic(
+/**
+ * Resolve an agent's API key for a given model provider. See the file header
+ * for the resolution order. `apiKeys` is the agent's optional api_keys map.
+ */
+export function resolveProviderKey(
   agentId: string,
-  anthropicConfig: AgentAnthropicConfig | undefined,
+  provider: string,
+  apiKeys: Record<string, string> | undefined,
   env: Record<string, string>
-): AnthropicResolution {
+): ApiKeyResolution {
   // 1. Per-agent env var
-  const perAgentVar = `${agentId.toUpperCase()}_ANTHROPIC_API_KEY`;
+  const perAgentVar = agentProviderApiKeyVar(agentId, provider);
   if (env[perAgentVar]) {
     return { ok: true, value: env[perAgentVar], missing: [] };
   }
 
-  // 2. Agent's anthropic.api_key field (may itself be a placeholder)
-  if (anthropicConfig?.api_key) {
-    const resolved = resolveValue(anthropicConfig.api_key, env);
+  // 2. Agent's api_keys[provider] field (may itself be a placeholder)
+  const configured = apiKeys?.[provider];
+  if (configured) {
+    const resolved = resolveValue(configured, env);
     if (resolved) {
       return { ok: true, value: resolved, missing: [] };
     }
   }
 
   // 3. Fleet-wide fallback
-  if (env["ANTHROPIC_API_KEY"]) {
-    return { ok: true, value: env["ANTHROPIC_API_KEY"], missing: [] };
+  const fleetVar = providerApiKeyVar(provider);
+  if (env[fleetVar]) {
+    return { ok: true, value: env[fleetVar], missing: [] };
   }
 
   return {
@@ -314,22 +350,23 @@ async function resolveSlackInteractive(
 }
 
 /**
- * Resolve the Anthropic API key, prompting if not available from env.
+ * Resolve a provider API key, prompting if not available from env.
  * Re-prompts on empty input.
  */
-async function resolveAnthropicInteractive(
+async function resolveProviderKeyInteractive(
   agentId: string,
   agentName: string,
-  anthropicConfig: AgentAnthropicConfig | undefined,
+  provider: string,
+  apiKeys: Record<string, string> | undefined,
   env: Record<string, string>,
   promptFn: (prompt: string) => Promise<string>
-): Promise<AnthropicResolution> {
-  const res = resolveAnthropic(agentId, anthropicConfig, env);
+): Promise<ApiKeyResolution> {
+  const res = resolveProviderKey(agentId, provider, apiKeys, env);
   if (res.ok) return res;
 
   let value = "";
   while (!value) {
-    value = await promptFn(`${agentName} / ANTHROPIC_API_KEY: `);
+    value = await promptFn(`${agentName} / ${providerApiKeyVar(provider)}: `);
   }
   return { ok: true, value, missing: [] };
 }
@@ -338,12 +375,33 @@ async function resolveAnthropicInteractive(
 
 export interface PopulateResult {
   agentId: string;
-  secretType: "slack" | "anthropic" | "hooks";
+  /** "slack", "hooks", or a model provider name (e.g. "anthropic", "openai"). */
+  secretType: string;
   secretName: string;
   ok: boolean;
   pushed?: boolean;
   missing?: string[];
   keyCount?: number;
+}
+
+/** Push one secret (or record a dry-run) and append the result. Centralizes the
+ *  dry-run / PutSecretValue / result-record pattern shared by every secret. */
+async function emitSecret(
+  results: PopulateResult[],
+  client: SecretsManagerClient | null,
+  dryRun: boolean,
+  base: { agentId: string; secretType: string; secretName: string },
+  data: Record<string, string>
+): Promise<void> {
+  const keyCount = Object.keys(data).length;
+  if (dryRun) {
+    results.push({ ...base, ok: true, pushed: false, keyCount });
+    return;
+  }
+  await client!.send(
+    new PutSecretValueCommand({ SecretId: base.secretName, SecretString: JSON.stringify(data) })
+  );
+  results.push({ ...base, ok: true, pushed: true, keyCount });
 }
 
 export async function populateSecrets(options: PopulateOptions): Promise<PopulateResult[]> {
@@ -365,6 +423,10 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
 
   const fleetName = rawFleet?.fleet?.name;
   if (!fleetName) throw new Error("fleet.name is required in fleet.yaml");
+
+  // Fleet-wide default model — supplies the provider for agents that don't set
+  // their own `model`. (Raw YAML, so no schema default is applied here.)
+  const defaultsModel = rawFleet?.agents?.defaults?.model;
 
   const agents = rawFleet?.agents?.list ?? [];
   if (agents.length === 0) throw new Error("No agents found in fleet.yaml");
@@ -394,7 +456,7 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
     // Phase 1: resolve all secrets, prompting for any missing credentials
     interface ReadySecret {
       agentId: string;
-      secretType: "slack" | "anthropic" | "hooks";
+      secretType: string;
       secretName: string;
       data: Record<string, string>;
       keyCount: number;
@@ -407,7 +469,7 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
 
       // Slack
       const slackSecretName = `${fleetName}/agents/${agentId}/slack`;
-      const slackRes = await resolveSlackInteractive(agentId, agentName, agent.slack, env, promptFn);
+      const slackRes = await resolveSlackInteractive(agentId, agentName, rawAgentSlack(agent), env, promptFn);
       ready.push({
         agentId,
         secretType: "slack",
@@ -416,16 +478,17 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
         keyCount: Object.keys(slackRes.values).length,
       });
 
-      // Anthropic
-      const anthropicSecretName = `${fleetName}/agents/${agentId}/anthropic`;
-      const anthropicRes = await resolveAnthropicInteractive(agentId, agentName, agent.anthropic, env, promptFn);
-      ready.push({
-        agentId,
-        secretType: "anthropic",
-        secretName: anthropicSecretName,
-        data: { ANTHROPIC_API_KEY: anthropicRes.value! },
-        keyCount: 1,
-      });
+      // Model-provider keys — one secret per provider this agent uses.
+      for (const provider of agentProviders(agent, defaultsModel)) {
+        const res = await resolveProviderKeyInteractive(agentId, agentName, provider, agent.api_keys, env, promptFn);
+        ready.push({
+          agentId,
+          secretType: provider,
+          secretName: `${fleetName}/agents/${agentId}/${provider}`,
+          data: { [providerApiKeyVar(provider)]: res.value! },
+          keyCount: 1,
+        });
+      }
 
       // Hooks token — always auto-generated; never read from env
       ready.push({
@@ -506,106 +569,32 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
 
     // ── Slack ────────────────────────────────────────────────────────────────
     const slackSecretName = `${fleetName}/agents/${agentId}/slack`;
-    const slackRes = resolveSlack(agentId, agent.slack, env);
-
-    if (!slackRes.ok) {
-      results.push({
-        agentId,
-        secretType: "slack",
-        secretName: slackSecretName,
-        ok: false,
-        missing: slackRes.missing,
-      });
+    const slackRes = resolveSlack(agentId, rawAgentSlack(agent), env);
+    if (slackRes.ok) {
+      await emitSecret(results, client, options.dryRun,
+        { agentId, secretType: "slack", secretName: slackSecretName },
+        slackRes.values);
     } else {
-      if (options.dryRun) {
-        results.push({
-          agentId,
-          secretType: "slack",
-          secretName: slackSecretName,
-          ok: true,
-          pushed: false,
-          keyCount: Object.keys(slackRes.values).length,
-        });
-      } else {
-        await client!.send(new PutSecretValueCommand({
-          SecretId: slackSecretName,
-          SecretString: JSON.stringify(slackRes.values),
-        }));
-        results.push({
-          agentId,
-          secretType: "slack",
-          secretName: slackSecretName,
-          ok: true,
-          pushed: true,
-          keyCount: Object.keys(slackRes.values).length,
-        });
-      }
+      results.push({ agentId, secretType: "slack", secretName: slackSecretName, ok: false, missing: slackRes.missing });
     }
 
-    // ── Anthropic ────────────────────────────────────────────────────────────
-    const anthropicSecretName = `${fleetName}/agents/${agentId}/anthropic`;
-    const anthropicRes = resolveAnthropic(agentId, agent.anthropic, env);
-
-    if (!anthropicRes.ok) {
-      results.push({
-        agentId,
-        secretType: "anthropic",
-        secretName: anthropicSecretName,
-        ok: false,
-        missing: anthropicRes.missing,
-      });
-    } else {
-      if (options.dryRun) {
-        results.push({
-          agentId,
-          secretType: "anthropic",
-          secretName: anthropicSecretName,
-          ok: true,
-          pushed: false,
-          keyCount: 1,
-        });
+    // ── Model-provider keys — one secret per provider this agent uses ──────────
+    for (const provider of agentProviders(agent, defaultsModel)) {
+      const secretName = `${fleetName}/agents/${agentId}/${provider}`;
+      const res = resolveProviderKey(agentId, provider, agent.api_keys, env);
+      if (res.ok) {
+        await emitSecret(results, client, options.dryRun,
+          { agentId, secretType: provider, secretName },
+          { [providerApiKeyVar(provider)]: res.value! });
       } else {
-        await client!.send(new PutSecretValueCommand({
-          SecretId: anthropicSecretName,
-          SecretString: JSON.stringify({ ANTHROPIC_API_KEY: anthropicRes.value }),
-        }));
-        results.push({
-          agentId,
-          secretType: "anthropic",
-          secretName: anthropicSecretName,
-          ok: true,
-          pushed: true,
-          keyCount: 1,
-        });
+        results.push({ agentId, secretType: provider, secretName, ok: false, missing: res.missing });
       }
     }
 
     // ── Hooks token — always auto-generated; never read from env ────────────────
-    const hooksSecretName = `${fleetName}/agents/${agentId}/hooks`;
-    const hooksToken = generateHooksToken();
-    if (options.dryRun) {
-      results.push({
-        agentId,
-        secretType: "hooks",
-        secretName: hooksSecretName,
-        ok: true,
-        pushed: false,
-        keyCount: 1,
-      });
-    } else {
-      await client!.send(new PutSecretValueCommand({
-        SecretId: hooksSecretName,
-        SecretString: JSON.stringify({ HOOKS_TOKEN: hooksToken }),
-      }));
-      results.push({
-        agentId,
-        secretType: "hooks",
-        secretName: hooksSecretName,
-        ok: true,
-        pushed: true,
-        keyCount: 1,
-      });
-    }
+    await emitSecret(results, client, options.dryRun,
+      { agentId, secretType: "hooks", secretName: `${fleetName}/agents/${agentId}/hooks` },
+      { HOOKS_TOKEN: generateHooksToken() });
   }
 
   return results;

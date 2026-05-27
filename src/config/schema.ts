@@ -228,17 +228,26 @@ export const DelegationAgentSchema = z.object({
 });
 
 /**
- * Optional per-agent Anthropic config.
+ * Optional per-agent API keys, keyed by model provider.
  *
- * api_key may be a ${VAR} placeholder or a literal value.
- * Resolution order for `fleetmind secrets populate`:
- *   1. ${<AGENT_ID_UPPER>_ANTHROPIC_API_KEY} env var
- *   2. This field (resolved from env if it's a placeholder)
- *   3. Fleet-wide ${ANTHROPIC_API_KEY} env var
+ * FleetMind is provider-neutral: an agent's `model` is a "provider/model"
+ * string, and OpenClaw makes the actual call. This map lets an operator point a
+ * provider at a specific credential when the conventional env var isn't enough.
+ * Each value may be a ${VAR} placeholder or a literal.
+ *
+ * Resolution order for `fleetmind secrets populate` (per provider P used by the
+ * agent, derived from its model string):
+ *   1. ${<AGENT_ID_UPPER>_<P_UPPER>_API_KEY} env var
+ *   2. This map's `P` entry (resolved from env if it's a placeholder)
+ *   3. Fleet-wide ${<P_UPPER>_API_KEY} env var
+ *
+ * Example:
+ *   api_keys:
+ *     anthropic: ${ANTHROPIC_API_KEY}
+ *     openai: ${ACME_OPENAI_KEY}
  */
-export const AnthropicAgentSchema = z.object({
-  api_key: z.string().optional(),
-});
+export const ApiKeysSchema = z.record(z.string(), z.string());
+export type ApiKeys = z.infer<typeof ApiKeysSchema>;
 
 export const AgentSchema = z.object({
   id: AgentIdSchema,
@@ -257,8 +266,8 @@ export const AgentSchema = z.object({
    *  slices pushed to hosts omit channel credentials for security, so this may
    *  be empty on the bot side. */
   channels: z.array(ChannelSchema).default([]),
-  /** Optional per-agent Anthropic configuration. */
-  anthropic: AnthropicAgentSchema.optional(),
+  /** Optional per-agent API keys, keyed by model provider (anthropic, openai, …). */
+  api_keys: ApiKeysSchema.optional(),
   skills: z.array(SkillRefSchema).default([]),
   plugins: z.array(z.string()).optional(),
   agent_to_agent: AgentToAgentSchema.default({}),
@@ -522,7 +531,7 @@ export type DelegationFleetConfig = z.infer<typeof DelegationFleetSchema>;
 export type DelegationAgentConfig = z.infer<typeof DelegationAgentSchema>;
 export type SkillSource = z.infer<typeof SkillSourceSchema>;
 export type SkillRef = z.infer<typeof SkillRefSchema>;
-export type AnthropicAgentConfig = z.infer<typeof AnthropicAgentSchema>;
+export type ApiKeysConfig = z.infer<typeof ApiKeysSchema>;
 export type AgentConfig = z.infer<typeof AgentSchema>;
 export type AgentDefaults = z.infer<typeof AgentDefaultsSchema>;
 export type SkillsRepo = z.infer<typeof SkillsRepoSchema>;

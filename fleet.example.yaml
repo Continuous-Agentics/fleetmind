@@ -121,6 +121,11 @@ deploy:
       region: us-west-2
 
 # ── Agents ────────────────────────────────────────────────────────────────────
+# FleetMind is provider-neutral: `model` is a "provider/model" string and
+# OpenClaw makes the actual call. To use a different provider, just change the
+# model prefix (e.g. openai/gpt-4o, google/gemini-2.0-flash) — `fleetmind
+# secrets populate` then stages that provider's API key. Key resolution per
+# provider P: ${<AGENT>_<P>_API_KEY} → agent.api_keys[P] → ${<P>_API_KEY}.
 agents:
   defaults:
     model: anthropic/claude-sonnet-4-6
@@ -134,6 +139,11 @@ agents:
       description: "Orchestrator. Routes requests to specialist agents."
       orchestrator: true
       target: conductor-host
+      # Optional: point specific providers at specific credentials. Omit to use
+      # the ${ANTHROPIC_API_KEY} / ${OPENAI_API_KEY} env-var convention.
+      # api_keys:
+      #   anthropic: ${ANTHROPIC_API_KEY}
+      #   openai: ${ACME_OPENAI_KEY}
       persona:
         soul: |
           You are Conductor, an orchestrating AI that coordinates a fleet of specialists.

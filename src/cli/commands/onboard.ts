@@ -26,6 +26,7 @@ import { Writable } from "node:stream";
 import type { Command } from "commander";
 import { loadFleet } from "../../config/loader.js";
 import { slackChannel } from "../../core/channels.js";
+import { providersForAgent, providerApiKeyVar } from "../../core/model-provider.js";
 import { log } from "../../utils/log.js";
 import { generateManifests, discoverSlackBotUserIds, writeSlackChannelIds } from "./slack.js";
 import { storeGithubApp, createGithubApp } from "./github-app.js";
@@ -442,8 +443,8 @@ export async function runOnboard(
 
   // ── Step 9: Populate Secrets Manager ────────────────────────────────────────
   header("Step 9 / 12 — Populate Secrets Manager");
-  console.log("  Writes Slack tokens + Anthropic API key per agent.");
-  console.log("  Slack tokens from step 3 are used automatically; only Anthropic key is prompted.\n");
+  console.log("  Writes Slack tokens + model-provider API keys per agent.");
+  console.log("  Slack tokens from step 3 are used automatically; provider keys are prompted.\n");
 
   if (await confirm("  Populate secrets now?")) {
     for (const agent of agents) {
@@ -490,23 +491,31 @@ export async function runOnboard(
         log.ok("    Slack tokens written");
       }
 
-      // ── Anthropic API key ────────────────────────────────────────────────────
-      const anthropicSecretId = `${fleetName}/agents/${agent.id}/anthropic`;
-      const existingAnthropicRaw = await getSecret(anthropicSecretId, region);
-      const anthropicIsPlaceholder = !existingAnthropicRaw || existingAnthropicRaw.includes("REPLACE_ME");
+      // ── Model-provider API keys — one secret per provider the agent uses ──────
+      const providers = providersForAgent({
+        model: agent.model,
+        apiKeys: agent.api_keys,
+        defaultModel: fleet.agents.defaults.model,
+      });
+      for (const provider of providers) {
+        const keyVar = providerApiKeyVar(provider);                       // e.g. ANTHROPIC_API_KEY
+        const providerSecretId = `${fleetName}/agents/${agent.id}/${provider}`;
+        const existingRaw = await getSecret(providerSecretId, region);
+        const isPlaceholder = !existingRaw || existingRaw.includes("REPLACE_ME");
 
-      let writeAnthropicKey = anthropicIsPlaceholder;
-      if (!anthropicIsPlaceholder) {
-        writeAnthropicKey = await confirm("    Anthropic key already in SM. Override?", false);
-      }
-      if (writeAnthropicKey) {
-        const apiKey = await hiddenPrompt("    Anthropic API key (sk-ant-...): ");
-        if (apiKey.trim()) {
-          await putSecret(anthropicSecretId, { ANTHROPIC_API_KEY: apiKey.trim() }, region);
-          log.ok("    Anthropic key written");
+        let writeKey = isPlaceholder;
+        if (!isPlaceholder) {
+          writeKey = await confirm(`    ${provider} key already in SM. Override?`, false);
         }
-      } else {
-        log.ok("    Anthropic key unchanged");
+        if (writeKey) {
+          const apiKey = await hiddenPrompt(`    ${provider} API key (${keyVar}): `);
+          if (apiKey.trim()) {
+            await putSecret(providerSecretId, { [keyVar]: apiKey.trim() }, region);
+            log.ok(`    ${provider} key written`);
+          }
+        } else {
+          log.ok(`    ${provider} key unchanged`);
+        }
       }
     }
   }
