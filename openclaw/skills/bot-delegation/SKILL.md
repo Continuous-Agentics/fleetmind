@@ -172,7 +172,7 @@ for the full template.
 Minimum fields:
 - `task_id`, `created` (ISO timestamp), `deadline` (created + 10 min)
 - `status: pending`, `project`, `worker`
-- `thread`: the human requestor's planning thread permalink
+- `Source planning channel` + `Source planning thread`: where the delegation was discussed
 - `ledger_ddb_key`: `TASK#<task_id>`
 
 ### 5. Watch for worker events
