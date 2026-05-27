@@ -24,6 +24,7 @@ import {
 } from "@aws-sdk/client-s3";
 
 import type { ManifestFile, DeployManifest } from "./push-fleet.js";
+import { serviceManagerFor } from "../../deploy/service.js";
 import { log } from "../../utils/log.js";
 import { applyWorkspacePatches } from "../../runtime/patch-engine.js";
 
@@ -873,19 +874,12 @@ async function defaultDownloadFromS3(
 }
 
 function defaultRestartGateway(agentId: string): void {
-  execFileSync("sudo", ["systemctl", "restart", `openclaw-${agentId}`], { stdio: "inherit" });
-  // Reset and restart the NATS subscriber service so it recovers from any
-  // prior failed/throttled state. The path unit alone is not sufficient on
-  // existing instances where the service has entered a failed state with an
-  // exhausted restart counter (systemd will refuse to retry without a reset).
-  try {
-    execFileSync("sudo", ["systemctl", "reset-failed", `fleetmind-nats-${agentId}`], { stdio: "inherit" });
-    execFileSync("sudo", ["systemctl", "restart", `fleetmind-nats-${agentId}`], { stdio: "inherit" });
-  } catch {
-    // Service may not exist on all hosts (e.g. PM bots without a NATS unit).
-    // Log but don't fail the restart.
-    process.stderr.write(`[pull-self] fleetmind-nats-${agentId} not found or failed to restart — skipping\n`);
-  }
+  // Host-side service management is abstracted behind ServiceManager. systemd is
+  // the default (EC2); the launchd selection by target.service_manager arrives
+  // with the macOS support.
+  const sm = serviceManagerFor("systemd");
+  sm.restartGateway(agentId);
+  sm.restartNatsSubscriber(agentId);
 }
 
 // ── Core logic ────────────────────────────────────────────────────────────────
