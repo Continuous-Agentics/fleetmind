@@ -74,10 +74,25 @@ npm install -g @continuous-agentics/fleetmind
 
 ## Quick Start
 
+### AWS (one EC2 per agent)
+
 fleet bring-up happens from a [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) clone, not from this repo. Two paths:
 
 - *Guided:* `fleetmind onboard` (interactive wizard — [README § Guided onboarding](https://github.com/Continuous-Agentics/fleetmind-template#guided-onboarding-recommended))
 - *Manual:* [`docs/QUICKSTART.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/QUICKSTART.md) — ~20–30 min, narrative walkthrough
+
+### Local (Mac mini / single box, no cloud)
+
+Agents that share a `local` target run in **one** OpenClaw gateway on that box (OpenClaw's native multi-agent model — each agent still has its own workspace, skills, Slack app, model, and persona). No AWS, no Terraform:
+
+```bash
+npm install -g @continuous-agentics/fleetmind openclaw   # openclaw needs Node 24 (or 22.19+)
+fleetmind init                                            # scaffolds fleet.yaml — set a target to `provider: local`
+fleetmind secrets set CONDUCTOR_BOT_TOKEN xoxb-...        # + app token + ANTHROPIC_API_KEY, per agent/provider
+fleetmind up                                              # render → ~/.openclaw, secrets → ~/.openclaw/.env, start the gateway
+```
+
+`fleetmind up` renders the host's `~/.openclaw/openclaw.json`, writes resolved secrets to `~/.openclaw/.env` (chmod 600; OpenClaw substitutes them), provisions each agent's workspace, then delegates the daemon to `openclaw onboard --install-daemon`. Use `--no-daemon` to stage everything and start the gateway yourself, or `--dry-run` to preview.
 
 This repo ships the fleetmind CLI itself — see [CLI Reference](#cli-reference) below for the commands the template drives.
 
@@ -141,9 +156,10 @@ See `fleet.example.yaml` for the full annotated schema.
 | Command | Description |
 |---|---|
 | `fleetmind init` | Scaffold a new `fleet.yaml` |
+| `fleetmind up [fleet] [--no-daemon] [--dry-run]` | **Local:** render → `~/.openclaw`, secrets → `~/.openclaw/.env`, start the OpenClaw gateway (one gateway hosts all agents on a `local` target) |
 | `fleetmind render [fleet]` | Render `openclaw.json` + tfvars locally to `./rendered/` |
 | `fleetmind deploy [fleet]` | Render workspaces locally (`./rendered/`) — does **not** push to EC2 |
-| `fleetmind push fleet [--agent <id>] [--restart]` | Render → upload to S3 → trigger `pull-self` on each bot (main deploy command) |
+| `fleetmind push fleet [--agent <id>] [--restart]` | **AWS:** render → upload to S3 → trigger `pull-self` on each bot (main deploy command) |
 | `fleetmind pull-self [--apply] [--restart]` | Bot-side: pull latest workspace from S3 and apply (runs on EC2) |
 | `fleetmind diff [fleet]` | Show what `deploy` would change without applying |
 | `fleetmind watch [fleet]` | GitOps: auto-push skill updates from the skills repo |

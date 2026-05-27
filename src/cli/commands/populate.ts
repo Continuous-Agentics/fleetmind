@@ -30,6 +30,8 @@ import {
   agentProviderApiKeyVar,
   providersForAgent,
 } from "../../core/model-provider.js";
+import { slackChannel } from "../../core/channels.js";
+import type { Fleet } from "../../core/model.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -297,6 +299,72 @@ export function resolveProviderKey(
     ok: false,
     missing: [perAgentVar],
   };
+}
+
+// ── Local host env materialization ───────────────────────────────────────────
+
+export interface HostEnvResult {
+  /** Resolved VAR=value pairs to write to the host's ~/.openclaw/.env. */
+  vars: Record<string, string>;
+  /** Env var names that could not be resolved (no value in env / local store). */
+  missing: string[];
+}
+
+/**
+ * Resolve every secret the single gateway on `targetId` needs, for a local
+ * deploy (`fleetmind up`). Unlike `populateSecrets` (which pushes to AWS
+ * Secrets Manager), this returns the values to write into `~/.openclaw/.env`,
+ * which OpenClaw loads and substitutes into its config.
+ *
+ * For each agent on the host it collects:
+ *  - Slack tokens — by the placeholder var name used in fleet.yaml (e.g.
+ *    CONDUCTOR_BOT_TOKEN), since the rendered openclaw.json keeps `${VAR}` and
+ *    OpenClaw resolves it from the env file.
+ *  - Model-provider keys — `<PROVIDER>_API_KEY` (e.g. ANTHROPIC_API_KEY), which
+ *    OpenClaw reads from the environment directly.
+ *
+ * The gateway env is process-global, so a var is resolved once (first agent
+ * wins); model keys are therefore shared across co-located agents.
+ *
+ * Expects `fleet` loaded WITHOUT env expansion so Slack placeholders are intact
+ * (see loadFleet `{ expandEnv: false }`).
+ */
+export function materializeHostEnv(
+  fleet: Fleet,
+  targetId: string,
+  env: Record<string, string>
+): HostEnvResult {
+  const vars: Record<string, string> = {};
+  const missing: string[] = [];
+  const hostAgents = fleet.agents.list.filter((a) => fleet.targetForAgent(a).id === targetId);
+
+  for (const agent of hostAgents) {
+    // Slack tokens — keyed by the ${VAR} placeholder name in fleet.yaml.
+    const slack = slackChannel(agent);
+    for (const raw of [slack?.bot_token, slack?.app_token]) {
+      const varName = extractPlaceholder(raw);
+      if (!varName || vars[varName]) continue; // literal/absent, or already set
+      const val = env[varName];
+      if (val) vars[varName] = val;
+      else missing.push(varName);
+    }
+
+    // Model-provider keys — <PROVIDER>_API_KEY, read by OpenClaw from env.
+    const providers = providersForAgent({
+      model: agent.model,
+      apiKeys: agent.api_keys,
+      defaultModel: fleet.agents.defaults.model,
+    });
+    for (const provider of providers) {
+      const varName = providerApiKeyVar(provider);
+      if (vars[varName]) continue;
+      const res = resolveProviderKey(agent.id, provider, agent.api_keys, env);
+      if (res.ok && res.value) vars[varName] = res.value;
+      else missing.push(varName);
+    }
+  }
+
+  return { vars, missing: [...new Set(missing)] };
 }
 
 // ── Interactive resolution helpers ──────────────────────────────────────────

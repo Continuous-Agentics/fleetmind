@@ -25,12 +25,15 @@ import {
   resolveValue,
   resolveSlack,
   resolveProviderKey,
+  materializeHostEnv,
   generateHooksToken,
   loadEnvFile,
   redact,
   populateSecrets,
   type PopulateOptions,
 } from "../cli/commands/populate.js";
+import { normalizeFleet } from "../core/model.js";
+import { FleetSchema } from "../config/schema.js";
 
 // ── extractPlaceholder ────────────────────────────────────────────────────────
 
@@ -947,5 +950,62 @@ agents:
     } finally {
       restoreVars(saved);
     }
+  });
+});
+
+// ── materializeHostEnv (local ~/.openclaw/.env) ──────────────────────────────
+
+describe("materializeHostEnv", () => {
+  // Two agents on one local host; conductor inherits the anthropic default,
+  // pixel overrides to openai. Built directly (no env expansion) so the slack
+  // ${VAR} placeholders survive — the shape `fleetmind up` loads.
+  function hostFleet() {
+    return normalizeFleet(
+      FleetSchema.parse({
+        fleet: { name: "demo" },
+        targets: {
+          box: { provider: "local", os: "macos", service_manager: "launchd", workspace_base: "/Users/oc/.openclaw" },
+        },
+        agents: {
+          defaults: { target: "box", model: "anthropic/claude-sonnet-4-6" },
+          list: [
+            {
+              id: "conductor", name: "C",
+              channels: [{ provider: "slack", account_id: "conductor", bot_token: "${CONDUCTOR_BOT_TOKEN}", app_token: "${CONDUCTOR_APP_TOKEN}" }],
+            },
+            {
+              id: "pixel", name: "P", model: "openai/gpt-4o",
+              channels: [{ provider: "slack", account_id: "pixel", bot_token: "${PIXEL_BOT_TOKEN}", app_token: "${PIXEL_APP_TOKEN}" }],
+            },
+          ],
+        },
+      })
+    );
+  }
+
+  test("resolves slack placeholders + per-provider keys for the host's agents", () => {
+    const env = {
+      CONDUCTOR_BOT_TOKEN: "xoxb-c", CONDUCTOR_APP_TOKEN: "xapp-c",
+      PIXEL_BOT_TOKEN: "xoxb-p", PIXEL_APP_TOKEN: "xapp-p",
+      ANTHROPIC_API_KEY: "sk-ant", OPENAI_API_KEY: "sk-oai",
+    };
+    const { vars, missing } = materializeHostEnv(hostFleet(), "box", env);
+    assert.deepEqual(missing, []);
+    // Slack tokens keyed by their fleet.yaml placeholder name…
+    assert.equal(vars["CONDUCTOR_BOT_TOKEN"], "xoxb-c");
+    assert.equal(vars["PIXEL_APP_TOKEN"], "xapp-p");
+    // …and one model key per provider used on the host.
+    assert.equal(vars["ANTHROPIC_API_KEY"], "sk-ant"); // conductor (default model)
+    assert.equal(vars["OPENAI_API_KEY"], "sk-oai");    // pixel (override)
+  });
+
+  test("reports unresolved vars as missing", () => {
+    // Slack present, but no provider keys in env → both providers missing.
+    const { missing } = materializeHostEnv(hostFleet(), "box", {
+      CONDUCTOR_BOT_TOKEN: "x", CONDUCTOR_APP_TOKEN: "y",
+      PIXEL_BOT_TOKEN: "z", PIXEL_APP_TOKEN: "w",
+    });
+    assert.ok(missing.includes("ANTHROPIC_API_KEY"));
+    assert.ok(missing.includes("OPENAI_API_KEY"));
   });
 });

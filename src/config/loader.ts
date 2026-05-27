@@ -163,7 +163,10 @@ function expandEnv(obj: unknown): unknown {
   return obj;
 }
 
-export function loadFleet(filePath: string): Fleet {
+export function loadFleet(
+  filePath: string,
+  opts: { expandEnv?: boolean } = {}
+): Fleet {
   const abs = path.resolve(filePath);
   if (!fs.existsSync(abs)) {
     throw new Error(`Fleet file not found: ${abs}`);
@@ -171,7 +174,10 @@ export function loadFleet(filePath: string): Fleet {
 
   const raw = fs.readFileSync(abs, "utf-8");
   const parsed = yaml.load(raw);
-  const expanded = expandEnv(parsed);
+  // `expandEnv: false` keeps ${VAR} placeholders intact — used by `fleetmind up`
+  // so secrets stay as references in the rendered openclaw.json (resolved by
+  // OpenClaw from ~/.openclaw/.env) instead of being baked into the config file.
+  const expanded = opts.expandEnv === false ? parsed : expandEnv(parsed);
 
   const result = FleetSchema.safeParse(expanded);
   if (!result.success) {
