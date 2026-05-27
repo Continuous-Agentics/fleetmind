@@ -24,6 +24,9 @@ import {
 } from "@aws-sdk/client-s3";
 
 import type { ManifestFile, DeployManifest } from "./push-fleet.js";
+import { loadFleet } from "../../config/loader.js";
+import { agentArtifactKeys } from "../../deploy/plan.js";
+import { artifactStoreFor } from "../../deploy/factory.js";
 import { serviceManagerFor } from "../../deploy/service.js";
 import { log } from "../../utils/log.js";
 import { applyWorkspacePatches } from "../../runtime/patch-engine.js";
@@ -895,6 +898,12 @@ export interface PullSelfOptions {
   showDiffsFull?: boolean;
   /** Override agent env (for testing). */
   agentEnvOverride?: AgentEnv;
+  /** Local/ssh path: the agent id to apply, paired with `fleet`. When set,
+   *  pull-self loads `fleet` to learn its target instead of /etc/fleetmind. */
+  agent?: string;
+  /** Local/ssh path: fleet config to load for the agent's target (provider,
+   *  service manager, workspace base). Selects the artifact store + restart. */
+  fleet?: string;
 }
 
 /**
@@ -910,12 +919,46 @@ export async function runPullSelf(
   const applyChangesImpl = deps.applyChanges ?? applyDiff;
   const restartGateway = deps.restartGateway ?? defaultRestartGateway;
 
-  // Step 1: Read agent identity
-  const env = opts.agentEnvOverride ?? readEnv();
-  const { fleetName, agentId, workspaceBase } = env;
   const region = opts.region;
-  const bucket = `${fleetName}-ledger`;
-  const workspaceDir = path.join(workspaceBase, agentId);
+
+  // Step 1: Resolve identity, the artifact source, and how to restart — by
+  // deploy target. New path: --fleet/--agent (local/ssh) loads the fleet to
+  // learn its target. Legacy path: /etc/fleetmind agent.env + the S3 ledger.
+  let fleetName: string;
+  let agentId: string;
+  let workspaceDir: string;
+  let fetchArtifact: (key: string) => Promise<Buffer>;
+  let restart: () => void;
+
+  if (opts.fleet) {
+    if (!opts.agent) throw new Error("pull-self --fleet requires --agent <id>");
+    const fleet = loadFleet(opts.fleet);
+    const agent = fleet.getAgent(opts.agent);
+    if (!agent) throw new Error(`Agent "${opts.agent}" not found in ${opts.fleet}`);
+    const target = fleet.targetForAgent(agent);
+    fleetName = fleet.fleet.name;
+    agentId = opts.agent;
+    workspaceDir = path.join(target.workspace_base, agentId);
+    const store = artifactStoreFor(fleet, { bucket: `${fleetName}-ledger`, region });
+    fetchArtifact = async (key: string) => {
+      const buf = await store.get(key);
+      if (!buf) throw new Error(`Artifact not found in store: ${key}`);
+      return buf;
+    };
+    const sm = serviceManagerFor(target.service_manager);
+    restart = () => {
+      sm.restartGateway(agentId);
+      sm.restartNatsSubscriber(agentId);
+    };
+  } else {
+    const env = opts.agentEnvOverride ?? readEnv();
+    fleetName = env.fleetName;
+    agentId = env.agentId;
+    workspaceDir = path.join(env.workspaceBase, agentId);
+    const bucket = `${fleetName}-ledger`;
+    fetchArtifact = (key: string) => downloadFromS3(bucket, key, region);
+    restart = () => restartGateway(agentId);
+  }
 
   log.info(`\nfleetmind pull-self — ${agentId} (fleet: ${fleetName})`);
 
@@ -924,16 +967,16 @@ export async function runPullSelf(
   const currentFiles = computeCurrentManifest(workspaceDir);
   log.dim(`  ${currentFiles.length} files in current workspace`);
 
-  // Step 3: Download incoming manifest from S3
-  log.step("Fetching incoming manifest from S3...");
-  const manifestKey = `deploy-staging/${agentId}.manifest.json`;
+  // Step 3: Fetch the incoming manifest from the artifact store
+  log.step("Fetching incoming manifest...");
+  const keys = agentArtifactKeys(agentId);
   let incomingManifest: DeployManifest;
   try {
-    const manifestBuf = await downloadFromS3(bucket, manifestKey, region);
+    const manifestBuf = await fetchArtifact(keys.manifest);
     incomingManifest = JSON.parse(manifestBuf.toString("utf-8")) as DeployManifest;
   } catch (err) {
     throw new Error(
-      `Could not fetch manifest from s3://${bucket}/${manifestKey}: ${String(err)}\n` +
+      `Could not fetch manifest (${keys.manifest}): ${String(err)}\n` +
       "Has `fleetmind push fleet` been run for this agent?"
     );
   }
@@ -960,8 +1003,7 @@ export async function runPullSelf(
 
   // Step 6: Download tarball
   log.step("Downloading tarball...");
-  const tarballKey = `deploy-staging/${agentId}.tar.gz`;
-  const tarballBuf = await downloadFromS3(bucket, tarballKey, region);
+  const tarballBuf = await fetchArtifact(keys.tarball);
   const tmpBase = os.tmpdir();
   const tarballPath = path.join(tmpBase, `${agentId}.tar.gz`);
   fs.writeFileSync(tarballPath, tarballBuf);
@@ -1011,11 +1053,11 @@ export async function runPullSelf(
 
   // Step 11: Restart if requested
   if (opts.restart) {
-    log.step(`Restarting openclaw-${agentId}...`);
-    restartGateway(agentId);
+    log.step(`Restarting ${agentId} gateway...`);
+    restart();
     log.ok(`  Gateway restarted`);
   } else {
-    log.dim(`  Tip: run \`sudo systemctl restart openclaw-${agentId}\` to apply the new config.`);
+    log.dim(`  Tip: re-run with --restart to apply the new config to the running gateway.`);
   }
 
   return { changed: true, applied: true, diff };
@@ -1028,6 +1070,8 @@ export function registerPullSelf(program: Command): void {
     .command("pull-self")
     .description("Fetch and apply latest workspace update from S3 (bot-side)")
     .option("--region <region>", "AWS region", "us-west-2")
+    .option("--agent <id>", "Agent id to apply (local/ssh hosts; paired with --fleet)")
+    .option("--fleet <path>", "Fleet config to load for the agent's target (local/ssh hosts)")
     .option("--dry-run", "Fetch + diff, but do not extract or apply", false)
     .option("--apply", "Apply the diff to the live workspace", false)
     .option("--restart", "Restart gateway after apply", false)
@@ -1059,6 +1103,8 @@ Examples:
 `)
     .action(async (opts: {
       region: string;
+      agent?: string;
+      fleet?: string;
       dryRun: boolean;
       apply: boolean;
       restart: boolean;
@@ -1070,6 +1116,8 @@ Examples:
         const showDiffsFilter = typeof opts.showDiffs === 'string' ? opts.showDiffs : undefined;
         const { changed, applied } = await runPullSelf({
           region: opts.region,
+          agent: opts.agent,
+          fleet: opts.fleet,
           dryRun: opts.dryRun,
           apply: opts.apply,
           restart: opts.restart,
