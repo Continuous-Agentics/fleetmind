@@ -288,13 +288,24 @@ export function renderAgentOpenClawJson(
  * "one gateway, N agents" topology — it does NOT match the gg-sandbox deploy
  * (one gateway per agent EC2). Kept for backward compatibility only.
  */
-export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
+/** The agents whose runtime target resolves to `targetId` — i.e. the agents
+ *  that run on that one host. Used to render a single gateway's config. */
+export function agentsForTarget(fleet: Fleet, targetId: string): AgentConfig[] {
+  return fleet.agents.list.filter((a) => fleet.targetForAgent(a).id === targetId);
+}
+
+/** Render a complete openclaw.json for one gateway hosting `hostAgents`.
+ *  `renderOpenClawJson` passes the whole fleet (single-gateway / dev); a
+ *  per-host deploy passes just the agents on that host. Only the listed agents'
+ *  Slack accounts + tokens land in the config, so each host's gateway sees only
+ *  its own credentials. */
+function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): Record<string, unknown> {
   const { agents, openclaw } = fleet;
   const defaults = agents.defaults;
   const oc = openclaw;
 
   // Agent list
-  const agentList = agents.list.map((agent) => {
+  const agentList = hostAgents.map((agent) => {
     const model = agent.model ?? defaults.model;
     const agentWorkspaceBase = fleet.targetForAgent(agent).workspace_base;
     const workspace = `${agentWorkspaceBase}/${agent.id}`;
@@ -310,7 +321,7 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
   });
 
   // Bindings: one per agent, matched on Slack accountId
-  const bindings = agents.list.map((agent) => ({
+  const bindings = hostAgents.map((agent) => ({
     agentId: agent.id,
     match: {
       channel: "slack",
@@ -320,7 +331,7 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
 
   // Slack accounts (no per-account groupPolicy; lives at top level as "allowlist")
   const slackAccounts: Record<string, unknown> = {};
-  for (const agent of agents.list) {
+  for (const agent of hostAgents) {
     const slack = slackChannel(agent);
     slackAccounts[slack?.account_id ?? agent.id] = {
       enabled: true,
@@ -333,7 +344,7 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
   // agentToAgent allow list — array of target agent-id strings (per OpenClaw config schema).
   // Deduplicated and sorted for stable output.
   const a2aAllowSet = new Set<string>();
-  for (const agent of agents.list) {
+  for (const agent of hostAgents) {
     for (const targetId of agent.agent_to_agent.can_send_to) {
       a2aAllowSet.add(targetId);
     }
@@ -342,7 +353,7 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
 
   // Collect all plugins across agents
   const allPlugins = new Set<string>();
-  for (const agent of agents.list) {
+  for (const agent of hostAgents) {
     const plugins = agent.plugins ?? defaults.plugins;
     for (const p of plugins) allPlugins.add(p);
   }
@@ -422,6 +433,19 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
       restart: true,
     },
   };
+}
+
+/** Full-fleet openclaw.json (every agent in one gateway). Used by `deploy`
+ *  (local ./rendered output) and dev. */
+export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
+  return renderOpenClawJsonForAgents(fleet, fleet.agents.list);
+}
+
+/** openclaw.json for the single gateway on one host: exactly the agents whose
+ *  `target` resolves to `targetId`. A one-agent host yields the same shape as
+ *  the legacy per-agent slice; an n-agent host yields one multi-agent gateway. */
+export function renderHostOpenClawJson(fleet: Fleet, targetId: string): Record<string, unknown> {
+  return renderOpenClawJsonForAgents(fleet, agentsForTarget(fleet, targetId));
 }
 
 export function renderTerraformVars(fleet: Fleet): string {
