@@ -50,7 +50,15 @@ import {
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { loadFleet } from "../../config/loader.js";
 import { provisionFleet } from "../../runtime/provisioner.js";
-import { writeOutputs, resolveOpenClawBaseDir } from "../../runtime/renderer.js";
+import { writeOutputs } from "../../runtime/renderer.js";
+import {
+  buildDeployPlan,
+  agentArtifactKeys,
+  buildPullSelfCommand,
+  buildUpgradeCommand,
+  DEPLOY_LOCK_KEY,
+  HISTORY_MAX,
+} from "../../deploy/plan.js";
 import { log } from "../../utils/log.js";
 
 // ── AWS client helpers ───────────────────────────────────────────────────────
@@ -322,7 +330,7 @@ async function defaultSendSsmCommand(
 
 // ── Fleet-wide S3 lock ───────────────────────────────────────────────────────
 
-const LOCK_KEY = "deploy-staging/lock.json";
+const LOCK_KEY = DEPLOY_LOCK_KEY;
 const LOCK_TTL_SECONDS = 300;
 
 interface LockInfo {
@@ -387,8 +395,6 @@ async function releaseLock(bucket: string, region: string): Promise<void> {
 
 // ── History management ────────────────────────────────────────────────────────
 
-const HISTORY_MAX = 5;
-
 /**
  * Before uploading a new tarball, copy the current one to history.
  * History key: deploy-staging/history/<agent>/<iso-timestamp>-<sha256prefix>.tar.gz
@@ -400,31 +406,30 @@ async function archiveToHistory(
   region: string
 ): Promise<void> {
   const s3 = new S3Client({ region });
-  const src = `deploy-staging/${agentId}.tar.gz`;
+  const keys = agentArtifactKeys(agentId);
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const dst = `deploy-staging/history/${agentId}/${ts}-${currentSha256.slice(0, 8)}.tar.gz`;
+  const dst = `${keys.historyPrefix}${ts}-${currentSha256.slice(0, 8)}.tar.gz`;
 
   try {
     // Copy existing tarball to history
     await s3.send(new CopyObjectCommand({
       Bucket: bucket,
-      CopySource: `${bucket}/${src}`,
+      CopySource: `${bucket}/${keys.tarball}`,
       Key: dst,
     }));
 
     // Also copy the manifest
-    const manifestSrc = `deploy-staging/${agentId}.manifest.json`;
     const manifestDst = dst.replace('.tar.gz', '.manifest.json');
     await s3.send(new CopyObjectCommand({
       Bucket: bucket,
-      CopySource: `${bucket}/${manifestSrc}`,
+      CopySource: `${bucket}/${keys.manifest}`,
       Key: manifestDst,
     }));
 
     // Prune old history entries (keep last HISTORY_MAX)
     const list = await s3.send(new ListObjectsV2Command({
       Bucket: bucket,
-      Prefix: `deploy-staging/history/${agentId}/`,
+      Prefix: keys.historyPrefix,
     }));
     const tarballs = (list.Contents ?? [])
       .filter(o => o.Key?.endsWith('.tar.gz'))
@@ -453,7 +458,7 @@ export async function listHistory(
   const s3 = new S3Client({ region });
   const list = await s3.send(new ListObjectsV2Command({
     Bucket: bucket,
-    Prefix: `deploy-staging/history/${agentId}/`,
+    Prefix: agentArtifactKeys(agentId).historyPrefix,
   }));
   return (list.Contents ?? [])
     .filter(o => o.Key?.endsWith('.tar.gz'))
@@ -517,7 +522,6 @@ export async function runPushFleet(
   const fleetName = fleet.fleet.name;
   const localBase = opts.localBase ?? process.cwd();
   const region = opts.region;
-  const bucket = `${fleetName}-ledger`;
   const version = opts.fleetmindVersion ?? resolveFleetmindVersion();
   const tmpBase = os.tmpdir();
 
@@ -525,6 +529,10 @@ export async function runPushFleet(
   const targetIds = opts.agents?.length
     ? opts.agents
     : fleet.agents.list.map((a) => a.id);
+
+  // Plan the deploy: bucket, per-agent artifact keys, and local input paths.
+  const plan = buildDeployPlan(fleet, { region, version, localBase, agentIds: targetIds });
+  const bucket = plan.bucket;
 
   // Acquire fleet-wide lock (prevents concurrent pushes racing on S3)
   if (!opts.noLock && !opts.dryRun) {
@@ -560,18 +568,18 @@ export async function runPushFleet(
       }
       log.dim(`  ← restoring ${entry.key.split('/').pop()}`);
       const s3 = new S3Client({ region });
+      const keys = agentArtifactKeys(agentId);
       // Promote history tarball to current
-      await s3.send(new CopyObjectCommand({ Bucket: bucket, CopySource: `${bucket}/${entry.key}`, Key: `deploy-staging/${agentId}.tar.gz` }));
+      await s3.send(new CopyObjectCommand({ Bucket: bucket, CopySource: `${bucket}/${entry.key}`, Key: keys.tarball }));
       if (entry.manifest) {
-        await s3.send(new CopyObjectCommand({ Bucket: bucket, CopySource: `${bucket}/${entry.manifest}`, Key: `deploy-staging/${agentId}.manifest.json` }));
+        await s3.send(new CopyObjectCommand({ Bucket: bucket, CopySource: `${bucket}/${entry.manifest}`, Key: keys.manifest }));
       }
       log.ok(`  ${agentId}: history entry ${n} promoted to current`);
 
       if (!opts.noApply) {
         const instanceId = await lookupInstance(fleetName, agentId, region);
         if (instanceId) {
-          const restartFlag = opts.restart ? " --restart" : "";
-          const cmd = `sudo -u ec2-user fleetmind pull-self --apply${restartFlag} --region ${region}`;
+          const cmd = buildPullSelfCommand({ restart: opts.restart, region });
           const cmdId = await sendSsmCommand(instanceId, [cmd], region);
           log.ok(`  ${agentId}: rollback SSM command sent → ${cmdId}`);
           results.push({ agent_id: agentId, status: "pushed", ssm_command_id: cmdId });
@@ -601,19 +609,14 @@ export async function runPushFleet(
 
     log.step(`Packaging ${agent.emoji} ${agent.name} (${agentId})...`);
 
-    const workspaceDir = path.join(localBase, "rendered", "workspaces", agentId);
-    // Per-agent openclaw.json (rendered by writeOutputs). Derive the base dir
-    // from fleet.outputs.openclaw_json so fleets with custom output paths (e.g.
-    // ./rendered/openclaw-<fleet>.json for parallel-fleet deploys) are honored.
-    // Previously hardcoded to ./rendered/openclaw/<agent>/openclaw.json which
-    // silently broke push for any fleet not using the default output path —
-    // tarballs went up without openclaw.json, CondPathExists never satisfied,
-    // gateway never started on first deploy.
-    const ocBaseDir = resolveOpenClawBaseDir(fleet.outputs.openclaw_json, localBase);
-    const ocJsonPath = path.join(ocBaseDir, agentId, "openclaw.json");
+    // Per-agent plan: rendered workspace dir + openclaw.json path (the latter
+    // derived from fleet.outputs.openclaw_json so fleets with custom output
+    // paths are honored) and the artifact-store keys.
+    const agentPlan = plan.agents.find((a) => a.agentId === agentId)!;
+    const keys = agentPlan.keys;
 
     // Build staging directory (workspace files + .openclaw/openclaw.json)
-    const stagingDir = buildStagingDir(agentId, workspaceDir, ocJsonPath, tmpBase);
+    const stagingDir = buildStagingDir(agentId, agentPlan.workspaceDir, agentPlan.ocJsonPath, tmpBase);
 
     // Ship cron/jobs.json for orchestrator (PM) agents so sweep jobs land at
     // $WORKSPACE_DIR/.openclaw/cron/jobs.json and are hot-reloaded by the gateway.
@@ -641,34 +644,29 @@ export async function runPushFleet(
     }
 
     // Create tarball
-    const tarballFilename = `${agentId}.tar.gz`;
-    const tarballPath = path.join(tmpBase, tarballFilename);
+    const tarballPath = path.join(tmpBase, keys.tarballFilename);
     const { sha256: tarballHash, sizeBytes: tarballSize } = await createTarball(stagingDir, tarballPath);
-    log.info(`    tarball: ${tarballFilename} (${formatBytes(tarballSize)}, sha256=${tarballHash.slice(0, 12)}...)`);
+    log.info(`    tarball: ${keys.tarballFilename} (${formatBytes(tarballSize)}, sha256=${tarballHash.slice(0, 12)}...)`);
 
     // Build manifest
     const manifest = buildManifest(agentId, fleetName, version, files, {
-      filename: tarballFilename,
+      filename: keys.tarballFilename,
       sha256: tarballHash,
       sizeBytes: tarballSize,
     });
-
-    // Upload tarball + manifest (always, unless dry-run which was handled above)
-    const tarballKey = `deploy-staging/${tarballFilename}`;
 
     // Archive current tarball to history before overwriting
     if (!opts.dryRun) {
       await archiveToHistoryFn(bucket, agentId, tarballHash, region);
     }
 
-    log.step(`    uploading s3://${bucket}/${tarballKey}...`);
+    log.step(`    uploading s3://${bucket}/${keys.tarball}...`);
     const tarballBuf = fs.readFileSync(tarballPath);
-    await uploadToS3(bucket, tarballKey, tarballBuf, region);
+    await uploadToS3(bucket, keys.tarball, tarballBuf, region);
 
-    const manifestKey = `deploy-staging/${agentId}.manifest.json`;
-    log.step(`    uploading s3://${bucket}/${manifestKey}...`);
+    log.step(`    uploading s3://${bucket}/${keys.manifest}...`);
     const manifestBuf = Buffer.from(JSON.stringify(manifest, null, 2), "utf-8");
-    await uploadToS3(bucket, manifestKey, manifestBuf, region);
+    await uploadToS3(bucket, keys.manifest, manifestBuf, region);
 
     log.ok(`  ${agentId}: artifacts uploaded`);
 
@@ -681,19 +679,13 @@ export async function runPushFleet(
           log.warn(`  ${agentId}: instance not found in SSM (fleet_name=${fleetName}, agent_id=${agentId}) — skipping SSM trigger`);
           results.push({ agent_id: agentId, status: "pushed", reason: "instance not in SSM" });
         } else {
-          const restartFlag = opts.restart ? " --restart" : "";
-          const pullSelfArgs = `--apply${restartFlag} --region ${region}`;
-
           const commands: string[] = [];
           if (opts.upgradeCli) {
             // Prepend upgrade step. && ensures pull-self never runs on a
             // stale binary if the upgrade fails.
-            const upgradeFlag = opts.upgradeCli === 'latest'
-              ? '--latest'
-              : `--to ${opts.upgradeCli}`;
-            commands.push(`sudo fleetmind self-upgrade ${upgradeFlag} --apply`);
+            commands.push(buildUpgradeCommand(opts.upgradeCli));
           }
-          commands.push(`sudo -u ec2-user fleetmind pull-self ${pullSelfArgs}`);
+          commands.push(buildPullSelfCommand({ restart: opts.restart, region }));
 
           const label = opts.upgradeCli ? 'upgrade + pull-self' : 'pull-self';
           log.step(`    sending ${label} command to ${instanceId}...`);
