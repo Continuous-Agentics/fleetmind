@@ -5,7 +5,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
-import { FleetSchema, type Fleet, type AgentConfig } from "./schema.js";
+import { FleetSchema } from "./schema.js";
+import { normalizeFleet, type Fleet } from "../core/model.js";
+
+export type { Fleet } from "../core/model.js";
 
 // ── Fleet source resolution ────────────────────────────────────────────────────
 
@@ -129,18 +132,7 @@ export function buildMinimalFleet(name: string): Fleet {
     );
   }
 
-  return {
-    ...result.data,
-    get orchestrator() {
-      return result.data.agents.list.find((a: AgentConfig) => a.orchestrator);
-    },
-    get specialists() {
-      return result.data.agents.list.filter((a: AgentConfig) => !a.orchestrator);
-    },
-    getAgent(id: string) {
-      return result.data.agents.list.find((a: AgentConfig) => a.id === id);
-    },
-  };
+  return normalizeFleet(result.data);
 }
 
 /**
@@ -171,7 +163,10 @@ function expandEnv(obj: unknown): unknown {
   return obj;
 }
 
-export function loadFleet(filePath: string): Fleet {
+export function loadFleet(
+  filePath: string,
+  opts: { expandEnv?: boolean } = {}
+): Fleet {
   const abs = path.resolve(filePath);
   if (!fs.existsSync(abs)) {
     throw new Error(`Fleet file not found: ${abs}`);
@@ -179,7 +174,10 @@ export function loadFleet(filePath: string): Fleet {
 
   const raw = fs.readFileSync(abs, "utf-8");
   const parsed = yaml.load(raw);
-  const expanded = expandEnv(parsed);
+  // `expandEnv: false` keeps ${VAR} placeholders intact — used by `fleetmind up`
+  // so secrets stay as references in the rendered openclaw.json (resolved by
+  // OpenClaw from ~/.openclaw/.env) instead of being baked into the config file.
+  const expanded = opts.expandEnv === false ? parsed : expandEnv(parsed);
 
   const result = FleetSchema.safeParse(expanded);
   if (!result.success) {
@@ -189,21 +187,5 @@ export function loadFleet(filePath: string): Fleet {
     throw new Error(`Invalid fleet.yaml:\n${issues}`);
   }
 
-  const data = result.data;
-
-  // Attach helper methods
-  const fleet: Fleet = {
-    ...data,
-    get orchestrator() {
-      return data.agents.list.find((a) => a.orchestrator);
-    },
-    get specialists() {
-      return data.agents.list.filter((a) => !a.orchestrator);
-    },
-    getAgent(id: string) {
-      return data.agents.list.find((a) => a.id === id);
-    },
-  };
-
-  return fleet;
+  return normalizeFleet(result.data);
 }

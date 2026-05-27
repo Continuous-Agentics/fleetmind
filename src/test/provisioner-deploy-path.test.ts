@@ -35,14 +35,27 @@ import type { Fleet, AgentConfig } from "../config/schema.js";
 
 const EC2_WORKSPACE_BASE = "/opt/openclaw/workspace";
 
-/** Minimal Fleet with an EC2-style workspace_base (absolute path). */
+const TEST_TARGET_ID = "ec2-host";
+
+/** Minimal Fleet with an EC2-style target (absolute workspace_base path). */
 function makeFleet(workspaceBase = EC2_WORKSPACE_BASE): Fleet {
+  const target = {
+    id: TEST_TARGET_ID,
+    provider: "aws-ssm",
+    os: "linux",
+    service_manager: "systemd",
+    workspace_base: workspaceBase,
+    aws: { region: "us-west-2" },
+  };
   return {
     fleet: { name: "gg-sandbox", version: "1.0.0", client: "carpe", description: "" },
+    targets: { [TEST_TARGET_ID]: target },
+    targetMap: new Map([[TEST_TARGET_ID, target]]),
+    targetForAgent: () => target,
     agents: {
       defaults: {
         model: "anthropic/claude-sonnet-4-6",
-        workspace_base: workspaceBase,
+        target: TEST_TARGET_ID,
         plugins: ["anthropic"],
       },
       list: [],
@@ -86,12 +99,14 @@ function makeConductorAgent(): AgentConfig {
     description: "PM bot",
     orchestrator: true,
     role: "pm",
+    target: TEST_TARGET_ID,
     persona: { soul: "You are Conductor." },
-    slack: {
+    channels: [{
+      provider: "slack",
       account_id: "conductor",
       bot_token: "xoxb-test",
       app_token: "xapp-test",
-    },
+    }],
     skills: [],
     plugins: ["anthropic"],
     agent_to_agent: { can_send_to: ["forge"] },
@@ -110,17 +125,26 @@ function makeForgeAgent(): AgentConfig {
     description: "Worker bot",
     orchestrator: false,
     role: "backend-worker",
+    target: TEST_TARGET_ID,
     persona: { soul: "You are Forge." },
-    slack: {
+    channels: [{
+      provider: "slack",
       account_id: "forge",
       bot_token: "xoxb-forge-test",
       app_token: "xapp-forge-test",
-    },
+    }],
     skills: [],
     plugins: ["anthropic"],
     agent_to_agent: { can_send_to: ["conductor"] },
     delegation: { specialty: "backend" },
   } as unknown as AgentConfig;
+}
+
+/** Replace (or add) an agent's slack channel binding for a test. */
+function setSlack(agent: AgentConfig, extra: { bot_user_id?: string; channels?: string[] }): void {
+  const base = agent.channels?.find((c) => c.provider === "slack")
+    ?? { provider: "slack", account_id: agent.id };
+  agent.channels = [{ ...base, ...extra, provider: "slack" }] as unknown as AgentConfig["channels"];
 }
 
 // ── Test suite: provisioner deploy path regression ────────────────────────────
@@ -461,7 +485,7 @@ describe("renderAgentOpenClawJson — per-agent slice", () => {
 
   test("renderAgentOpenClawJson hooks.token is always OPENCLAW_HOOKS_TOKEN regardless of agent id", () => {
     const fleet = makeFleet();
-    const myAgent: AgentConfig = { ...makeForgeAgent(), id: "my-agent", name: "My Agent" };
+    const myAgent: AgentConfig = { ...makeForgeAgent(), id: "my-agent" as AgentConfig["id"], name: "My Agent" };
     fleet.agents.list = [myAgent];
     const json = renderAgentOpenClawJson(fleet, "my-agent") as { hooks: Record<string, unknown> };
     assert.equal(json.hooks.token, "${OPENCLAW_HOOKS_TOKEN}",
@@ -563,17 +587,9 @@ describe("renderAgentOpenClawJson — per-agent slice", () => {
     // Two agents both operating in channel C1, both with bot_user_ids set
     const fleet = makeFleet();
     const alpha = makeConductorAgent();
-    alpha.slack = {
-      ...alpha.slack,
-      bot_user_id: "UALPHA",
-      channels: ["C1"],
-    } as typeof alpha.slack;
+    setSlack(alpha, { bot_user_id: "UALPHA", channels: ["C1"] });
     const beta = makeForgeAgent();
-    beta.slack = {
-      ...beta.slack,
-      bot_user_id: "UBETA",
-      channels: ["C1"],
-    } as typeof beta.slack;
+    setSlack(beta, { bot_user_id: "UBETA", channels: ["C1"] });
     fleet.agents.list = [alpha, beta];
 
     const alphaJson = renderAgentOpenClawJson(fleet, "conductor") as {
@@ -599,17 +615,10 @@ describe("renderAgentOpenClawJson — per-agent slice", () => {
     // Agent B has no bot_user_id; agent A's slice for the shared channel must have no users field
     const fleet = makeFleet();
     const alpha = makeConductorAgent();
-    alpha.slack = {
-      ...alpha.slack,
-      bot_user_id: "UALPHA",
-      channels: ["C1"],
-    } as typeof alpha.slack;
+    setSlack(alpha, { bot_user_id: "UALPHA", channels: ["C1"] });
     const beta = makeForgeAgent();
-    beta.slack = {
-      ...beta.slack,
-      // bot_user_id intentionally omitted
-      channels: ["C1"],
-    } as typeof beta.slack;
+    // bot_user_id intentionally omitted
+    setSlack(beta, { channels: ["C1"] });
     fleet.agents.list = [alpha, beta];
 
     const alphaJson = renderAgentOpenClawJson(fleet, "conductor") as {
@@ -628,11 +637,7 @@ describe("renderAgentOpenClawJson — per-agent slice", () => {
   test("first channel has requireMention=false, subsequent channels requireMention=true", () => {
     const fleet = makeFleet();
     const alpha = makeConductorAgent();
-    alpha.slack = {
-      ...alpha.slack,
-      bot_user_id: "UALPHA",
-      channels: ["CHOME", "CSECOND", "CTHIRD"],
-    } as typeof alpha.slack;
+    setSlack(alpha, { bot_user_id: "UALPHA", channels: ["CHOME", "CSECOND", "CTHIRD"] });
     fleet.agents.list = [alpha];
 
     const json = renderAgentOpenClawJson(fleet, "conductor") as {
@@ -708,7 +713,7 @@ describe("renderAgentOpenClawJson — cacheRetention forwarding", () => {
   test("omits agents.defaults.params when not set in fleet defaults", () => {
     const fleet = makeFleet();
     fleet.agents.list = [makeConductorAgent()];
-    fleet.agents.defaults = { model: "anthropic/claude-haiku-4-5", workspace_base: "/opt/openclaw/workspace", plugins: ["anthropic"] };
+    fleet.agents.defaults = { model: "anthropic/claude-haiku-4-5", target: TEST_TARGET_ID as AgentConfig["target"], plugins: ["anthropic"] };
 
     const json = renderAgentOpenClawJson(fleet, "conductor") as {
       agents: { defaults: { params?: unknown; models?: unknown } };
@@ -908,14 +913,16 @@ describe("fleet roster — buildFleetRoster", () => {
       description: "PM bot that orchestrates",
       orchestrator: true,
       role: "pm",
+      target: TEST_TARGET_ID,
       persona: { soul: "You are Conductor." },
-      slack: {
+      channels: [{
+        provider: "slack",
         account_id: "conductor",
         bot_token: "xoxb-conductor",
         app_token: "xapp-conductor",
         bot_user_id: "U0CONDUCTOR",
         channels: ["C0PMCHANNEL"],
-      },
+      }],
       skills: [],
       plugins: ["anthropic"],
       agent_to_agent: { can_send_to: [] },
@@ -931,14 +938,16 @@ describe("fleet roster — buildFleetRoster", () => {
       description: "Backend worker",
       orchestrator: false,
       role: "backend-worker",
+      target: TEST_TARGET_ID,
       persona: { soul: "You are Forge." },
-      slack: {
+      channels: [{
+        provider: "slack",
         account_id: "forge",
         bot_token: "xoxb-forge",
         app_token: "xapp-forge",
         bot_user_id: "U0FORGE",
         channels: ["C0DEVCHANNEL", "C0SECONDCHAN"],
-      },
+      }],
       skills: [],
       plugins: ["anthropic"],
       agent_to_agent: { can_send_to: [] },
@@ -954,14 +963,16 @@ describe("fleet roster — buildFleetRoster", () => {
       description: "Frontend worker",
       orchestrator: false,
       role: "frontend-worker",
+      target: TEST_TARGET_ID,
       persona: { soul: "You are Pixel." },
-      slack: {
+      channels: [{
+        provider: "slack",
         account_id: "pixel",
         bot_token: "xoxb-pixel",
         app_token: "xapp-pixel",
         bot_user_id: "U0PIXEL",
         channels: ["C0DEVCHANNEL"],
-      },
+      }],
       skills: [],
       plugins: ["anthropic"],
       agent_to_agent: { can_send_to: [] },
@@ -1043,12 +1054,13 @@ describe("fleet roster — buildFleetRoster", () => {
     const pm = makePmAgent();
     // Worker has no bot_user_id
     const worker = makeWorkerAgent({
-      slack: {
+      channels: [{
+        provider: "slack",
         account_id: "forge",
         bot_token: "xoxb-forge",
         app_token: "xapp-forge",
         channels: ["C0DEVCHANNEL"],
-      } as unknown as AgentConfig["slack"],
+      }] as unknown as AgentConfig["channels"],
     });
     const fleet = makeFleetWithAgents([pm, worker]);
 

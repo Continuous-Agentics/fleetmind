@@ -55,13 +55,14 @@ function makeTempFleetYaml(dir: string, agentIds: string[] = ["conductor", "forg
       name: ${id.charAt(0).toUpperCase() + id.slice(1)}
       emoji: 🤖
       orchestrator: ${i === 0}
+      target: test-host
       persona:
         soul: "Test agent ${id}"
-      slack:
-        account_id: ${id}
-        bot_token: "\${${id.toUpperCase()}_BOT_TOKEN}"
-        app_token: "\${${id.toUpperCase()}_APP_TOKEN}"
-        signing_secret: "\${${id.toUpperCase()}_SIGNING_SECRET}"
+      channels:
+        - provider: slack
+          account_id: ${id}
+          bot_token: "\${${id.toUpperCase()}_BOT_TOKEN}"
+          app_token: "\${${id.toUpperCase()}_APP_TOKEN}"
       skills: []`
     )
     .join("");
@@ -69,9 +70,16 @@ function makeTempFleetYaml(dir: string, agentIds: string[] = ["conductor", "forg
   const yaml = `
 fleet:
   name: test-fleet
-agents:
-  defaults:
+targets:
+  test-host:
+    provider: aws-ssm
+    os: linux
+    service_manager: systemd
     workspace_base: /opt/openclaw/workspace
+    aws:
+      region: us-west-2
+agents:
+  defaults: {}
   list:${agentList}
 `.trim();
 
@@ -110,18 +118,46 @@ function makeMockDeps(state: MockDepsState, opts?: { instanceId?: string | null 
       const sha256 = crypto.createHash("sha256").update(content).digest("hex");
       return { sha256, sizeBytes: content.length };
     },
-    async uploadToS3(bucket, key, body, region) {
-      state.s3Uploads.push({ bucket, key, size: body.length });
+    // In-memory ArtifactStore; records puts (with the bucket it was built with).
+    makeArtifactStore(bucket) {
+      const objects = new Map<string, Buffer>();
+      return {
+        async put(key, body) {
+          state.s3Uploads.push({ bucket, key, size: body.length });
+          objects.set(key, body);
+        },
+        async get(key) {
+          return objects.get(key) ?? null;
+        },
+        async copy(srcKey, destKey) {
+          const b = objects.get(srcKey);
+          if (!b) throw new Error(`NoSuchKey: ${srcKey}`);
+          objects.set(destKey, b);
+        },
+        async list(prefix) {
+          return [...objects.keys()].filter((k) => k.startsWith(prefix));
+        },
+        async delete(key) {
+          objects.delete(key);
+        },
+      };
     },
-    async lookupInstance(fleetName, agentId, region) {
-      state.instanceLookups.push({ fleet: fleetName, agent: agentId });
-      if (opts?.instanceId === null) return null;
-      return opts?.instanceId ?? `i-mock-${agentId}`;
+    makeTargetResolver(fleetName) {
+      return {
+        async resolveHost(agentId) {
+          state.instanceLookups.push({ fleet: fleetName, agent: agentId });
+          if (opts?.instanceId === null) return null;
+          return opts?.instanceId ?? `i-mock-${agentId}`;
+        },
+      };
     },
-    async sendSsmCommand(instanceId, commands, region) {
-      state.ssmCalls.push({ instanceId, commands });
-      const cmdId = `ssm-cmd-${++state.ssmCommandIdCounter}`;
-      return cmdId;
+    makeCommandRunner() {
+      return {
+        async run(hostHandle, commands) {
+          state.ssmCalls.push({ instanceId: hostHandle, commands });
+          return `ssm-cmd-${++state.ssmCommandIdCounter}`;
+        },
+      };
     },
     async acquireLock() { /* no-op in tests */ },
     async releaseLock() { /* no-op in tests */ },

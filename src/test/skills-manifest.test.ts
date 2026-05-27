@@ -16,6 +16,7 @@ import {
   findMissingRequiredSkills,
   findSourceMismatches,
   computeFleetSkillGaps,
+  type SkillManifest,
 } from "../runtime/skills-manifest.js";
 import { addSkillsToFleetYaml } from "../cli/commands/skill.js";
 
@@ -122,7 +123,7 @@ describe("findMissingRequiredSkills", () => {
       required: [{ name: "bot-delegation", source: "fleetmind" as const }],
     };
     const agentSkills = [{ name: "bot-delegation" }];
-    assert.equal(findMissingRequiredSkills(agentSkills, manifest).length, 0);
+    assert.equal(findMissingRequiredSkills(agentSkills, manifest as SkillManifest).length, 0);
   });
 
   it("returns the missing skill when not declared", () => {
@@ -134,7 +135,7 @@ describe("findMissingRequiredSkills", () => {
       ],
     };
     const agentSkills = [{ name: "bot-delegation" }];
-    const missing = findMissingRequiredSkills(agentSkills, manifest);
+    const missing = findMissingRequiredSkills(agentSkills, manifest as SkillManifest);
     assert.equal(missing.length, 1);
     assert.equal(missing[0].name, "fleet-context");
   });
@@ -146,7 +147,7 @@ describe("findMissingRequiredSkills", () => {
     };
     // Agent has the skill but pinned to a different version
     const agentSkills = [{ name: "structured-pr-review" }];
-    assert.equal(findMissingRequiredSkills(agentSkills, manifest).length, 0);
+    assert.equal(findMissingRequiredSkills(agentSkills, manifest as SkillManifest).length, 0);
   });
 
   it("handles agent with no skills declared at all", () => {
@@ -154,7 +155,7 @@ describe("findMissingRequiredSkills", () => {
       role: "pm" as const,
       required: [{ name: "bot-delegation", source: "fleetmind" as const }],
     };
-    const missing = findMissingRequiredSkills([], manifest);
+    const missing = findMissingRequiredSkills([], manifest as SkillManifest);
     assert.equal(missing.length, 1);
   });
 });

@@ -29,6 +29,8 @@
   "files": [
     "dist/cli",
     "dist/config",
+    "dist/core",
+    "dist/deploy",
     "dist/runtime",
     "dist/transport",
     "dist/utils",

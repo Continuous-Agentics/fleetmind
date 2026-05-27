@@ -24,13 +24,16 @@ import {
   extractPlaceholder,
   resolveValue,
   resolveSlack,
-  resolveAnthropic,
+  resolveProviderKey,
+  materializeHostEnv,
   generateHooksToken,
   loadEnvFile,
   redact,
   populateSecrets,
   type PopulateOptions,
 } from "../cli/commands/populate.js";
+import { normalizeFleet } from "../core/model.js";
+import { FleetSchema } from "../config/schema.js";
 
 // ── extractPlaceholder ────────────────────────────────────────────────────────
 
@@ -129,46 +132,61 @@ describe("resolveSlack", () => {
   });
 });
 
-// ── resolveAnthropic ──────────────────────────────────────────────────────────
+// ── resolveProviderKey ────────────────────────────────────────────────────────
 
-describe("resolveAnthropic", () => {
+describe("resolveProviderKey", () => {
   test("per-agent env var takes precedence", () => {
     const env = {
       CONDUCTOR_ANTHROPIC_API_KEY: "sk-ant-per-agent",
       ANTHROPIC_API_KEY: "sk-ant-fleet-wide",
     };
-    const res = resolveAnthropic("conductor", undefined, env);
+    const res = resolveProviderKey("conductor", "anthropic", undefined, env);
     assert.equal(res.ok, true);
     assert.equal(res.value, "sk-ant-per-agent");
   });
 
-  test("falls back to fleet-wide ANTHROPIC_API_KEY", () => {
+  test("falls back to fleet-wide <PROVIDER>_API_KEY", () => {
     const env = { ANTHROPIC_API_KEY: "sk-ant-fleet-wide" };
-    const res = resolveAnthropic("conductor", undefined, env);
+    const res = resolveProviderKey("conductor", "anthropic", undefined, env);
     assert.equal(res.ok, true);
     assert.equal(res.value, "sk-ant-fleet-wide");
   });
 
-  test("resolves anthropic.api_key field placeholder", () => {
-    const env = {
-      MY_CUSTOM_ANTHROPIC_KEY: "sk-ant-custom",
-    };
-    const res = resolveAnthropic("conductor", { api_key: "${MY_CUSTOM_ANTHROPIC_KEY}" }, env);
+  test("resolves the api_keys[provider] placeholder", () => {
+    const env = { MY_CUSTOM_ANTHROPIC_KEY: "sk-ant-custom" };
+    const res = resolveProviderKey("conductor", "anthropic", { anthropic: "${MY_CUSTOM_ANTHROPIC_KEY}" }, env);
     assert.equal(res.ok, true);
     assert.equal(res.value, "sk-ant-custom");
   });
 
-  test("returns missing when no key found", () => {
-    const res = resolveAnthropic("conductor", undefined, {});
+  test("returns missing (per-agent var) when no key found", () => {
+    const res = resolveProviderKey("conductor", "anthropic", undefined, {});
     assert.equal(res.ok, false);
     assert.ok(res.missing.includes("CONDUCTOR_ANTHROPIC_API_KEY"));
   });
 
-  test("per-agent var name is UPPER + _ANTHROPIC_API_KEY", () => {
+  test("per-agent var name is <AGENT>_<PROVIDER>_API_KEY", () => {
     const env = { FORGE_ANTHROPIC_API_KEY: "sk-ant-forge" };
-    const res = resolveAnthropic("forge", undefined, env);
+    const res = resolveProviderKey("forge", "anthropic", undefined, env);
     assert.equal(res.ok, true);
     assert.equal(res.value, "sk-ant-forge");
+  });
+
+  test("generalizes to non-anthropic providers (openai)", () => {
+    // per-agent override
+    assert.equal(
+      resolveProviderKey("conductor", "openai", undefined, { CONDUCTOR_OPENAI_API_KEY: "sk-oai-agent" }).value,
+      "sk-oai-agent"
+    );
+    // fleet-wide fallback
+    assert.equal(
+      resolveProviderKey("conductor", "openai", undefined, { OPENAI_API_KEY: "sk-oai-fleet" }).value,
+      "sk-oai-fleet"
+    );
+    // missing reports the openai-shaped per-agent var
+    assert.ok(
+      resolveProviderKey("conductor", "openai", undefined, {}).missing.includes("CONDUCTOR_OPENAI_API_KEY")
+    );
   });
 });
 
@@ -272,16 +290,18 @@ agents:
   list:
     - id: conductor
       name: Conductor
-      slack:
-        account_id: conductor
-        bot_token: "\${CONDUCTOR_BOT_TOKEN}"
-        app_token: "\${CONDUCTOR_APP_TOKEN}"
+      channels:
+        - provider: slack
+          account_id: conductor
+          bot_token: "\${CONDUCTOR_BOT_TOKEN}"
+          app_token: "\${CONDUCTOR_APP_TOKEN}"
     - id: forge
       name: Forge
-      slack:
-        account_id: forge
-        bot_token: "\${FORGE_BOT_TOKEN}"
-        app_token: "\${FORGE_APP_TOKEN}"
+      channels:
+        - provider: slack
+          account_id: forge
+          bot_token: "\${FORGE_BOT_TOKEN}"
+          app_token: "\${FORGE_APP_TOKEN}"
 `);
   });
 
@@ -378,11 +398,12 @@ agents:
   list:
     - id: conductor
       name: Conductor
-      slack:
-        account_id: conductor
-        bot_token: "\${CONDUCTOR_BOT_TOKEN}"
-        app_token: "\${CONDUCTOR_APP_TOKEN}"
-        signing_secret: "\${CONDUCTOR_SIGNING_SECRET}"
+      channels:
+        - provider: slack
+          account_id: conductor
+          bot_token: "\${CONDUCTOR_BOT_TOKEN}"
+          app_token: "\${CONDUCTOR_APP_TOKEN}"
+          signing_secret: "\${CONDUCTOR_SIGNING_SECRET}"
 `);
 
     const savedEnv: Record<string, string | undefined> = {};
@@ -486,6 +507,55 @@ agents:
       }
     }
   });
+
+  test("derives the secret provider from the agent's model (openai → /openai)", async () => {
+    const tmpDir3 = fs.mkdtempSync(path.join(os.tmpdir(), "fm-openai-"));
+    const openaiFleet = path.join(tmpDir3, "fleet.yaml");
+    // conductor inherits the anthropic default; pixel overrides to openai and
+    // also lists an explicit google api_key → should get BOTH /openai and /google.
+    fs.writeFileSync(openaiFleet, `
+fleet:
+  name: multi-fleet
+delegation:
+  enabled: false
+  aws_region: us-west-2
+agents:
+  defaults:
+    model: anthropic/claude-sonnet-4-6
+  list:
+    - id: pixel
+      name: Pixel
+      model: openai/gpt-4o
+      api_keys:
+        google: "\${GOOGLE_API_KEY}"
+      channels:
+        - provider: slack
+          account_id: pixel
+          bot_token: "\${PIXEL_BOT_TOKEN}"
+          app_token: "\${PIXEL_APP_TOKEN}"
+`);
+
+    const vars = ["PIXEL_BOT_TOKEN", "PIXEL_APP_TOKEN", "OPENAI_API_KEY", "GOOGLE_API_KEY"];
+    const savedVars: Record<string, string | undefined> = {};
+    for (const v of vars) { savedVars[v] = process.env[v]; process.env[v] = `val-${v}`; }
+
+    try {
+      const results = await populateSecrets({ fleet: openaiFleet, dryRun: true, agent: [] });
+      const names = new Set(results.map((r) => r.secretName));
+      // openai (from model) + google (from api_keys) → two model-key secrets,
+      // and NO anthropic secret (pixel's model overrode the default).
+      assert.ok(names.has("multi-fleet/agents/pixel/openai"), "should write /openai");
+      assert.ok(names.has("multi-fleet/agents/pixel/google"), "should write /google");
+      assert.ok(!names.has("multi-fleet/agents/pixel/anthropic"), "should NOT write /anthropic");
+      assert.ok(results.every((r) => r.ok), "all should resolve from env");
+    } finally {
+      for (const v of vars) {
+        if (savedVars[v] === undefined) delete process.env[v];
+        else process.env[v] = savedVars[v];
+      }
+      fs.rmSync(tmpDir3, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── Interactive mode ──────────────────────────────────────────────────────────
@@ -510,16 +580,18 @@ agents:
   list:
     - id: conductor
       name: Conductor
-      slack:
-        account_id: conductor
-        bot_token: "\${CONDUCTOR_BOT_TOKEN}"
-        app_token: "\${CONDUCTOR_APP_TOKEN}"
+      channels:
+        - provider: slack
+          account_id: conductor
+          bot_token: "\${CONDUCTOR_BOT_TOKEN}"
+          app_token: "\${CONDUCTOR_APP_TOKEN}"
     - id: forge
       name: Forge
-      slack:
-        account_id: forge
-        bot_token: "\${FORGE_BOT_TOKEN}"
-        app_token: "\${FORGE_APP_TOKEN}"
+      channels:
+        - provider: slack
+          account_id: forge
+          bot_token: "\${FORGE_BOT_TOKEN}"
+          app_token: "\${FORGE_APP_TOKEN}"
 `);
   });
 
@@ -878,5 +950,62 @@ agents:
     } finally {
       restoreVars(saved);
     }
+  });
+});
+
+// ── materializeHostEnv (local ~/.openclaw/.env) ──────────────────────────────
+
+describe("materializeHostEnv", () => {
+  // Two agents on one local host; conductor inherits the anthropic default,
+  // pixel overrides to openai. Built directly (no env expansion) so the slack
+  // ${VAR} placeholders survive — the shape `fleetmind up` loads.
+  function hostFleet() {
+    return normalizeFleet(
+      FleetSchema.parse({
+        fleet: { name: "demo" },
+        targets: {
+          box: { provider: "local", os: "macos", service_manager: "launchd", workspace_base: "/Users/oc/.openclaw" },
+        },
+        agents: {
+          defaults: { target: "box", model: "anthropic/claude-sonnet-4-6" },
+          list: [
+            {
+              id: "conductor", name: "C",
+              channels: [{ provider: "slack", account_id: "conductor", bot_token: "${CONDUCTOR_BOT_TOKEN}", app_token: "${CONDUCTOR_APP_TOKEN}" }],
+            },
+            {
+              id: "pixel", name: "P", model: "openai/gpt-4o",
+              channels: [{ provider: "slack", account_id: "pixel", bot_token: "${PIXEL_BOT_TOKEN}", app_token: "${PIXEL_APP_TOKEN}" }],
+            },
+          ],
+        },
+      })
+    );
+  }
+
+  test("resolves slack placeholders + per-provider keys for the host's agents", () => {
+    const env = {
+      CONDUCTOR_BOT_TOKEN: "xoxb-c", CONDUCTOR_APP_TOKEN: "xapp-c",
+      PIXEL_BOT_TOKEN: "xoxb-p", PIXEL_APP_TOKEN: "xapp-p",
+      ANTHROPIC_API_KEY: "sk-ant", OPENAI_API_KEY: "sk-oai",
+    };
+    const { vars, missing } = materializeHostEnv(hostFleet(), "box", env);
+    assert.deepEqual(missing, []);
+    // Slack tokens keyed by their fleet.yaml placeholder name…
+    assert.equal(vars["CONDUCTOR_BOT_TOKEN"], "xoxb-c");
+    assert.equal(vars["PIXEL_APP_TOKEN"], "xapp-p");
+    // …and one model key per provider used on the host.
+    assert.equal(vars["ANTHROPIC_API_KEY"], "sk-ant"); // conductor (default model)
+    assert.equal(vars["OPENAI_API_KEY"], "sk-oai");    // pixel (override)
+  });
+
+  test("reports unresolved vars as missing", () => {
+    // Slack present, but no provider keys in env → both providers missing.
+    const { missing } = materializeHostEnv(hostFleet(), "box", {
+      CONDUCTOR_BOT_TOKEN: "x", CONDUCTOR_APP_TOKEN: "y",
+      PIXEL_BOT_TOKEN: "z", PIXEL_APP_TOKEN: "w",
+    });
+    assert.ok(missing.includes("ANTHROPIC_API_KEY"));
+    assert.ok(missing.includes("OPENAI_API_KEY"));
   });
 });

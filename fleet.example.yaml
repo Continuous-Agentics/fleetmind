@@ -6,11 +6,13 @@
 #
 # Deploy with: fleetmind deploy fleet.yaml
 #
-# Infrastructure note: each agent in this fleet gets its OWN EC2 instance
-# ("one EC2 per agent, one gateway per EC2"). Workspace files live on the EC2
-# root volume at /opt/openclaw/workspace/<agent_id>/. Persistent state belongs
-# in the shared substrates (task-ledger DDB, context-store DDB, narratives S3).
-# To override instance sizing for specific agents, pass per-agent maps in
+# Infrastructure note: each agent in this fleet gets its OWN runtime host
+# ("one host per agent, one gateway per host"). Where an agent runs and how its
+# service is managed is declared under `targets:` below; the agent references a
+# target by id. AWS hosts use the aws-ssm provider; Mac minis / bare metal use
+# the ssh provider. Persistent state belongs in the shared substrates
+# (task-ledger DDB, context-store DDB, narratives S3).
+# To override EC2 instance sizing for specific agents, pass per-agent maps in
 # fleet.derived.tfvars or a custom .tfvars file:
 #
 #   agent_instance_types = { conductor = "t3.large", forge = "t3.medium" }
@@ -69,11 +71,70 @@ delegation:
   s3_bucket: acme-fleet-ledger                # S3 bucket  (TF module: name_prefix + 'ledger')
   # s3_key_template: "v0/projects/{project}/tasks/{date}-{task_id}.md"  # default; override only if needed
 
+# ── Targets (runtime hosts) ───────────────────────────────────────────────────
+# Where each agent runs, how to reach it, and how to (re)start its gateway.
+# Agents reference a target by id below. The `provider` discriminates the host
+# type and selects the per-host block:
+#   aws-ssm → EC2 reached via SSM (requires `aws.region`)
+#   ssh     → Mac mini / bare metal / VMware guest (requires `ssh.host`, `ssh.user`)
+#   local   → the operator machine (dev)
+targets:
+  conductor-host:
+    provider: aws-ssm
+    os: linux
+    service_manager: systemd
+    workspace_base: /home/ec2-user/.openclaw
+    aws:
+      region: us-west-2
+  pixel-host:
+    provider: aws-ssm
+    os: linux
+    service_manager: systemd
+    workspace_base: /home/ec2-user/.openclaw
+    aws:
+      region: us-west-2
+  forge-host:
+    provider: aws-ssm
+    os: linux
+    service_manager: systemd
+    workspace_base: /home/ec2-user/.openclaw
+    aws:
+      region: us-west-2
+  # Example of a non-AWS host (e.g. a Mac mini) — uncomment and point an agent at it:
+  # mac-lab-1:
+  #   provider: ssh
+  #   os: macos
+  #   service_manager: launchd
+  #   workspace_base: /Users/openclaw/.openclaw
+  #   ssh:
+  #     host: mac-lab-1.local
+  #     user: openclaw
+
+# ── Deploy (artifact transport) ───────────────────────────────────────────────
+# Where rendered agent bundles are published before a target applies them.
+# Optional — if omitted, deploys fall back to the <fleet-name>-ledger S3 bucket.
+deploy:
+  artifact_store:
+    provider: s3
+    s3:
+      bucket: acme-fleet-ledger
+      region: us-west-2
+
 # ── Agents ────────────────────────────────────────────────────────────────────
+# FleetMind is provider-neutral: `model` is a "provider/model" string and
+# OpenClaw makes the actual call. To use a different provider, just change the
+# model prefix (e.g. openai/gpt-4o, google/gemini-2.0-flash) — `fleetmind
+# secrets populate` then stages that provider's API key. Key resolution per
+# provider P: ${<AGENT>_<P>_API_KEY} → agent.api_keys[P] → ${<P>_API_KEY}.
 agents:
   defaults:
     model: anthropic/claude-sonnet-4-6
-    workspace_base: /home/ec2-user/.openclaw
+    # Optional ordered failover chain OpenClaw tries when `model` fails. Applies
+    # to every agent unless that agent sets its own `fallback_models` (use [] to
+    # opt an agent out / make it strict). Each entry is a "provider/model" string.
+    # fallback_models:
+    #   - openai/gpt-4o
+    #   - google/gemini-2.0-flash
     plugins:
       - anthropic
 
@@ -83,16 +144,23 @@ agents:
       emoji: 🎼
       description: "Orchestrator. Routes requests to specialist agents."
       orchestrator: true
+      target: conductor-host
+      # Optional: point specific providers at specific credentials. Omit to use
+      # the ${ANTHROPIC_API_KEY} / ${OPENAI_API_KEY} env-var convention.
+      # api_keys:
+      #   anthropic: ${ANTHROPIC_API_KEY}
+      #   openai: ${ACME_OPENAI_KEY}
       persona:
         soul: |
           You are Conductor, an orchestrating AI that coordinates a fleet of specialists.
           When a request comes in, figure out which specialist(s) should handle it,
           delegate via sessions_send, and synthesize the result for the user.
           Be decisive. Be brief. Let your specialists do the deep work.
-      slack:
-        account_id: conductor
-        bot_token: ${CONDUCTOR_BOT_TOKEN}
-        app_token: ${CONDUCTOR_APP_TOKEN}
+      channels:
+        - provider: slack
+          account_id: conductor
+          bot_token: ${CONDUCTOR_BOT_TOKEN}
+          app_token: ${CONDUCTOR_APP_TOKEN}
       skills:
         # Tier 1: ClaWHub public skill
         - name: taskflow
@@ -148,16 +216,18 @@ agents:
       emoji: 🎨
       description: "Frontend specialist. React, design systems, UX, browser."
       orchestrator: false
+      target: pixel-host
       persona:
         soul: |
           You are Pixel, a frontend engineering specialist.
           You handle React, CSS, design systems, and UX questions.
           When Conductor delegates to you, reply directly in the Slack thread
           using your own identity. Be precise and show your work.
-      slack:
-        account_id: pixel
-        bot_token: ${PIXEL_BOT_TOKEN}
-        app_token: ${PIXEL_APP_TOKEN}
+      channels:
+        - provider: slack
+          account_id: pixel
+          bot_token: ${PIXEL_BOT_TOKEN}
+          app_token: ${PIXEL_APP_TOKEN}
       skills:
         # Tier 1: ClaWHub public skills
         - name: github
@@ -185,15 +255,17 @@ agents:
       emoji: ⚙️
       description: "Backend specialist. APIs, databases, infrastructure."
       orchestrator: false
+      target: forge-host
       persona:
         soul: |
           You are Forge, a backend engineering specialist.
           You handle APIs, databases, cloud infra, and system design.
           Be direct and technical. Show commands and configs when relevant.
-      slack:
-        account_id: forge
-        bot_token: ${FORGE_BOT_TOKEN}
-        app_token: ${FORGE_APP_TOKEN}
+      channels:
+        - provider: slack
+          account_id: forge
+          bot_token: ${FORGE_BOT_TOKEN}
+          app_token: ${FORGE_APP_TOKEN}
       skills:
         # Tier 1: ClaWHub public skills
         - name: github

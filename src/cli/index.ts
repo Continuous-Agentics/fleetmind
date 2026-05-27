@@ -6,6 +6,7 @@ import { Command } from "commander";
 import { injectSecrets } from "../utils/secrets.js";
 import { registerInit } from "./commands/init.js";
 import { registerDeploy } from "./commands/deploy.js";
+import { registerUp } from "./commands/up.js";
 import { registerDiff } from "./commands/diff.js";
 import { registerRender } from "./commands/render.js";
 import { registerDoctor } from "./commands/doctor.js";
@@ -49,6 +50,7 @@ program
 
 registerInit(program);
 registerDeploy(program);
+registerUp(program);
 registerDiff(program);
 registerRender(program);
 registerDoctor(program);

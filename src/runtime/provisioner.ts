@@ -13,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Fleet, AgentConfig, CronSweepConfig } from "../config/schema.js";
 import { installSkill } from "./resolver.js";
+import { slackChannel } from "../core/channels.js";
 import { log } from "../utils/log.js";
 import { workspaceTemplatePath } from "./bot-types.js";
 
@@ -59,8 +60,9 @@ export function buildFleetRoster(fleet: Fleet, currentAgent: AgentConfig): strin
   ];
 
   for (const peer of peers) {
-    const userId = peer.slack?.bot_user_id ?? "TODO (run fleetmind slack discover)";
-    const channels = (peer.slack?.channels ?? []).join(", ") || "(none configured)";
+    const peerSlack = slackChannel(peer);
+    const userId = peerSlack?.bot_user_id ?? "TODO (run fleetmind slack discover)";
+    const channels = (peerSlack?.channels ?? []).join(", ") || "(none configured)";
     const label = roleLabel(peer.role);
     lines.push(`- **${peer.name}** (${peer.emoji ?? ""}) — ${peer.description ?? ""}`);
     lines.push(`  - Slack user: \`${userId}\` (mention: \`<@${userId}>\`)`);

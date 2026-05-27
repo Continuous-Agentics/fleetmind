@@ -25,9 +25,10 @@ import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
 import type { Command } from "commander";
 import { loadFleet } from "../../config/loader.js";
+import { slackChannel } from "../../core/channels.js";
+import { providersForAgent, providerApiKeyVar } from "../../core/model-provider.js";
 import { log } from "../../utils/log.js";
-import { generateManifests } from "./slack.js";
-import { discoverSlackBotUserIds } from "./slack.js";
+import { generateManifests, discoverSlackBotUserIds, writeSlackChannelIds } from "./slack.js";
 import { storeGithubApp, createGithubApp } from "./github-app.js";
 import {
   SecretsManagerClient,
@@ -180,8 +181,8 @@ export async function runOnboard(
   const manifestsExist = fs.existsSync(manifestsDir) &&
     fs.readdirSync(manifestsDir).some(f => f.endsWith(".yaml"));
 
-  const allUserIdsSet = agents.every(a => isRealUserId(a.slack?.bot_user_id));
-  const allChannelsSet = agents.every(a => (a.slack?.channels ?? []).every(c => isRealChannelId(c)));
+  const allUserIdsSet = agents.every(a => isRealUserId(slackChannel(a)?.bot_user_id));
+  const allChannelsSet = agents.every(a => (slackChannel(a)?.channels ?? []).every(c => isRealChannelId(c)));
 
   const derivedTfvars = path.join(path.dirname(fleetFile), `workspaces/${fleetName}.derived.tfvars`);
   const tfvarsExist = fs.existsSync(derivedTfvars);
@@ -230,7 +231,7 @@ export async function runOnboard(
   }
 
   // ── Step 3: Collect Slack credentials ──────────────────────────────────────
-  const needsCreds = agents.some(a => !isRealUserId(a.slack?.bot_user_id));
+  const needsCreds = agents.some(a => !isRealUserId(slackChannel(a)?.bot_user_id));
   if (needsCreds) {
     header("Step 3 / 12 — Create Slack Apps + Collect Credentials");
     console.log("  For each agent, create a Slack app from its manifest:");
@@ -249,11 +250,10 @@ export async function runOnboard(
 
     // Channel IDs
     console.log("  Now invite each bot to its Slack channels and copy the channel IDs.\n");
-    const updatedFleetYaml = fs.readFileSync(fleetFile, "utf-8");
-    let yamlContent = updatedFleetYaml;
+    const channelUpdates = new Map<string, string[]>();
 
     for (const agent of agents) {
-      const existing = (agent.slack?.channels ?? []).filter(c => isRealChannelId(c));
+      const existing = (slackChannel(agent)?.channels ?? []).filter(c => isRealChannelId(c));
       if (existing.length > 0) {
         log.ok(`    ${agent.name}: channels already set (${existing.join(", ")})`);
         continue;
@@ -263,16 +263,14 @@ export async function runOnboard(
       const channelInput = await prompt("    Channel IDs: ");
       const channelIds = channelInput.split(",").map(c => c.trim()).filter(Boolean);
       if (channelIds.length > 0) {
-        // Write channel IDs back to fleet.yaml
-        yamlContent = yamlContent.replace(
-          new RegExp(`(id:\\s*${agent.id}[\\s\\S]*?channels:\\s*)\\[\\s*"C_REPLACE_ME"\\s*\\]`),
-          `$1[${channelIds.map(c => `"${c}"`).join(", ")}]`
-        );
+        channelUpdates.set(agent.id, channelIds);
       }
     }
 
-    if (yamlContent !== updatedFleetYaml) {
-      fs.writeFileSync(fleetFile, yamlContent, "utf-8");
+    if (channelUpdates.size > 0) {
+      // Write channel IDs into each agent's slack channel entry via the yaml
+      // document API (preserves comments; targets the v2 nested channels list).
+      writeSlackChannelIds(fleetFile, channelUpdates, (p, content) => fs.writeFileSync(p, content, "utf-8"));
       log.ok("  fleet.yaml updated with channel IDs");
     }
   } else {
@@ -445,8 +443,8 @@ export async function runOnboard(
 
   // ── Step 9: Populate Secrets Manager ────────────────────────────────────────
   header("Step 9 / 12 — Populate Secrets Manager");
-  console.log("  Writes Slack tokens + Anthropic API key per agent.");
-  console.log("  Slack tokens from step 3 are used automatically; only Anthropic key is prompted.\n");
+  console.log("  Writes Slack tokens + model-provider API keys per agent.");
+  console.log("  Slack tokens from step 3 are used automatically; provider keys are prompted.\n");
 
   if (await confirm("  Populate secrets now?")) {
     for (const agent of agents) {
@@ -493,23 +491,31 @@ export async function runOnboard(
         log.ok("    Slack tokens written");
       }
 
-      // ── Anthropic API key ────────────────────────────────────────────────────
-      const anthropicSecretId = `${fleetName}/agents/${agent.id}/anthropic`;
-      const existingAnthropicRaw = await getSecret(anthropicSecretId, region);
-      const anthropicIsPlaceholder = !existingAnthropicRaw || existingAnthropicRaw.includes("REPLACE_ME");
+      // ── Model-provider API keys — one secret per provider the agent uses ──────
+      const providers = providersForAgent({
+        model: agent.model,
+        apiKeys: agent.api_keys,
+        defaultModel: fleet.agents.defaults.model,
+      });
+      for (const provider of providers) {
+        const keyVar = providerApiKeyVar(provider);                       // e.g. ANTHROPIC_API_KEY
+        const providerSecretId = `${fleetName}/agents/${agent.id}/${provider}`;
+        const existingRaw = await getSecret(providerSecretId, region);
+        const isPlaceholder = !existingRaw || existingRaw.includes("REPLACE_ME");
 
-      let writeAnthropicKey = anthropicIsPlaceholder;
-      if (!anthropicIsPlaceholder) {
-        writeAnthropicKey = await confirm("    Anthropic key already in SM. Override?", false);
-      }
-      if (writeAnthropicKey) {
-        const apiKey = await hiddenPrompt("    Anthropic API key (sk-ant-...): ");
-        if (apiKey.trim()) {
-          await putSecret(anthropicSecretId, { ANTHROPIC_API_KEY: apiKey.trim() }, region);
-          log.ok("    Anthropic key written");
+        let writeKey = isPlaceholder;
+        if (!isPlaceholder) {
+          writeKey = await confirm(`    ${provider} key already in SM. Override?`, false);
         }
-      } else {
-        log.ok("    Anthropic key unchanged");
+        if (writeKey) {
+          const apiKey = await hiddenPrompt(`    ${provider} API key (${keyVar}): `);
+          if (apiKey.trim()) {
+            await putSecret(providerSecretId, { [keyVar]: apiKey.trim() }, region);
+            log.ok(`    ${provider} key written`);
+          }
+        } else {
+          log.ok(`    ${provider} key unchanged`);
+        }
       }
     }
   }

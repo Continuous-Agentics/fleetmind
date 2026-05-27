@@ -1,9 +1,24 @@
 /**
  * FleetMind config schema — validated with Zod.
- * Mirrors fleet.yaml structure exactly.
+ * Mirrors fleet.yaml structure exactly (the "wire" layer).
+ *
+ * Security-sensitive identifiers (fleet name, agent/target ids, skill names,
+ * NATS subject prefix, workspace base paths) are branded + validated here via
+ * the schemas in ../core/identifiers.ts, so anything that survives parsing is
+ * already safe to interpolate into paths, shell commands, S3 keys, systemd
+ * units, env var names, and NATS subjects. Cross-references (an agent's
+ * `target`, channel resolution) are resolved in ../core/model.ts after parse.
  */
 
 import { z } from "zod";
+import {
+  FleetNameSchema,
+  AgentIdSchema,
+  TargetIdSchema,
+  SkillNameSchema,
+  NatsSubjectPrefixSchema,
+  WorkspaceBaseSchema,
+} from "../core/identifiers.js";
 
 /** Where a skill comes from:
  *  - clawhub:   public skill published on ClaWHub (e.g. by continuous-agentics)
@@ -37,13 +52,13 @@ export type GitHubAppConfig = z.infer<typeof GitHubAppConfigSchema>;
 export const SkillRefSchema = z.union([
   // shorthand string → defaults to client source
   z.string().transform((s) => ({
-    name: s,
+    name: SkillNameSchema.parse(s),
     source: "client" as const,
     author: undefined,
     version: undefined,
   })),
   z.object({
-    name: z.string(),
+    name: SkillNameSchema,
     /** Skill source tier. Defaults to "client". */
     source: SkillSourceSchema,
     /** ClaWHub author handle — required when source is "clawhub". */
@@ -52,7 +67,12 @@ export const SkillRefSchema = z.union([
   }),
 ]);
 
-export const SlackAccountSchema = z.object({
+// ── Channels (discriminated union on `provider`) ─────────────────────────────
+// A human-interaction channel for an agent. Slack is the first provider; future
+// providers (Teams, Discord, email, web) add new variants to ChannelSchema.
+
+export const SlackChannelSchema = z.object({
+  provider: z.literal("slack"),
   account_id: z.string(),
   bot_token: z.string(),
   app_token: z.string(),
@@ -75,6 +95,11 @@ export const SlackAccountSchema = z.object({
   /** Extra Slack event subscriptions appended after the default set (deduped). */
   extra_events: z.array(z.string()).default([]),
 });
+export type SlackChannel = z.infer<typeof SlackChannelSchema>;
+
+export const ChannelSchema = z.discriminatedUnion("provider", [SlackChannelSchema]);
+export type Channel = z.infer<typeof ChannelSchema>;
+export type ChannelProvider = Channel["provider"];
 
 export const AgentToAgentSchema = z.object({
   can_send_to: z.array(z.string()).default([]),
@@ -144,7 +169,7 @@ export const NatsConfigSchema = z.object({
   /** Inbox prefix used for request-reply if needed; defaults to "_INBOX". */
   inbox_prefix: z.string().default("_INBOX"),
   /** Subject prefix for all fleetmind task events. Default: "fleetmind". */
-  subject_prefix: z.string().default("fleetmind"),
+  subject_prefix: NatsSubjectPrefixSchema.default("fleetmind"),
   /** Connect timeout in milliseconds. Default 5000. */
   connect_timeout_ms: z.number().int().positive().default(5000),
   /** Max reconnect attempts (-1 = unlimited). Default -1. */
@@ -203,42 +228,55 @@ export const DelegationAgentSchema = z.object({
 });
 
 /**
- * Optional per-agent Anthropic config.
+ * Optional per-agent API keys, keyed by model provider.
  *
- * api_key may be a ${VAR} placeholder or a literal value.
- * Resolution order for `fleetmind secrets populate`:
- *   1. ${<AGENT_ID_UPPER>_ANTHROPIC_API_KEY} env var
- *   2. This field (resolved from env if it's a placeholder)
- *   3. Fleet-wide ${ANTHROPIC_API_KEY} env var
+ * FleetMind is provider-neutral: an agent's `model` is a "provider/model"
+ * string, and OpenClaw makes the actual call. This map lets an operator point a
+ * provider at a specific credential when the conventional env var isn't enough.
+ * Each value may be a ${VAR} placeholder or a literal.
+ *
+ * Resolution order for `fleetmind secrets populate` (per provider P used by the
+ * agent, derived from its model string):
+ *   1. ${<AGENT_ID_UPPER>_<P_UPPER>_API_KEY} env var
+ *   2. This map's `P` entry (resolved from env if it's a placeholder)
+ *   3. Fleet-wide ${<P_UPPER>_API_KEY} env var
+ *
+ * Example:
+ *   api_keys:
+ *     anthropic: ${ANTHROPIC_API_KEY}
+ *     openai: ${ACME_OPENAI_KEY}
  */
-export const AnthropicAgentSchema = z.object({
-  api_key: z.string().optional(),
-});
+export const ApiKeysSchema = z.record(z.string(), z.string());
+export type ApiKeys = z.infer<typeof ApiKeysSchema>;
 
 export const AgentSchema = z.object({
-  id: z.string(),
+  id: AgentIdSchema,
   name: z.string(),
   emoji: z.string().default("🤖"),
   description: z.string().default(""),
   orchestrator: z.boolean().default(false),
   role: AgentRoleSchema.default("worker"),
   model: z.string().optional(),
+  /** Ordered fallback models ("provider/model") OpenClaw tries when this agent's
+   *  primary model fails. Overrides agents.defaults.fallback_models. An empty
+   *  list makes the agent strict (no fallback). */
+  fallback_models: z.array(z.string()).optional(),
   persona: PersonaSchema.default({}),
-  // Optional — per-agent fleet.yaml slices (pushed to EC2) omit Slack
-  // credentials for security. CLI commands that need Slack (e.g. nats subscribe
-  // posting to threads) read from env vars, not from this field.
-  slack: SlackAccountSchema.optional(),
-  /** Optional per-agent Anthropic configuration. */
-  anthropic: AnthropicAgentSchema.optional(),
+  /** Runtime host this agent is deployed to — references a key in `targets`.
+   *  Optional here; falls back to `agents.defaults.target`. Normalization
+   *  fails if neither is set or the reference is dangling. */
+  target: TargetIdSchema.optional(),
+  /** Human-interaction channels for this agent (Slack, …). Per-agent fleet.yaml
+   *  slices pushed to hosts omit channel credentials for security, so this may
+   *  be empty on the bot side. */
+  channels: z.array(ChannelSchema).default([]),
+  /** Optional per-agent API keys, keyed by model provider (anthropic, openai, …). */
+  api_keys: ApiKeysSchema.optional(),
   skills: z.array(SkillRefSchema).default([]),
   plugins: z.array(z.string()).optional(),
   agent_to_agent: AgentToAgentSchema.default({}),
   /** Optional per-agent delegation config. */
   delegation: DelegationAgentSchema.optional(),
-  /** Optional per-agent workspace_base override. Falls back to
-   *  agents.defaults.workspace_base. Useful for bots on custom AMIs that
-   *  install openclaw in a non-default path. */
-  workspace_base: z.string().optional(),
   /** Optional per-agent GitHub App configuration. Permissions + events
    *  declared here override the bot-type defaults from
    *  openclaw/<bot-type>/github-app-permissions.yaml. Permissions are merged
@@ -275,7 +313,11 @@ export type AgentModelOverrides = z.infer<typeof AgentModelOverridesSchema>;
 
 export const AgentDefaultsSchema = z.object({
   model: z.string().default("anthropic/claude-sonnet-4-6"),
-  workspace_base: z.string().default("/home/ec2-user/.openclaw"),
+  /** Fleet-wide ordered fallback models ("provider/model") materialized into
+   *  every agent's model config unless the agent sets its own fallback_models. */
+  fallback_models: z.array(z.string()).optional(),
+  /** Default runtime target for agents that don't set their own `target`. */
+  target: TargetIdSchema.optional(),
   plugins: z.array(z.string()).default(["anthropic"]),
   /** Global default params applied to all agents (unless overridden). */
   params: AgentParamsSchema.optional(),
@@ -287,6 +329,90 @@ export const AgentsConfigSchema = z.object({
   defaults: AgentDefaultsSchema.default({}),
   list: z.array(AgentSchema),
 });
+
+// ── Targets (runtime hosts) ──────────────────────────────────────────────────
+// Where an agent runs, how to reach it, and how to manage its service. The
+// provider-specific block (aws / ssh) is discriminated on `provider`.
+
+const TargetCommonSchema = {
+  /** Host operating system — selects path conventions and defaults. */
+  os: z.enum(["linux", "macos"]).default("linux"),
+  /** Service supervisor used to (re)start the gateway on this host. */
+  service_manager: z.enum(["systemd", "launchd", "none"]).default("systemd"),
+  /** Root directory for agent workspaces on this host. */
+  workspace_base: WorkspaceBaseSchema,
+};
+
+export const AwsSsmTargetSchema = z.object({
+  provider: z.literal("aws-ssm"),
+  ...TargetCommonSchema,
+  aws: z.object({
+    region: z.string(),
+  }),
+});
+
+export const SshTargetSchema = z.object({
+  provider: z.literal("ssh"),
+  ...TargetCommonSchema,
+  ssh: z.object({
+    host: z.string(),
+    user: z.string(),
+    port: z.number().int().positive().default(22),
+    /** Path to a private key for auth. Falls back to the SSH agent when unset. */
+    identity_file: z.string().optional(),
+  }),
+});
+
+export const LocalTargetSchema = z.object({
+  provider: z.literal("local"),
+  ...TargetCommonSchema,
+});
+
+export const TargetSchema = z.discriminatedUnion("provider", [
+  AwsSsmTargetSchema,
+  SshTargetSchema,
+  LocalTargetSchema,
+]);
+export type TargetConfig = z.infer<typeof TargetSchema>;
+export type TargetProvider = TargetConfig["provider"];
+
+/** Map of target id → target config. */
+export const TargetsSchema = z.record(z.string(), TargetSchema).default({});
+
+// ── Deploy (artifact transport) ──────────────────────────────────────────────
+// Where rendered agent bundles are published before a target applies them.
+// Optional: when omitted, deploy machinery falls back to the legacy
+// `<fleet-name>-ledger` S3 bucket convention.
+
+export const ArtifactStoreSchema = z.discriminatedUnion("provider", [
+  z.object({
+    provider: z.literal("s3"),
+    s3: z.object({
+      bucket: z.string(),
+      region: z.string().optional(),
+    }),
+  }),
+  z.object({
+    provider: z.literal("local-fs"),
+    local_fs: z.object({
+      path: z.string(),
+    }),
+  }),
+  z.object({
+    provider: z.literal("scp"),
+    scp: z.object({
+      host: z.string(),
+      user: z.string(),
+      path: z.string(),
+    }),
+  }),
+]);
+export type ArtifactStoreConfig = z.infer<typeof ArtifactStoreSchema>;
+
+export const DeploySchema = z.object({
+  artifact_store: ArtifactStoreSchema,
+});
+export type DeployConfig = z.infer<typeof DeploySchema>;
 
 export const SkillsRepoSchema = z.object({
   url: z.string().default(""),
@@ -384,7 +510,7 @@ export const ContextSchema = z.object({
 });
 
 export const FleetMetaSchema = z.object({
-  name: z.string(),
+  name: FleetNameSchema,
   version: z.string().default("1.0.0"),
   client: z.string().default(""),
   description: z.string().default(""),
@@ -393,6 +519,10 @@ export const FleetMetaSchema = z.object({
 export const FleetSchema = z.object({
   fleet: FleetMetaSchema,
   delegation: DelegationFleetSchema.optional(),
+  /** Runtime hosts, keyed by id. Agents reference these via `target`. */
+  targets: TargetsSchema,
+  /** Artifact transport for deploys. Optional (legacy bucket convention). */
+  deploy: DeploySchema.optional(),
   agents: AgentsConfigSchema,
   skills_repo: SkillsRepoSchema.default({}),
   /** Optional: config for Continuous Agentics private skill registry */
@@ -407,18 +537,14 @@ export const FleetSchema = z.object({
 export type DelegationFleetConfig = z.infer<typeof DelegationFleetSchema>;
 export type DelegationAgentConfig = z.infer<typeof DelegationAgentSchema>;
 export type SkillSource = z.infer<typeof SkillSourceSchema>;
-export type SkillRef = { name: string; source: SkillSource; author?: string; version?: string };
-export type SlackAccount = z.infer<typeof SlackAccountSchema>;
-export type AnthropicAgentConfig = z.infer<typeof AnthropicAgentSchema>;
+export type SkillRef = z.infer<typeof SkillRefSchema>;
+export type ApiKeysConfig = z.infer<typeof ApiKeysSchema>;
 export type AgentConfig = z.infer<typeof AgentSchema>;
 export type AgentDefaults = z.infer<typeof AgentDefaultsSchema>;
 export type SkillsRepo = z.infer<typeof SkillsRepoSchema>;
 export type PrivateRegistry = z.infer<typeof PrivateRegistrySchema>;
 export type FleetFile = z.infer<typeof FleetSchema>;
 
-/** Resolved fleet with helper accessors */
-export interface Fleet extends FleetFile {
-  getAgent(id: string): AgentConfig | undefined;
-  orchestrator: AgentConfig | undefined;
-  specialists: AgentConfig[];
-}
+/** Normalized fleet model (with resolved targets + accessors). Re-exported here
+ *  for back-compat; defined in ../core/model.ts. */
+export type { Fleet, FleetModel } from "../core/model.js";

@@ -37,7 +37,7 @@ Examples:
         console.log("  " + "─".repeat(76));
 
         for (const agent of agents.list) {
-          const workspace = path.join(agents.defaults.workspace_base, `workspace-${agent.id}`);
+          const workspace = path.join(fleet.targetForAgent(agent).workspace_base, `workspace-${agent.id}`);
           const wsOk = fs.existsSync(workspace);
           const wsStatus = wsOk ? chalk.green("✓") : chalk.red("✗");
           const role = agent.orchestrator

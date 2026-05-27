@@ -1,7 +1,53 @@
 # Design — Deploy Transport (S3 + SSM)
 
-> **Status:** approved 2026-05-08 (decision-record)
+> **Status:** SUPERSEDED 2026-05-27 by the provider-refactor direction.
+> The original 2026-05-08 decision-record (named SSM document) is retained
+> below for history; see "Reconciliation" for what actually shipped and why.
 > **Implements:** target shape for `fleetmind deploy` and `fleetmind push`
+
+## Reconciliation (2026-05-27) — generic command runner
+
+The implementation diverged from the 2026-05-08 decision, and the divergence
+is the better architecture for the multi-backend direction (AWS EC2 + Mac mini
++ VMware), so we ratify it rather than "fix" it.
+
+**Decided:** deploy uses a *smart host, thin command* model. The host has the
+`fleetmind` CLI installed; the transport's only job is to run a fixed command
+(`fleetmind pull-self --apply`) on the resolved host. The apply logic
+(download → merge → restart) lives once, in the CLI, not in a per-transport
+script. This is expressed as a provider-neutral `CommandRunner`:
+
+```
+CommandRunner.run(host, ["fleetmind pull-self --apply"])
+  ├─ aws-ssm → SSM SendCommand (AWS-RunShellScript)
+  ├─ ssh     → ssh host 'fleetmind pull-self --apply'
+  └─ local   → exec fleetmind pull-self --apply
+```
+
+paired with a provider-neutral `ArtifactStore` (the bundle's home) and a
+`ServiceManager` (systemd / launchd / none). Config: step-1's
+`deploy.artifact_store` block (s3 | local-fs | scp), *not* the
+`deploy: {transport, staging, ssm}` block sketched at the bottom of this doc.
+
+**Retired:** the named SSM document (`FleetMindDeployApply`) as the core
+mechanism. It is AWS-locked (SSM documents don't exist on a Mac mini) and would
+force the apply logic to be re-implemented per transport. The one property it
+bought — a `SendCommand` caller can't run arbitrary commands — is AWS-only
+defense-in-depth and can be reintroduced later as an *aws-ssm adapter detail*
+(a TF-managed document that runs only the fixed `pull-self`) without changing
+the `CommandRunner` interface. Not built now; revisit if a security review asks.
+
+**Also note:** content-addressed `<fleet>/<sha>/<agent>.tar.gz` keys were not
+adopted; the shipped scheme is flat `deploy-staging/<agent>.tar.gz` + timestamped
+`history/<agent>/`, centralized in `src/deploy/plan.ts`.
+
+---
+
+> The remainder of this document is the original 2026-05-08 record, kept for
+> historical context. Where it conflicts with the reconciliation above, the
+> reconciliation wins.
+
+> **Originally approved:** 2026-05-08 (decision-record)
 > **Affects:** `src/runtime/provisioner.ts`, new `src/runtime/transport/`,
 > new `infra/terraform/modules/deploy-staging/`, new SSM document module,
 > openclaw-terraform tagging contract

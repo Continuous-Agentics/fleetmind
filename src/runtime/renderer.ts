@@ -6,6 +6,20 @@ import fs from "node:fs";
 import path from "node:path";
 import { stringify as yamlStringify } from "yaml";
 import type { Fleet, AgentConfig } from "../config/schema.js";
+import { slackChannel } from "../core/channels.js";
+
+/** An OpenClaw model config object. `fallbacks` is omitted when empty so strict
+ *  (no-fallback) agents keep the bare `{ primary }` shape OpenClaw treats as
+ *  strict. See OpenClaw docs/concepts/model-failover. */
+function modelConfig(primary: string, fallbacks: string[]): { primary: string; fallbacks?: string[] } {
+  return fallbacks.length > 0 ? { primary, fallbacks } : { primary };
+}
+
+/** Fallback models materialized into an agent's model config: the agent's own
+ *  list when set (including an explicit [] = strict), else the fleet default. */
+function agentFallbacks(agent: AgentConfig, defaults: Fleet["agents"]["defaults"]): string[] {
+  return agent.fallback_models ?? defaults.fallback_models ?? [];
+}
 
 /**
  * Build the per-agent openclaw.json slice for a single gateway/EC2 instance.
@@ -35,10 +49,11 @@ export function renderAgentOpenClawJson(
   if (!agent) {
     throw new Error(`renderAgentOpenClawJson: agent "${agentId}" not found in fleet`);
   }
+  const slack = slackChannel(agent);
 
-  // Agent list — single entry for this agent only
-  // Per-agent workspace_base override falls back to fleet defaults.
-  const agentWorkspaceBase = agent.workspace_base ?? defaults.workspace_base;
+  // Agent list — single entry for this agent only.
+  // Workspace base comes from the agent's resolved runtime target.
+  const agentWorkspaceBase = fleet.targetForAgent(agent).workspace_base;
   const workspace = `${agentWorkspaceBase}/${agent.id}`;
   const agentDir = `${agentWorkspaceBase}/agents/${agent.id}/agent`;
   const agentListEntry = {
@@ -46,7 +61,7 @@ export function renderAgentOpenClawJson(
     name: agent.name,
     workspace,
     agentDir,
-    model: { primary: agent.model ?? defaults.model },
+    model: modelConfig(agent.model ?? defaults.model, agentFallbacks(agent, defaults)),
     ...(agent.orchestrator ? { default: true } : {}),
   };
 
@@ -56,18 +71,18 @@ export function renderAgentOpenClawJson(
       agentId: agent.id,
       match: {
         channel: "slack",
-        accountId: agent.slack?.account_id,
+        accountId: slack?.account_id,
       },
     },
   ];
 
   // Slack accounts — only this agent's account (no groupPolicy here; it lives at top level)
   const slackAccounts: Record<string, unknown> = {
-    [agent.slack?.account_id ?? agent.id]: {
+    [slack?.account_id ?? agent.id]: {
       enabled: true,
-      botToken: agent.slack?.bot_token,
-      appToken: agent.slack?.app_token,
-      webhookPath: `/slack/${agent.slack?.account_id}`,
+      botToken: slack?.bot_token,
+      appToken: slack?.app_token,
+      webhookPath: `/slack/${slack?.account_id}`,
     },
   };
 
@@ -76,7 +91,7 @@ export function renderAgentOpenClawJson(
   // and collect their bot_user_id values for the users allowlist.
   const perChannelEntries: Record<string, unknown> = {};
   // Filter out placeholder channel IDs — they break Slack channel startup.
-  const agentChannels = (agent.slack?.channels ?? []).filter(
+  const agentChannels = (slack?.channels ?? []).filter(
     (c) => /^C[A-Z0-9]+$/.test(c)
   );
   for (let i = 0; i < agentChannels.length; i++) {
@@ -85,15 +100,16 @@ export function renderAgentOpenClawJson(
     const botUserIds: string[] = [];
     for (const other of agents.list) {
       if (other.id === agentId) continue;
-      const otherChannels = other.slack?.channels ?? [];
+      const otherSlack = slackChannel(other);
+      const otherChannels = otherSlack?.channels ?? [];
       if (!otherChannels.includes(channelId)) continue;
-      if (!other.slack?.bot_user_id) {
+      if (!otherSlack?.bot_user_id) {
         process.stderr.write(
           `[fleetmind renderer] WARNING: agent "${other.id}" shares channel ${channelId} with "${agentId}" but has no bot_user_id — skipping bot-specific users allowlist entry for that agent.\n`
         );
         continue;
       }
-      botUserIds.push(other.slack?.bot_user_id);
+      botUserIds.push(otherSlack.bot_user_id);
     }
     // Always include "*" wildcard so human users are never blocked by the per-channel
     // users allowlist. OpenClaw's authorizeSlackBotRoomMessage filters out "*" from the
@@ -163,7 +179,7 @@ export function renderAgentOpenClawJson(
   return {
     agents: {
       defaults: {
-        model: { primary: defaults.model },
+        model: modelConfig(defaults.model, defaults.fallback_models ?? []),
         ...(defaultsParams ? { params: defaultsParams } : {}),
         ...(defaultsModels
           ? {
@@ -272,15 +288,26 @@ export function renderAgentOpenClawJson(
  * "one gateway, N agents" topology — it does NOT match the gg-sandbox deploy
  * (one gateway per agent EC2). Kept for backward compatibility only.
  */
-export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
+/** The agents whose runtime target resolves to `targetId` — i.e. the agents
+ *  that run on that one host. Used to render a single gateway's config. */
+export function agentsForTarget(fleet: Fleet, targetId: string): AgentConfig[] {
+  return fleet.agents.list.filter((a) => fleet.targetForAgent(a).id === targetId);
+}
+
+/** Render a complete openclaw.json for one gateway hosting `hostAgents`.
+ *  `renderOpenClawJson` passes the whole fleet (single-gateway / dev); a
+ *  per-host deploy passes just the agents on that host. Only the listed agents'
+ *  Slack accounts + tokens land in the config, so each host's gateway sees only
+ *  its own credentials. */
+function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): Record<string, unknown> {
   const { agents, openclaw } = fleet;
   const defaults = agents.defaults;
   const oc = openclaw;
 
   // Agent list
-  const agentList = agents.list.map((agent) => {
+  const agentList = hostAgents.map((agent) => {
     const model = agent.model ?? defaults.model;
-    const agentWorkspaceBase = agent.workspace_base ?? defaults.workspace_base;
+    const agentWorkspaceBase = fleet.targetForAgent(agent).workspace_base;
     const workspace = `${agentWorkspaceBase}/${agent.id}`;
     const agentDir = `${agentWorkspaceBase}/agents/${agent.id}/agent`;
     return {
@@ -288,35 +315,36 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
       name: agent.name,
       workspace,
       agentDir,
-      model: { primary: model },
+      model: modelConfig(model, agentFallbacks(agent, defaults)),
       ...(agent.orchestrator ? { default: true } : {}),
     };
   });
 
   // Bindings: one per agent, matched on Slack accountId
-  const bindings = agents.list.map((agent) => ({
+  const bindings = hostAgents.map((agent) => ({
     agentId: agent.id,
     match: {
       channel: "slack",
-      accountId: agent.slack?.account_id,
+      accountId: slackChannel(agent)?.account_id,
     },
   }));
 
   // Slack accounts (no per-account groupPolicy; lives at top level as "allowlist")
   const slackAccounts: Record<string, unknown> = {};
-  for (const agent of agents.list) {
-    slackAccounts[agent.slack?.account_id ?? agent.id] = {
+  for (const agent of hostAgents) {
+    const slack = slackChannel(agent);
+    slackAccounts[slack?.account_id ?? agent.id] = {
       enabled: true,
-      botToken: agent.slack?.bot_token,
-      appToken: agent.slack?.app_token,
-      webhookPath: `/slack/${agent.slack?.account_id}`,
+      botToken: slack?.bot_token,
+      appToken: slack?.app_token,
+      webhookPath: `/slack/${slack?.account_id}`,
     };
   }
 
   // agentToAgent allow list — array of target agent-id strings (per OpenClaw config schema).
   // Deduplicated and sorted for stable output.
   const a2aAllowSet = new Set<string>();
-  for (const agent of agents.list) {
+  for (const agent of hostAgents) {
     for (const targetId of agent.agent_to_agent.can_send_to) {
       a2aAllowSet.add(targetId);
     }
@@ -325,7 +353,7 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
 
   // Collect all plugins across agents
   const allPlugins = new Set<string>();
-  for (const agent of agents.list) {
+  for (const agent of hostAgents) {
     const plugins = agent.plugins ?? defaults.plugins;
     for (const p of plugins) allPlugins.add(p);
   }
@@ -336,7 +364,7 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
 
   return {
     agents: {
-      defaults: { model: { primary: defaults.model } },
+      defaults: { model: modelConfig(defaults.model, defaults.fallback_models ?? []) },
       list: agentList,
     },
     bindings,
@@ -405,6 +433,19 @@ export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
       restart: true,
     },
   };
+}
+
+/** Full-fleet openclaw.json (every agent in one gateway). Used by `deploy`
+ *  (local ./rendered output) and dev. */
+export function renderOpenClawJson(fleet: Fleet): Record<string, unknown> {
+  return renderOpenClawJsonForAgents(fleet, fleet.agents.list);
+}
+
+/** openclaw.json for the single gateway on one host: exactly the agents whose
+ *  `target` resolves to `targetId`. A one-agent host yields the same shape as
+ *  the legacy per-agent slice; an n-agent host yields one multi-agent gateway. */
+export function renderHostOpenClawJson(fleet: Fleet, targetId: string): Record<string, unknown> {
+  return renderOpenClawJsonForAgents(fleet, agentsForTarget(fleet, targetId));
 }
 
 export function renderTerraformVars(fleet: Fleet): string {
@@ -569,7 +610,10 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
   const agent = fleet.agents.list.find((a) => a.id === agentId);
   if (!agent) throw new Error(`Agent ${agentId} not found in fleet`);
 
-  // Roster: other agents with only routing-safe fields
+  // Roster: other agents with only routing-safe fields. Each carries its
+  // `target` so the slice re-parses (normalizeFleet resolves every agent's
+  // target against the included `targets` map below). Credentials and channel
+  // bindings are deliberately omitted.
   const roster = fleet.agents.list
     .filter((a) => a.id !== agentId)
     .map((a) => ({
@@ -578,7 +622,7 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
       emoji: a.emoji,
       role: a.role,
       orchestrator: a.orchestrator ?? false,
-      ...(a.slack?.channels ? { channels: a.slack.channels } : {}),
+      ...(a.target ? { target: a.target } : {}),
     }));
 
   // Derive NATS server URL from fleet name if not explicitly set.
@@ -595,44 +639,40 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
     };
   }
 
+  const selfEntry = {
+    id: agent.id,
+    name: agent.name,
+    emoji: agent.emoji,
+    role: agent.role,
+    orchestrator: agent.orchestrator ?? false,
+    model: agent.model ?? fleet.agents.defaults.model,
+    ...(agent.fallback_models ? { fallback_models: agent.fallback_models } : {}),
+    skills: agent.skills ?? [],
+    ...(agent.target ? { target: agent.target } : {}),
+    ...(agent.delegation ? { delegation: agent.delegation } : {}),
+  };
+
   const slice = {
     fleet: {
       name: fleet.fleet.name,
       version: fleet.fleet.version,
     },
     ...(delegation ? { delegation } : {}),
+    // Runtime targets are host config (no secrets); included so the slice
+    // re-parses on the bot side, where every agent's target must resolve.
+    targets: fleet.targets,
     ...(fleet.context ? { context: fleet.context } : {}),
     agents: {
       defaults: {
         model: fleet.agents.defaults.model,
-        workspace_base: fleet.agents.defaults.workspace_base,
+        ...(fleet.agents.defaults.fallback_models ? { fallback_models: fleet.agents.defaults.fallback_models } : {}),
+        ...(fleet.agents.defaults.target ? { target: fleet.agents.defaults.target } : {}),
       },
-      self: {
-        id: agent.id,
-        name: agent.name,
-        emoji: agent.emoji,
-        role: agent.role,
-        orchestrator: agent.orchestrator ?? false,
-        model: agent.model ?? fleet.agents.defaults.model,
-        skills: agent.skills ?? [],
-        ...(agent.delegation ? { delegation: agent.delegation } : {}),
-      },
+      self: selfEntry,
       roster,
       // agents.list satisfies FleetSchema required by fleetmind CLI commands
       // (e.g. nats subscribe). Contains this agent + routing-safe roster entries.
-      list: [
-        {
-          id: agent.id,
-          name: agent.name,
-          emoji: agent.emoji,
-          role: agent.role,
-          orchestrator: agent.orchestrator ?? false,
-          model: agent.model ?? fleet.agents.defaults.model,
-          skills: agent.skills ?? [],
-          ...(agent.delegation ? { delegation: agent.delegation } : {}),
-        },
-        ...roster,
-      ],
+      list: [selfEntry, ...roster],
     },
   };
 

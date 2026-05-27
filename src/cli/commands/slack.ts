@@ -36,21 +36,35 @@ export type WriteFn = (filePath: string, content: string) => void;
 
 // ── Fleet YAML types ──────────────────────────────────────────────────────────
 
-interface AgentSlack {
+/** A raw (pre-validation) channel entry from fleet.yaml. Only the fields slack
+ *  tooling cares about; `provider` discriminates the union. */
+interface RawChannel {
+  provider?: string;
   bot_token?: string;
   bot_user_id?: string;
+  long_description?: string;
+  background_color?: string;
+  extra_scopes?: string[];
+  extra_events?: string[];
 }
 
 interface RawAgent {
   id?: string;
   name?: string;
-  slack?: AgentSlack;
+  role?: string;
+  description?: string;
+  channels?: RawChannel[];
 }
 
 interface RawFleet {
   fleet?: { name?: string };
   delegation?: { aws_region?: string };
   agents?: { list?: RawAgent[] };
+}
+
+/** The slack channel entry within a raw agent's `channels` list, if any. */
+function rawSlackChannel(channels: RawChannel[] | undefined): RawChannel | undefined {
+  return channels?.find((c) => c.provider === "slack");
 }
 
 // ── Options & results ─────────────────────────────────────────────────────────
@@ -135,6 +149,39 @@ async function callAuthTest(
   }
 }
 
+type FleetDoc = ReturnType<typeof parseDocument>;
+
+/** The items of `agents.list` as the yaml document's own sequence. Throws if
+ *  the node is missing or not a sequence. Shared by the writeback helpers. */
+function agentListItems(doc: FleetDoc): unknown[] {
+  const agentsNode = doc.getIn(["agents", "list"]) as { items: unknown[] } | undefined;
+  if (!agentsNode || !("items" in agentsNode)) {
+    throw new Error("fleet.yaml: agents.list is missing or not a sequence");
+  }
+  return agentsNode.items;
+}
+
+/** Locate the slack entry in agent `i`'s `channels` sequence. Returns its index
+ *  (or -1) plus whether a `channels` list exists at all — callers need that to
+ *  decide between appending to and creating the list. */
+function findSlackChannel(
+  doc: FleetDoc,
+  i: number
+): { slackIdx: number; hasChannelsList: boolean } {
+  const channelsNode = doc.getIn(["agents", "list", i, "channels"]) as
+    | { items: unknown[] }
+    | undefined;
+  if (!channelsNode || !("items" in channelsNode)) {
+    return { slackIdx: -1, hasChannelsList: false };
+  }
+  for (let j = 0; j < channelsNode.items.length; j++) {
+    if (doc.getIn(["agents", "list", i, "channels", j, "provider"]) === "slack") {
+      return { slackIdx: j, hasChannelsList: true };
+    }
+  }
+  return { slackIdx: -1, hasChannelsList: true };
+}
+
 /**
  * Write updated bot_user_id values back into fleet.yaml while preserving
  * comments and formatting, using the `yaml` package's document-level API.
@@ -147,28 +194,71 @@ export function writeFleetYaml(
   const raw = fs.readFileSync(fleetPath, "utf-8");
   const doc = parseDocument(raw);
 
-  // Navigate: agents.list[*].slack.bot_user_id
-  const agentsNode = doc.getIn(["agents", "list"]);
-  if (!agentsNode || !("items" in (agentsNode as object))) {
-    throw new Error("fleet.yaml: agents.list is missing or not a sequence");
-  }
-
-  // Iterate using the yaml document's own sequence items
-  const listSeq = agentsNode as { items: unknown[] };
-  for (let i = 0; i < listSeq.items.length; i++) {
+  // Navigate: agents.list[*].channels[provider=slack].bot_user_id
+  const items = agentListItems(doc);
+  for (let i = 0; i < items.length; i++) {
     const idVal = doc.getIn(["agents", "list", i, "id"]) as string | undefined;
     if (!idVal || !updates.has(idVal)) continue;
 
     const newUserId = updates.get(idVal)!;
+    const { slackIdx, hasChannelsList } = findSlackChannel(doc, i);
 
-    // Check if slack map exists
-    const slackExists = doc.hasIn(["agents", "list", i, "slack"]);
-    if (!slackExists) {
-      // Create a minimal slack map — shouldn't normally happen if populate ran first
-      doc.setIn(["agents", "list", i, "slack"], { bot_user_id: newUserId });
+    if (slackIdx >= 0) {
+      doc.setIn(["agents", "list", i, "channels", slackIdx, "bot_user_id"], newUserId);
+    } else if (hasChannelsList) {
+      // Channels list exists but has no slack entry — append one.
+      doc.addIn(
+        ["agents", "list", i, "channels"],
+        doc.createNode({ provider: "slack", bot_user_id: newUserId })
+      );
     } else {
-      doc.setIn(["agents", "list", i, "slack", "bot_user_id"], newUserId);
+      // No channels list yet — create it with a minimal slack entry.
+      // (Shouldn't normally happen if the agent was authored with a channel.)
+      doc.setIn(
+        ["agents", "list", i, "channels"],
+        doc.createNode([{ provider: "slack", bot_user_id: newUserId }])
+      );
     }
+  }
+
+  writeFn(fleetPath, doc.toString());
+}
+
+/**
+ * Write Slack channel IDs back into fleet.yaml, preserving comments + formatting.
+ *
+ * Targets the nested `channels:` *list of channel IDs* under each agent's
+ * `channels[provider=slack]` entry — NOT the agent-level `channels` sequence
+ * (which holds the channel configs). The v1 layout had `slack.channels: [...]`
+ * one level up; v2 nests it inside the slack channel entry, so this navigates
+ * the document tree by provider rather than regex-matching a flat shape.
+ *
+ * `updates` maps agent id → the channel IDs to set. Agents missing a slack
+ * entry (or with an empty ID list) are skipped.
+ */
+export function writeSlackChannelIds(
+  fleetPath: string,
+  updates: Map<string, string[]>,
+  writeFn: WriteFn
+): void {
+  const raw = fs.readFileSync(fleetPath, "utf-8");
+  const doc = parseDocument(raw);
+
+  const items = agentListItems(doc);
+  for (let i = 0; i < items.length; i++) {
+    const idVal = doc.getIn(["agents", "list", i, "id"]) as string | undefined;
+    if (!idVal || !updates.has(idVal)) continue;
+
+    const channelIds = updates.get(idVal)!;
+    if (channelIds.length === 0) continue;
+
+    const { slackIdx } = findSlackChannel(doc, i);
+    if (slackIdx < 0) continue; // No slack channel to attach IDs to — skip.
+
+    doc.setIn(
+      ["agents", "list", i, "channels", slackIdx, "channels"],
+      doc.createNode(channelIds)
+    );
   }
 
   writeFn(fleetPath, doc.toString());
@@ -233,7 +323,7 @@ export async function discoverSlackBotUserIds(
 
   for (const agent of filteredAgents) {
     const agentId = agent.id!;
-    const existingUserId = agent.slack?.bot_user_id;
+    const existingUserId = rawSlackChannel(agent.channels)?.bot_user_id;
 
     // Skip if already set to a real Slack user ID and --force not passed.
     // A real user ID matches /^U[A-Z0-9]+$/ — anything else (e.g. U_REPLACE_ME,
@@ -544,18 +634,14 @@ export const DEFAULT_EVENTS = [
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-/** Subset of the agent we need for manifest generation. */
+/** Subset of the agent we need for manifest generation. Slack-specific fields
+ *  are read from the agent's `channels` list (provider: slack). */
 export interface ManifestAgentInput {
   id: string;
   name: string;
   role?: string;
   description?: string;
-  slack?: {
-    long_description?: string;
-    background_color?: string;
-    extra_scopes?: string[];
-    extra_events?: string[];
-  };
+  channels?: RawChannel[];
 }
 
 /** A raw fleet.yaml-like shape for manifest generation (flexible, no Zod). */
@@ -600,8 +686,9 @@ export function buildManifest(
   fleetName: string
 ): Record<string, unknown> {
   const role = agent.role ?? "worker";
+  const slack = rawSlackChannel(agent.channels);
   const bgColor =
-    agent.slack?.background_color ??
+    slack?.background_color ??
     ROLE_BACKGROUND_COLORS[role] ??
     ROLE_BACKGROUND_COLORS["worker"];
 
@@ -623,8 +710,8 @@ export function buildManifest(
     : baseDesc;
 
   // Operator-provided value is used verbatim; warn if it will fail Slack validation.
-  const longDesc = agent.slack?.long_description ?? autoDesc;
-  if (agent.slack?.long_description && longDesc.length < SLACK_LONG_DESC_MIN) {
+  const longDesc = slack?.long_description ?? autoDesc;
+  if (slack?.long_description && longDesc.length < SLACK_LONG_DESC_MIN) {
     log.warn(
       `  ⚠ ${agent.id}: long_description is ${longDesc.length} chars ` +
       `(Slack requires ≥ ${SLACK_LONG_DESC_MIN}). Manifest may fail import.`
@@ -632,14 +719,14 @@ export function buildManifest(
   }
 
   // Merge extra scopes (deduped, extras after defaults).
-  const extraScopes = agent.slack?.extra_scopes ?? [];
+  const extraScopes = slack?.extra_scopes ?? [];
   const scopes = [
     ...DEFAULT_SCOPES,
     ...extraScopes.filter((s) => !DEFAULT_SCOPES.includes(s)),
   ];
 
   // Merge extra events (deduped, extras after defaults).
-  const extraEvents = agent.slack?.extra_events ?? [];
+  const extraEvents = slack?.extra_events ?? [];
   const events = [
     ...DEFAULT_EVENTS,
     ...extraEvents.filter((e) => !DEFAULT_EVENTS.includes(e)),
