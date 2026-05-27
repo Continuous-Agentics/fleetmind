@@ -411,7 +411,9 @@ export function renderTerraformVars(fleet: Fleet): string {
   const agentNames = fleet.agents.list.map((a) => `"${a.id}"`).join(", ");
 
   // Derive agent_orchestrators map from fleet.yaml. Drives task-ledger's IAM
-  // policy split (pm vs worker) and the wake target Name tag derivation.
+  // policy split (pm vs worker), wake target Name tag derivation, and NATS mode selection.
+  // Operators must use this map in their bootstrap template to conditionally set NATS_MODE:
+  //   NATS_MODE=${agent_orchestrators[agent_id] ? "pm" : "worker"}
   const orchestratorEntries = fleet.agents.list
     .map((a) => `  ${a.id} = ${a.orchestrator ? "true" : "false"}`)
     .join("\n");
