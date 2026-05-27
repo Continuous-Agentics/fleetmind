@@ -1,6 +1,6 @@
 ---
 name: bot-delegation
-version: 1.2.0
+version: 1.2.1
 description: >
   Delegate concrete dev work from a project-manager bot to worker bots via
   NATS transport, track through completion, and report back to the human.
@@ -570,6 +570,10 @@ Load these only when the task you're handling needs them:
 
 ## Changelog
 
+- **1.2.1 (2026-05-27)** — Documentation fix: Step 4 minimum fields now
+  correctly reference `Source planning channel` + `Source planning thread`
+  instead of removed `thread` field. Aligns with active-delegations-format
+  schema.
 - **1.2.0 (2026-05-21)** — Rewrite for NATS-only transport (CON-115):
   - New § Session boot — PM subscriber startup: start `fleetmind nats
     subscribe --mode pm` before handling any work. This is the replacement
