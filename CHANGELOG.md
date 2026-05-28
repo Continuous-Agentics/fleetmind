@@ -44,6 +44,9 @@ existing AWS/EC2 flow.
   `<PROVIDER>_API_KEY` the agent uses (ANTHROPIC_API_KEY, OPENAI_API_KEY, …), so
   any provider mix works without per-provider secrets/IAM/fetch. (Requires the
   matching `terraform-aws-fleetmind` release that creates + fetches `/model`.)
+  For `openai/*` models the renderer emits `agentRuntime: { id: "openclaw" }`
+  (OpenClaw otherwise routes `openai/*` to the Codex subscription harness), so
+  the injected `OPENAI_API_KEY` is used.
 - **Fallback models.** `fallback_models` on an agent (or `agents.defaults`)
   renders to OpenClaw's `model.fallbacks` failover chain (`[]` = strict).
 - **Targets + deploy transport.** Provider interfaces (`ArtifactStore`,
