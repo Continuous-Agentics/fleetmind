@@ -50,43 +50,54 @@ function makeLedger(fleet: ReturnType<typeof resolveAndLoadFleet>): TaskLedger {
 
 // ── Register ──────────────────────────────────────────────────────────────────
 
-// Wake an OpenClaw agent. Two paths:
-//   1. Preferred — POST create_flow to the local webhooks plugin endpoint using
-//      OPENCLAW_HOOKS_TOKEN (written by fetch-agent-secrets from Secrets Manager).
-//      Uses the /plugins/webhooks/nats-wake route configured in openclaw.json.
-//   2. Fallback — openclaw agent CLI using GATEWAY_TOKEN / OPENCLAW_GATEWAY_TOKEN.
-// Non-blocking in both cases — fires and forgets with a timeout.
-function wakeAgent(agentId: string, message: string, port: string = "18789"): void {
-  const hooksToken = process.env.OPENCLAW_HOOKS_TOKEN;
-
-  if (hooksToken) {
-    // Primary: webhooks plugin endpoint (more secure — NATS subscriber never
-    // needs full gateway auth, only the route-scoped hooks token).
-    const url = `http://localhost:${port}/plugins/webhooks/nats-wake`;
-    fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${hooksToken}`,
-      },
-      body: JSON.stringify({ action: "create_flow", goal: message, status: "queued" }),
-    }).catch((err: unknown) => {
-      log.warn(`[nats] wakeAgent(${agentId}) via hooks failed: ${err}`);
-    });
-    return;
-  }
-
-  // Fallback: openclaw agent CLI when hooks token is absent.
+// Wake an OpenClaw agent so it processes an inbound NATS delegation.
+//
+// History — what we had before this comment was written:
+//
+//   The original wakeAgent POSTed { action: "create_flow", goal: <msg> } to
+//   /plugins/webhooks/nats-wake (the webhooks plugin route, authenticated via
+//   OPENCLAW_HOOKS_TOKEN). That returned HTTP 200 + a real flowId — but the
+//   resulting flow only ever landed in .openclaw/flows/registry.sqlite as
+//   `status: queued`. Nothing actually woke the agent's main loop. Verified
+//   via strace: writev to 127.0.0.1:18789 went out, gateway responded,
+//   nothing executed. Result: subscriber acked DDB but the worker never
+//   processed the task, never opened a Slack thread per the bot-reception
+//   protocol, never published a ship event back to NATS. The whole
+//   delegation primitive was broken end-to-end.
+//
+//   `openclaw agent --agent <id> --message <text>` is the OpenClaw primitive
+//   that "Run[s] an agent turn via the Gateway" (per `openclaw agent --help`).
+//   Verified on a live forge instance: returns a real run result with a
+//   model call, response payload, and usage stats. This is what we want.
+//
+// One thing the subscriber HAS to get right that the previous code didn't:
+// the openclaw CLI resolves its config from $HOME/.openclaw/openclaw.json.
+// The systemd unit sets HOME=$WORKSPACE_DIR for the subscriber (so the
+// subscriber's process.env already carries the right HOME). Passing process.env
+// through to execFile preserves that — but if you spawn from a context where
+// HOME is wrong, openclaw will read a different config and fail with "Unknown
+// agent id <id>". That was the second part of why the old path was opaque.
+//
+// Non-blocking: fire and forget. We don't await the agent turn — the
+// subscriber needs to return to processing the next NATS event. The agent's
+// reply (Slack post, narrative write, `fleetmind task ship`) flows through
+// its own side effects.
+function wakeAgent(agentId: string, message: string): void {
   const token = process.env.GATEWAY_TOKEN ?? process.env.OPENCLAW_GATEWAY_TOKEN;
   if (!token) {
-    log.warn(`[nats] wakeAgent(${agentId}): no OPENCLAW_HOOKS_TOKEN or GATEWAY_TOKEN — skipping wake`);
+    log.warn(`[nats] wakeAgent(${agentId}): no GATEWAY_TOKEN — skipping wake (set the env var via /etc/fleetmind or the systemd EnvironmentFile)`);
     return;
   }
   const args = ["agent", "--agent", agentId, "--message", message];
+  // Pass the gateway token explicitly. `process.env` already carries HOME
+  // from the systemd unit (Environment=HOME=$WORKSPACE_DIR), which is what
+  // the openclaw CLI needs to find the right openclaw.json + agent registry.
   const env: NodeJS.ProcessEnv = { ...process.env, OPENCLAW_GATEWAY_TOKEN: token };
   const ocBin = process.env.OPENCLAW_BIN ?? "openclaw";
-  execFile(ocBin, args, { timeout: 15000, env }, (err) => {
-    if (err) log.warn(`[nats] wakeAgent(${agentId}) via CLI failed: ${err.message}`);
+  // 60s timeout: an agent turn typically completes in 5–10s but can take longer
+  // for complex skills; the old 15s was tight enough to cut off real work.
+  execFile(ocBin, args, { timeout: 60000, env }, (err) => {
+    if (err) log.warn(`[nats] wakeAgent(${agentId}) failed: ${err.message}`);
   });
 }
 
@@ -175,11 +186,10 @@ Examples:
           // Worker mode: auto-ack inbound delegations via DDB + wake OpenClaw session.
           if (opts.mode === "worker" && event.event === "delegation") {
             // Wake the worker agent so it starts processing the delegation immediately.
-            const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT ?? "18789";
             const workerId = opts.workerId ?? event.worker;
             if (workerId) {
               const msg = `NATS: Task ${event.task_id} delegated to you. Description: ${event.description ?? "(see DDB)"}`;
-              wakeAgent(workerId, msg, gatewayPort);
+              wakeAgent(workerId, msg);
             }
             try {
               await ledger.ackTask(event.task_id, event.worker, event.project);
@@ -203,16 +213,13 @@ Examples:
 
           // PM mode: advance DDB lifecycle on worker terminal events.
           if (opts.mode === "pm") {
-            // Wake the OpenClaw PM session via gateway CLI on ship/block
-            // events arrive. Opt-in: only fires when OPENCLAW_WEBHOOK_URL and
-            // OPENCLAW_WEBHOOK_SECRET are set in the environment (via EnvironmentFile).
-            const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT ?? "18789";
+            // Wake the OpenClaw PM session on ship/block events.
             if (event.event === "ship" || event.event === "block") {
               const pmAgentId = fleet.agents.list.find(a => a.orchestrator)?.id ?? "conductor";
               const msg = event.event === "ship"
                 ? `NATS: Task ${event.task_id} shipped by ${event.worker}. ${event.message ?? ""}`
                 : `NATS: Task ${event.task_id} blocked by ${event.worker}. ${event.reason ?? ""}`;
-              wakeAgent(pmAgentId, msg, gatewayPort);
+              wakeAgent(pmAgentId, msg);
             }
 
             if (event.event === "ship") {
