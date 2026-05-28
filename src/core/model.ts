@@ -9,6 +9,7 @@
  */
 
 import type { FleetFile, AgentConfig, TargetConfig } from "../config/schema.js";
+import { NatsConfigSchema } from "../config/schema.js";
 import { TargetIdId, type TargetId } from "./identifiers.js";
 
 /** A target config with its (branded) map key attached. (Intersection because
@@ -53,8 +54,32 @@ function resolveAgentTargetId(agent: AgentConfig, data: FleetFile): TargetId {
   return id;
 }
 
+/**
+ * Auto-default `delegation.nats = {}` when delegation is enabled but no `nats:`
+ * block was supplied. NATS is the only supported delegation transport today —
+ * `enabled: true` without `nats` is never a valid runtime state (the subscriber
+ * exits cleanly, and the publisher refuses to emit). Filling in the empty
+ * object lets the existing schema defaults + renderer Cloud-Map URL derivation
+ * take over, so operators don't have to write the literal `nats: {}` line.
+ *
+ * Returns a shallow copy with the patch applied; the input is not mutated.
+ */
+function applyNatsDefault(data: FleetFile): FleetFile {
+  if (!data.delegation?.enabled || data.delegation.nats) {
+    return data;
+  }
+  return {
+    ...data,
+    delegation: {
+      ...data.delegation,
+      nats: NatsConfigSchema.parse({}),
+    },
+  };
+}
+
 /** Validate and wrap a parsed fleet file. */
-export function normalizeFleet(data: FleetFile): FleetModel {
+export function normalizeFleet(input: FleetFile): FleetModel {
+  const data = applyNatsDefault(input);
   const targetMap = buildTargetMap(data);
 
   // Eagerly validate every agent resolves to a known target. Collect all

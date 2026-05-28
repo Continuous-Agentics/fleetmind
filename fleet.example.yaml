@@ -70,6 +70,8 @@ delegation:
   table_name: acme-fleet-tasks                # DDB table name (TF module: name_prefix + 'tasks')
   s3_bucket: acme-fleet-ledger                # S3 bucket  (TF module: name_prefix + 'ledger')
   # s3_key_template: "v0/projects/{project}/tasks/{date}-{task_id}.md"  # default; override only if needed
+  # nats: {}                                  # NATS transport; auto-defaulted when enabled — uncomment only to override
+  #                                           # (e.g. nats: { subject_prefix: "myfleet", creds_file: "..." })
 
 # ── Targets (runtime hosts) ───────────────────────────────────────────────────
 # Where each agent runs, how to reach it, and how to (re)start its gateway.
