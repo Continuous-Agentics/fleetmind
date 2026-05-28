@@ -82,6 +82,26 @@ existing AWS/EC2 flow.
   Cloud-Map URL derivation (`nats://nats.<fleet>.internal:4222`) take over
   without the operator having to write the literal line. Explicit `nats:`
   blocks are unchanged.
+- **`wakeAgent` actually wakes the OpenClaw agent now.** The NATS subscriber's
+  wake path (`src/cli/commands/nats.ts`) was POSTing
+  `{action: "create_flow", goal: <msg>}` to the gateway's
+  `/plugins/webhooks/nats-wake` route. The gateway happily accepted (HTTP 200,
+  real `flowId` returned) — but flows from that route just sat in
+  `.openclaw/flows/registry.sqlite` with `status: queued` and were never
+  drained by the agent's main loop. Result: subscriber ack'd DDB
+  (`delegated → accepted`) but the worker never processed the task, never
+  opened a Slack thread per the bot-reception protocol, and never published a
+  `ship` event back to NATS. The whole delegation primitive was broken
+  end-to-end. Replaced with `openclaw agent --agent <id> --message <msg>` (the
+  OpenClaw CLI "run one agent turn" primitive), which is what the bot-reception
+  protocol's wake path actually wants. The fallback CLI path in the original
+  code already used the same primitive — it just never ran because
+  `OPENCLAW_HOOKS_TOKEN` was set, gating it behind the broken webhook path.
+  Verified live: a delegation event now triggers a real agent turn (`status:
+  ok`, model call to `claude-sonnet-4-6`, response payload). Per-agent model
+  overrides also confirmed working (the `agent model: ...haiku...` line in
+  gateway startup logs is just the default being announced before per-turn
+  resolution — not a misconfig).
 
 ## [0.6.13] — 2026-05-19
 
