@@ -40,8 +40,13 @@ existing AWS/EC2 flow.
   daemon to `openclaw onboard --install-daemon`. `--no-daemon` / `--dry-run`.
 - **Multi-provider models.** `model` is a `provider/model` string (OpenClaw
   makes the call); `api_keys` maps providers to credentials. `secrets populate`
-  writes one secret per provider (`<fleet>/agents/<id>/<provider>`), preserving
-  the existing `/anthropic` runtime contract.
+  writes a single combined `<fleet>/agents/<id>/model` secret holding every
+  `<PROVIDER>_API_KEY` the agent uses (ANTHROPIC_API_KEY, OPENAI_API_KEY, …), so
+  any provider mix works without per-provider secrets/IAM/fetch. (Requires the
+  matching `terraform-aws-fleetmind` release that creates + fetches `/model`.)
+  For `openai/*` models the renderer emits `agentRuntime: { id: "openclaw" }`
+  (OpenClaw otherwise routes `openai/*` to the Codex subscription harness), so
+  the injected `OPENAI_API_KEY` is used.
 - **Fallback models.** `fallback_models` on an agent (or `agents.defaults`)
   renders to OpenClaw's `model.fallbacks` failover chain (`[]` = strict).
 - **Targets + deploy transport.** Provider interfaces (`ArtifactStore`,

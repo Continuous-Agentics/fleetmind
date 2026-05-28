@@ -7,6 +7,7 @@ import path from "node:path";
 import { stringify as yamlStringify } from "yaml";
 import type { Fleet, AgentConfig } from "../config/schema.js";
 import { slackChannel } from "../core/channels.js";
+import { modelProvider } from "../core/model-provider.js";
 
 /** An OpenClaw model config object. `fallbacks` is omitted when empty so strict
  *  (no-fallback) agents keep the bare `{ primary }` shape OpenClaw treats as
@@ -19,6 +20,39 @@ function modelConfig(primary: string, fallbacks: string[]): { primary: string; f
  *  list when set (including an explicit [] = strict), else the fleet default. */
 function agentFallbacks(agent: AgentConfig, defaults: Fleet["agents"]["defaults"]): string[] {
   return agent.fallback_models ?? defaults.fallback_models ?? [];
+}
+
+/** Every model ref an agent uses: its primary (or the fleet default) + its
+ *  fallback chain. */
+function agentModels(agent: AgentConfig, defaults: Fleet["agents"]["defaults"]): string[] {
+  return [agent.model ?? defaults.model, ...agentFallbacks(agent, defaults)];
+}
+
+/**
+ * Build the `agents.defaults.models` map for a set of agents, or undefined when
+ * empty. Merges two things:
+ *  - per-model param overrides from `agents.defaults.models` (e.g. cacheRetention)
+ *  - an `agentRuntime: { id: "openclaw" }` override for every `openai/*` model
+ *    used. OpenClaw routes `openai/*` to the Codex (subscription/OAuth) harness
+ *    by default; forcing the openclaw runtime is what makes the injected
+ *    OPENAI_API_KEY actually used (see OpenClaw docs/providers/openai).
+ */
+function buildModelsMap(
+  agents: AgentConfig[],
+  defaults: Fleet["agents"]["defaults"]
+): Record<string, Record<string, unknown>> | undefined {
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [modelKey, override] of Object.entries(defaults.models ?? {})) {
+    if (override.params) out[modelKey] = { params: override.params };
+  }
+  for (const agent of agents) {
+    for (const ref of agentModels(agent, defaults)) {
+      if (modelProvider(ref) === "openai") {
+        out[ref] = { ...(out[ref] ?? {}), agentRuntime: { id: "openclaw" } };
+      }
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /**
@@ -164,9 +198,8 @@ export function renderAgentOpenClawJson(
   const defaultsParams = defaults.params && Object.keys(defaults.params).length > 0
     ? defaults.params
     : undefined;
-  const defaultsModels = defaults.models && Object.keys(defaults.models).length > 0
-    ? defaults.models
-    : undefined;
+  // Per-model overrides: defaults.models params + openai/* agentRuntime routing.
+  const modelsMap = buildModelsMap([agent], defaults);
 
   // Hooks config — fall back to sensible defaults when oc.hooks is absent
   // (fleet objects built without going through FleetSchema.parse may omit it).
@@ -181,16 +214,7 @@ export function renderAgentOpenClawJson(
       defaults: {
         model: modelConfig(defaults.model, defaults.fallback_models ?? []),
         ...(defaultsParams ? { params: defaultsParams } : {}),
-        ...(defaultsModels
-          ? {
-              models: Object.fromEntries(
-                Object.entries(defaultsModels).map(([modelKey, override]) => [
-                  modelKey,
-                  { params: override.params },
-                ])
-              ),
-            }
-          : {}),
+        ...(modelsMap ? { models: modelsMap } : {}),
       },
       list: [agentListEntry],
     },
@@ -362,9 +386,13 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
     pluginEntries[plugin] = { enabled: true };
   }
 
+  const modelsMap = buildModelsMap(hostAgents, defaults);
   return {
     agents: {
-      defaults: { model: modelConfig(defaults.model, defaults.fallback_models ?? []) },
+      defaults: {
+        model: modelConfig(defaults.model, defaults.fallback_models ?? []),
+        ...(modelsMap ? { models: modelsMap } : {}),
+      },
       list: agentList,
     },
     bindings,

@@ -2,11 +2,12 @@
  * `fleetmind secrets populate` — push per-agent Slack + model-provider
  * credentials from environment variables into AWS Secrets Manager.
  *
- * Secret naming follows the Terraform convention (one secret per provider, so
- * the runtime reader keeps consuming `/anthropic` unchanged and new providers
- * are parallel secrets):
+ * Secret naming follows the Terraform convention:
  *   ${fleet_name}/agents/${agent_id}/slack
- *   ${fleet_name}/agents/${agent_id}/<provider>      e.g. /anthropic, /openai
+ *   ${fleet_name}/agents/${agent_id}/model   — combined: one JSON object holding
+ *      every <PROVIDER>_API_KEY the agent uses (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+ *      …). The on-host fetch-agent-secrets dumps these into the gateway env, so a
+ *      single secret covers any provider mix (no per-provider secret/IAM/fetch).
  *   ${fleet_name}/agents/${agent_id}/hooks
  *
  * FleetMind is provider-neutral: the set of providers an agent needs is derived
@@ -546,17 +547,20 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
         keyCount: Object.keys(slackRes.values).length,
       });
 
-      // Model-provider keys — one secret per provider this agent uses.
+      // Model-provider keys — one combined /model secret holding every
+      // <PROVIDER>_API_KEY this agent uses (OpenClaw reads them from env).
+      const modelKeys: Record<string, string> = {};
       for (const provider of agentProviders(agent, defaultsModel)) {
         const res = await resolveProviderKeyInteractive(agentId, agentName, provider, agent.api_keys, env, promptFn);
-        ready.push({
-          agentId,
-          secretType: provider,
-          secretName: `${fleetName}/agents/${agentId}/${provider}`,
-          data: { [providerApiKeyVar(provider)]: res.value! },
-          keyCount: 1,
-        });
+        modelKeys[providerApiKeyVar(provider)] = res.value!;
       }
+      ready.push({
+        agentId,
+        secretType: "model",
+        secretName: `${fleetName}/agents/${agentId}/model`,
+        data: modelKeys,
+        keyCount: Object.keys(modelKeys).length,
+      });
 
       // Hooks token — always auto-generated; never read from env
       ready.push({
@@ -646,17 +650,22 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
       results.push({ agentId, secretType: "slack", secretName: slackSecretName, ok: false, missing: slackRes.missing });
     }
 
-    // ── Model-provider keys — one secret per provider this agent uses ──────────
+    // ── Model-provider keys — one combined /model secret holding every
+    //    <PROVIDER>_API_KEY this agent uses (OpenClaw reads them from env). ──────
+    const modelSecretName = `${fleetName}/agents/${agentId}/model`;
+    const modelKeys: Record<string, string> = {};
+    const modelMissing: string[] = [];
     for (const provider of agentProviders(agent, defaultsModel)) {
-      const secretName = `${fleetName}/agents/${agentId}/${provider}`;
       const res = resolveProviderKey(agentId, provider, agent.api_keys, env);
-      if (res.ok) {
-        await emitSecret(results, client, options.dryRun,
-          { agentId, secretType: provider, secretName },
-          { [providerApiKeyVar(provider)]: res.value! });
-      } else {
-        results.push({ agentId, secretType: provider, secretName, ok: false, missing: res.missing });
-      }
+      if (res.ok) modelKeys[providerApiKeyVar(provider)] = res.value!;
+      else modelMissing.push(...res.missing);
+    }
+    if (modelMissing.length === 0) {
+      await emitSecret(results, client, options.dryRun,
+        { agentId, secretType: "model", secretName: modelSecretName },
+        modelKeys);
+    } else {
+      results.push({ agentId, secretType: "model", secretName: modelSecretName, ok: false, missing: modelMissing });
     }
 
     // ── Hooks token — always auto-generated; never read from env ────────────────
