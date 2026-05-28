@@ -6,18 +6,6 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
-### Fixed
-
-- **`delegation.nats` is auto-defaulted when delegation is enabled.** Previously,
-  fleets with `delegation.enabled: true` but no `nats:` block silently no-op'd
-  — the subscriber unit started up, saw no `nats:` block, and exited cleanly
-  (`"delegation.nats not configured in fleet.yaml — exiting cleanly"`). NATS is
-  the only supported delegation transport today, so `enabled` without `nats`
-  was never a valid runtime state. The normalizer now fills in `nats: {}` so
-  the schema defaults + renderer's Cloud-Map URL derivation
-  (`nats://nats.<fleet>.internal:4222`) take over without the operator having
-  to write the literal line. Explicit `nats:` blocks are unchanged.
-
 ## [0.8.0] — 2026-05-27
 
 Provider-neutral release: AWS/Slack become **one backend among several**. The
@@ -85,6 +73,15 @@ existing AWS/EC2 flow.
 - `fleetmind onboard` wrote Slack channel IDs via a v1-shaped regex that
   couldn't match the v2 `channels` layout; rewritten via the YAML document API.
   Also fixed `secrets populate` still reading the removed `agent.slack` block.
+- **`delegation.nats` is auto-defaulted when delegation is enabled.** Fleets
+  with `delegation.enabled: true` but no `nats:` block previously deployed
+  cleanly and silently no-op'd — the subscriber unit started, saw no `nats:`
+  block, and exited cleanly. NATS is the only supported delegation transport
+  today, so `enabled` without `nats` was never a valid runtime state. The
+  normalizer now fills in `nats: {}` so the schema defaults + renderer's
+  Cloud-Map URL derivation (`nats://nats.<fleet>.internal:4222`) take over
+  without the operator having to write the literal line. Explicit `nats:`
+  blocks are unchanged.
 
 ## [0.6.13] — 2026-05-19
 
