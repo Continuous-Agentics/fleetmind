@@ -213,6 +213,7 @@ export function renderAgentOpenClawJson(
     agents: {
       defaults: {
         model: modelConfig(defaults.model, defaults.fallback_models ?? []),
+        timeoutSeconds: defaults.timeout_seconds,
         ...(defaultsParams ? { params: defaultsParams } : {}),
         ...(modelsMap ? { models: modelsMap } : {}),
       },

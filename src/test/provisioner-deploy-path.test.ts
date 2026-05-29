@@ -713,7 +713,7 @@ describe("renderAgentOpenClawJson — cacheRetention forwarding", () => {
   test("omits agents.defaults.params when not set in fleet defaults", () => {
     const fleet = makeFleet();
     fleet.agents.list = [makeConductorAgent()];
-    fleet.agents.defaults = { model: "anthropic/claude-haiku-4-5", target: TEST_TARGET_ID as AgentConfig["target"], plugins: ["anthropic"] };
+    fleet.agents.defaults = { model: "anthropic/claude-haiku-4-5", target: TEST_TARGET_ID as AgentConfig["target"], plugins: ["anthropic"], timeout_seconds: 300 };
 
     const json = renderAgentOpenClawJson(fleet, "conductor") as {
       agents: { defaults: { params?: unknown; models?: unknown } };

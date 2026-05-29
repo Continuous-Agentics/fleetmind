@@ -102,6 +102,40 @@ existing AWS/EC2 flow.
   overrides also confirmed working (the `agent model: ...haiku...` line in
   gateway startup logs is just the default being announced before per-turn
   resolution — not a misconfig).
+- **PM-side wakes now land in the correct Slack-thread session, not `:main`.**
+  When a worker published a `ship`/`block` event, the PM's NATS subscriber
+  received it and called `wakeAgent("conductor", msg)` — but without a session
+  key, the resulting agent turn ran in `agent:<pm>:main`, invisible to whatever
+  Slack thread the PM was actively chatting in. So Conductor (in Slack) would
+  confidently report *"the NATS event never made it"* even though the journal
+  showed the subscriber receiving it cleanly. Fix: `wakeAgent` now takes an
+  optional `sessionKey` arg, and the PM-mode handler derives one from the
+  task's `delegation_thread` URL (via the new `parseSlackThreadUrl` +
+  `slackThreadSessionKey` helpers). The OpenClaw CLI's `--session-key` routes
+  the turn into the live thread session
+  (`agent:<pm>:slack:channel:<channel-lowercased>:thread:<dotted-ts>`),
+  whose `route.thread.id` carries the agent's reply back into the same Slack
+  thread the human is watching. Multi-session safe: each ship event routes
+  per-task based on its own `delegation_thread`. Verified live by publishing
+  a manual ship event and observing Conductor post in the original delegation
+  thread (not in `:main`). The same routing pattern would extend to the worker
+  side when workers start holding multiple parallel Slack-thread sessions.
+- **wakeAgent timeouts are no longer the bottleneck.** Two layered timeouts
+  now match: the openclaw CLI's `--timeout` is explicitly set to 10min, and
+  the wrapping `execFile` timeout is 10min + 30s slack. The old 60s `execFile`
+  timeout was SIGTERM-ing the CLI mid-turn, causing the gateway to abort the
+  in-flight LLM call and emit a misleading
+  *"LLM request timed out — increase agents.defaults.timeoutSeconds"* (the LLM
+  call wasn't the thing timing out; the subscriber-side wrapper was). Symptom:
+  every NATS-driven turn that involved real external tool use died at ~52–60s
+  no matter what `agents.defaults.timeoutSeconds` was set to.
+- **`agents.defaults.timeoutSeconds` is now configurable from fleet.yaml.**
+  New `agents.defaults.timeout_seconds` field on `AgentDefaultsSchema`,
+  defaults to 300s, renders to `agents.defaults.timeoutSeconds` in
+  `openclaw.json`. OpenClaw's built-in default (~60s) is too tight for the
+  typical bot-reception turn (Slack post + external tool calls + write the
+  artifact + post completion). The 300s default unblocks first-turn
+  exploratory work; operators can bump higher for heavier workflows.
 
 ## [0.6.13] — 2026-05-19
 
