@@ -246,10 +246,21 @@ Examples:
           // Worker mode: auto-ack inbound delegations via DDB + wake OpenClaw session.
           if (opts.mode === "worker" && event.event === "delegation") {
             // Wake the worker agent so it starts processing the delegation immediately.
+            // Route into the delegation's Slack thread session when present, for the
+            // same reason as PM-side: a wake into `:main` makes the worker pick a
+            // default reply target (often a DM with the requestor), instead of
+            // replying in the thread the PM started. With the session-key set, the
+            // worker's agent turn runs in a session whose `route.thread.id` is the
+            // delegation thread, so bot-reception's "post a picked-up announcement"
+            // lands in the same Slack thread the PM and human are watching.
             const workerId = opts.workerId ?? event.worker;
             if (workerId) {
               const msg = `NATS: Task ${event.task_id} delegated to you. Description: ${event.description ?? "(see DDB)"}`;
-              wakeAgent(workerId, msg);
+              const parsed = parseSlackThreadUrl(event.delegation_thread ?? "");
+              const sessionKey = parsed
+                ? slackThreadSessionKey(workerId, parsed.channelId, parsed.threadTs)
+                : undefined;
+              wakeAgent(workerId, msg, sessionKey ? { sessionKey } : undefined);
             }
             try {
               await ledger.ackTask(event.task_id, event.worker, event.project);

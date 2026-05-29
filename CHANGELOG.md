@@ -6,6 +6,33 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Worker-side `wakeAgent` now routes inbound delegations into the live
+  Slack-thread session, not `:main`.** Same pattern as the PM-side fix
+  shipped in 0.8.0-beta.4: parse `event.delegation_thread` → build the
+  `agent:<worker>:slack:channel:<chan-lowercased>:thread:<dotted-ts>`
+  session key → pass via `openclaw agent --session-key`. Without this,
+  worker turns ran in `:main`, and when bot-reception's "@requestor —
+  picked up" announcement fired, the LLM picked a default reply target
+  (often a DM with the requestor) instead of the original delegation
+  thread. Each delegation routes per-task based on its own
+  `delegation_thread`; tasks with empty `delegation_thread` (non-Slack
+  delegations, very old records pre-thread-population) fall back to
+  `:main` exactly like today.
+
+### Changed
+
+- **`bot-reception` skill (v1.2.0 → v1.3.0):** Slack-first ordering is
+  now mandatory and explicit, not implicit. The "open Slack thread"
+  step (#4) is framed as the first thing the human sees and as a
+  precondition to any task work. Previously the LLM would parallelize
+  the Slack post with the actual work, which meant the human-visible
+  "@picked up" message often arrived *after* the work was done (or
+  never, if the agent timed out mid-work). Added a "stop and post
+  first" rule the LLM can check against before any work-side tool
+  call.
+
 ## [0.8.0] — 2026-05-27
 
 Provider-neutral release: AWS/Slack become **one backend among several**. The
