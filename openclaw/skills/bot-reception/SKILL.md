@@ -1,6 +1,6 @@
 ---
 name: bot-reception
-version: 1.2.0
+version: 1.3.0
 description: >
   Protocol for receiving task delegations from a PM bot over NATS transport.
   Use when: (1) a NATS delegation event arrives, (2) you need to ship or block
@@ -96,6 +96,17 @@ The subscriber emits one JSON line per delegation event:
 
 ### Steps
 
+The first three steps below are **bookkeeping**. **Step 4 (post in Slack) is
+the first thing the human sees.** Do steps 1–3 in any order, but **step 4
+MUST land before you start any task work** — before reading files in the
+target repo, running `gh`, calling external APIs, or doing any LLM-visible
+reasoning about the work itself. The Slack post is how the human knows
+you're alive and on the task; without it, all subsequent activity is
+invisible until you ship, which feels like the bot died. If you find
+yourself about to call a tool whose purpose is to do the work (not to
+post in Slack, not to read DDB), and you haven't posted in step 4 yet,
+**stop and post first**.
+
 1. **Write to `memory/task-queue.md`** under `## In Progress` — crash recovery:
    ```
    - **<task_id>** — <description> | started <date> | requestor: <slack_uid> | thread_ts: (pending)
@@ -109,8 +120,12 @@ The subscriber emits one JSON line per delegation event:
    fleetmind task get --task-id <task_id> --json
    ```
 
-4. **Open a Slack thread with the requestor.** Post in your dev channel,
-   @-mention the requestor:
+4. **Post your picked-up announcement in Slack — BEFORE any task work.**
+   Post in the requestor's dev channel (your home channel for picked-up
+   announcements), @-mentioning the requestor. This is the message the
+   human is waiting for; do not skip it, defer it, or parallelize it with
+   the work itself.
+
    ```
    @<requestor> — picked up [<tracker_id>]: <title>
 
@@ -120,7 +135,11 @@ The subscriber emits one JSON line per delegation event:
 
    Let me know if anything needs clarification before I start.
    ```
-   Store the Slack thread `ts` in `memory/task-queue.md` (`thread_ts: <ts>`).
+
+   Store the Slack thread `ts` in `memory/task-queue.md` (replace
+   `thread_ts: (pending)` with `thread_ts: <ts>`).
+
+   **You may now begin task work.** Steps 5+ below are the work itself.
 
 5. *(Optional)* Read prior task narratives for context:
    ```bash

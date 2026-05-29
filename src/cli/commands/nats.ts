@@ -105,6 +105,68 @@ export function parseSlackThreadUrl(url: string): { channelId: string; threadTs:
 }
 
 /**
+ * Post a short ack message to a Slack thread directly via the Slack Web API.
+ *
+ * The "fast-path ack" pattern: the subscriber posts a one-line *"I heard you"*
+ * receipt to the thread the moment a NATS ship/block event arrives, BEFORE
+ * dispatching the considered agent-turn response. This splits the human-visible
+ * timeline into two surfaces:
+ *
+ *   1. Instant subscriber ack (this function) — *"✓ Forge shipped task X — reviewing"*
+ *      lands within a few hundred ms of the NATS event. The human knows the
+ *      event arrived and that the PM is on it.
+ *   2. Considered PM response (the wakeAgent turn that runs after) — *"Reviewed
+ *      Forge's narrative; the COMPANY.md commit looks correct, signing off"*
+ *      lands when the LLM turn completes. Can legitimately take 30s–3min;
+ *      previously felt like 30+ minute silence to the human.
+ *
+ * Errors are logged but never thrown — the considered response wake still
+ * fires regardless. If the Slack bot token is missing or the API call fails,
+ * the platform degrades to its pre-fast-path behavior (just the wake).
+ *
+ * The Slack bot token used is the one bound to the SAME agent whose subscriber
+ * is doing the ack — i.e. for PM-mode running under the conductor's systemd
+ * unit, the conductor's bot posts; the post appears as Conductor in the
+ * thread. (`SLACK_BOT_TOKEN` is the canonical env var; the fetch-agent-secrets
+ * helper writes it from the per-agent Secrets Manager record.)
+ */
+async function postSlackThreadAck(opts: {
+  channelId: string;
+  threadTs: string;
+  text: string;
+}): Promise<void> {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) {
+    log.warn(`[nats] fast-path ack skipped: no SLACK_BOT_TOKEN in env`);
+    return;
+  }
+  try {
+    const res = await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Authorization": `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        channel: opts.channelId,
+        thread_ts: opts.threadTs,
+        text: opts.text,
+      }),
+    });
+    if (!res.ok) {
+      log.warn(`[nats] fast-path ack: Slack returned HTTP ${res.status}`);
+      return;
+    }
+    const body = (await res.json()) as { ok?: boolean; error?: string };
+    if (!body.ok) {
+      log.warn(`[nats] fast-path ack: Slack returned not-ok: ${body.error ?? "unknown"}`);
+    }
+  } catch (err) {
+    log.warn(`[nats] fast-path ack threw: ${err}`);
+  }
+}
+
+/**
  * Build the OpenClaw session key for a specific Slack thread.
  *
  * Verified against a live conductor host's
@@ -246,10 +308,21 @@ Examples:
           // Worker mode: auto-ack inbound delegations via DDB + wake OpenClaw session.
           if (opts.mode === "worker" && event.event === "delegation") {
             // Wake the worker agent so it starts processing the delegation immediately.
+            // Route into the delegation's Slack thread session when present, for the
+            // same reason as PM-side: a wake into `:main` makes the worker pick a
+            // default reply target (often a DM with the requestor), instead of
+            // replying in the thread the PM started. With the session-key set, the
+            // worker's agent turn runs in a session whose `route.thread.id` is the
+            // delegation thread, so bot-reception's "post a picked-up announcement"
+            // lands in the same Slack thread the PM and human are watching.
             const workerId = opts.workerId ?? event.worker;
             if (workerId) {
               const msg = `NATS: Task ${event.task_id} delegated to you. Description: ${event.description ?? "(see DDB)"}`;
-              wakeAgent(workerId, msg);
+              const parsed = parseSlackThreadUrl(event.delegation_thread ?? "");
+              const sessionKey = parsed
+                ? slackThreadSessionKey(workerId, parsed.channelId, parsed.threadTs)
+                : undefined;
+              wakeAgent(workerId, msg, sessionKey ? { sessionKey } : undefined);
             }
             try {
               await ledger.ackTask(event.task_id, event.worker, event.project);
@@ -296,6 +369,21 @@ Examples:
             // wake surfaces inside the live PM↔human conversation — instead
             // of vanishing into the agent's :main session (where it would be
             // invisible to whatever Slack thread the PM is actively in).
+            //
+            // Two-stage human-visible response:
+            //
+            //   1. INSTANT fast-path ack — postSlackThreadAck() posts a short
+            //      "I heard you" line directly via the Slack Web API in <300ms.
+            //      The human sees that the PM received the event NOW, not in
+            //      30s–3min when the LLM turn finishes.
+            //
+            //   2. CONSIDERED response — wakeAgent dispatches the agent turn
+            //      that does the actual signoff/follow-up. Lands in the same
+            //      Slack thread (via --session-key) when the turn completes.
+            //
+            // Both stages are tolerant of missing pieces: no delegation_thread →
+            // skip the ack and let the wake fall back to :main; no
+            // SLACK_BOT_TOKEN → log + skip the ack but still fire the wake.
             if (event.event === "ship" || event.event === "block") {
               const pmAgentId = fleet.agents.list.find(a => a.orchestrator)?.id ?? "conductor";
               const msg = event.event === "ship"
@@ -305,6 +393,21 @@ Examples:
               // back to anything the event carried (it's an optional field).
               const threadUrl = taskRecord?.delegation_thread ?? event.delegation_thread ?? "";
               const parsed = parseSlackThreadUrl(threadUrl);
+              // Stage 1: fast-path ack. Fire-and-forget; only attempted when
+              // we have a real Slack thread to post into.
+              if (parsed) {
+                const ackText = event.event === "ship"
+                  ? `✓ Received ship for \`${event.task_id}\` from ${event.worker} — reviewing`
+                  : `⚠️ Received block for \`${event.task_id}\` from ${event.worker} — reviewing`;
+                // Intentionally not awaited; subscriber should not block on
+                // the Slack API. Errors land in log.warn via the function itself.
+                void postSlackThreadAck({
+                  channelId: parsed.channelId,
+                  threadTs: parsed.threadTs,
+                  text: ackText,
+                });
+              }
+              // Stage 2: considered response via agent turn in the thread session.
               const sessionKey = parsed
                 ? slackThreadSessionKey(pmAgentId, parsed.channelId, parsed.threadTs)
                 : undefined;
