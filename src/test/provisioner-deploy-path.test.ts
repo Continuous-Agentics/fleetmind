@@ -15,10 +15,9 @@
  *   3. workspace_base from fleet.yaml is preserved in the rendered openclaw.json
  *      (for the agent gateway to use on EC2).
  *   4. deploy does not try to mkdir an absolute path on the operator's machine.
- *   5. Cron sweeps write to <localBase>/rendered/cron/ (not to workspace_base/cron/).
- *   6. Per-agent openclaw.json slices (renderAgentOpenClawJson) contain only the
+ *   5. Per-agent openclaw.json slices (renderAgentOpenClawJson) contain only the
  *      named agent's entries for agents.list, bindings, Slack accounts, and a2a allow.
- *   7. writeOutputs emits one file per agent at rendered/openclaw/<agent_id>/openclaw.json.
+ *   6. writeOutputs emits one file per agent at rendered/openclaw/<agent_id>/openclaw.json.
  */
 
 import assert from "node:assert/strict";
@@ -112,7 +111,6 @@ function makeConductorAgent(): AgentConfig {
     agent_to_agent: { can_send_to: ["forge"] },
     delegation: {
       worker_bots: ["forge"],
-      sweeps: [{ name: "sweep-forge", worker_id: "forge", every: "5m", model: "haiku" }],
     },
   } as unknown as AgentConfig;
 }
@@ -289,22 +287,6 @@ describe("deploy local-render-path regression", () => {
       `${customBase}/conductor`,
       "workspace_base from fleet.yaml must be preserved in openclaw.json"
     );
-  });
-
-  // ── Cron seeding goes to localBase/rendered/cron/, not workspace_base/cron/ ─
-
-  test("seedCronSweeps writes jobs.json to localBase/rendered/cron/, not workspace_base/cron/", async () => {
-    const fleet = makeFleet("/opt/openclaw/workspace");
-    const agent = makeConductorAgent();
-
-    await provisionAgent(fleet, agent, false, tmpDir);
-
-    const localCronPath = path.join(tmpDir, "rendered", "cron", "jobs.json");
-    assert.ok(fs.existsSync(localCronPath), "cron/jobs.json should be at localBase/rendered/cron/");
-
-    // EC2-side cron dir must NOT be created locally.
-    const ec2CronPath = path.join("/opt/openclaw/workspace", "cron");
-    assert.ok(!fs.existsSync(ec2CronPath), "workspace_base/cron must NOT be created locally");
   });
 
   // ── dry-run writes nothing ────────────────────────────────────────────────

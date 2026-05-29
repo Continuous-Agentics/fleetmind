@@ -421,8 +421,6 @@ rendered/
   workspaces/
     conductor/           ← SOUL.md, AGENTS.md, IDENTITY.md, USER.md, skills/
     forge/               ← same
-  cron/
-    jobs.json            ← cron sweeps for conductor (WORKER_SWEEP jobs)
 ```
 
 Inspect the rendered `openclaw.json` for an agent to confirm tokens are placeholders (not baked-in):
@@ -747,15 +745,15 @@ aws dynamodb describe-table \
   --output table
 ```
 
-### 7e. Cron sweeps running (conductor)
+### 7e. NATS subscriber active on each agent
 
 ```bash
 aws ssm start-session --region us-west-2 --target $CONDUCTOR_ID \
   --document-name AWS-StartInteractiveCommand \
-  --parameters command="cat /opt/openclaw/workspace/conductor/cron/jobs.json"
+  --parameters command="systemctl status fleetmind-nats-conductor"
 ```
 
-Confirm the `conductor-sweep-forge` job is present with `every: 5m`. If OpenClaw's cron engine picks it up, you should see sweep-related log entries in the conductor journal within 5 minutes.
+Confirm the unit is `active (running)`. Wake-on-NATS replaced the pre-0.8 `WORKER_SWEEP` cron sweeps; close-the-loop fires on the worker's `task.shipped` / `task.blocked` event, not on a poll.
 
 ---
 

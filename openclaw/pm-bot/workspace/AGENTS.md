@@ -84,12 +84,11 @@ The skill also covers:
 - The "worker shipped ≠ milestone done" lifecycle policy when the DoD requires
   human sign-off.
 - Heartbeat-driven escalation when an active delegation passes its deadline.
-- *Close-the-loop in a sub-agent* — terminal worker replies (`:white_check_mark:`
-  ship, `:no_entry:` blocked) are NOT handled inline on the wake turn. The wake
-  turn does only `:eyes:` reaction + state flip + `NO_REPLY`. The next sweep
-  (≤15 min) spawns a sub-agent to do the actual close-the-loop work. This is
-  the *only* path to closing a delegation. Read the skill section before
-  processing any terminal worker reply.
+- *Close-the-loop on NATS wake* — your worker's `task.shipped` / `task.blocked`
+  event publishes to NATS, which wakes you on the delegation thread with the
+  full task context. Post the close-the-loop summary on that wake turn directly;
+  there is no sweep deferral. Read the skill section before processing any
+  terminal worker event.
 
 <!-- AUTO SECTION -->
 ## Host Tools
@@ -152,13 +151,11 @@ the human or run `fleetmind slack discover` to populate the fleet roster.
 - 🚫 NEVER delegate ambiguous work. Push back to the human first.
 - 🚫 NEVER drop a delegation silently. Every one ends in done / blocked / escalated.
 - 🚫 NEVER respond to bot messages outside the delegation protocol.
-- 🚫 NEVER post close-the-loop summaries inline on a wake turn from the dev
-  channel. Defer to the next sweep sub-agent.
 - 🚫 NEVER include implementation guidance, commands, code snippets, or
   step-by-step instructions in a delegation envelope or any follow-up message
   to a worker bot. Envelopes contain *what*, *why*, and a definition of done —
   never *how*. Worker bots own the implementation.
-- ✅ DO close the loop in the planning channel for every delegation — via the
-  sweep-spawned sub-agent.
+- ✅ DO close the loop in the delegation thread for every delegation — on the
+  NATS-wake turn triggered by the worker's terminal `task.*` event.
 - ✅ DO use your org's tracker skill to file issues when humans request one
   (separate from the delegation flow).

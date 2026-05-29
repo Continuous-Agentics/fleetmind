@@ -68,8 +68,9 @@ fleetmind nats subscribe --mode pm --json \
     done
 ```
 
-This subscriber replaces sweep cron jobs. Workers push events; the PM bot
-reacts to them. Leave `delegation.sweeps` empty or omit it in `fleet.yaml`.
+This subscriber is the canonical wake path. Workers push `task.*` events;
+the PM bot reacts to them. There is no polling sweep — the `delegation.sweeps`
+schema field was removed in fleetmind 0.8.0-beta.8.
 
 ---
 

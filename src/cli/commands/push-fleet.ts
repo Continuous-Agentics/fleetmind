@@ -397,18 +397,6 @@ export async function runPushFleet(
     // Build staging directory (workspace files + .openclaw/openclaw.json)
     const stagingDir = buildStagingDir(agentId, agentPlan.workspaceDir, agentPlan.ocJsonPath, tmpBase);
 
-    // Ship cron/jobs.json for orchestrator (PM) agents so sweep jobs land at
-    // $WORKSPACE_DIR/.openclaw/cron/jobs.json and are hot-reloaded by the gateway.
-    if (agent.orchestrator) {
-      const cronJobsPath = path.join(localBase, "rendered", "cron", "jobs.json");
-      if (fs.existsSync(cronJobsPath)) {
-        const cronDir = path.join(stagingDir, ".openclaw", "cron");
-        fs.mkdirSync(cronDir, { recursive: true });
-        fs.copyFileSync(cronJobsPath, path.join(cronDir, "jobs.json"));
-        log.dim(`    cron/jobs.json included`);
-      }
-    }
-
     // Compute file manifests from staging
     const files = computeFileManifests(stagingDir);
     const totalSize = files.reduce((s, f) => s + f.size, 0);
