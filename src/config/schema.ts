@@ -323,6 +323,21 @@ export const AgentDefaultsSchema = z.object({
   params: AgentParamsSchema.optional(),
   /** Per-model param overrides (keyed by "provider/model" string). */
   models: AgentModelOverridesSchema.optional(),
+  /**
+   * Maximum seconds OpenClaw will wait for a single LLM call to complete
+   * before aborting and surfacing a timeout. Maps to OpenClaw's
+   * `agents.defaults.timeoutSeconds`. OpenClaw's built-in default is ~60s,
+   * which is too tight for the typical delegated-bot turn (Slack post +
+   * external tool calls like `gh` + write the actual artifact + back to
+   * Slack often exceeds 60s on Sonnet). We default to 300s so first-turn
+   * exploratory work completes; bump higher for heavier work.
+   *
+   * Symptom when this is too low: agent turn fails with
+   * "Request timed out before a response was generated. Please try again,
+   * or increase `agents.defaults.timeoutSeconds` in your config." and the
+   * worker never opens its Slack thread / publishes its ship event.
+   */
+  timeout_seconds: z.number().int().positive().default(300),
 });
 
 export const AgentsConfigSchema = z.object({

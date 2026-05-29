@@ -82,21 +82,81 @@ function makeLedger(fleet: ReturnType<typeof resolveAndLoadFleet>): TaskLedger {
 // subscriber needs to return to processing the next NATS event. The agent's
 // reply (Slack post, narrative write, `fleetmind task ship`) flows through
 // its own side effects.
-function wakeAgent(agentId: string, message: string): void {
+/**
+ * Parse a Slack thread URL into its channel id + Slack-style timestamp.
+ *
+ * URL shape: `https://<workspace>.slack.com/archives/<CHANNEL_ID>/p<ts_compact>`
+ *   - `<CHANNEL_ID>` — uppercase letters/digits (e.g. `C07GGJPQJCD`)
+ *   - `<ts_compact>` — Slack's `<seconds><microseconds>` with the dot removed
+ *     (e.g. `1780020261313409` → `1780020261.313409`)
+ *
+ * Returns null if the URL doesn't match (e.g. empty string, a non-Slack
+ * URL, or a `/messages/` permalink shape). Caller decides what to do then.
+ */
+export function parseSlackThreadUrl(url: string): { channelId: string; threadTs: string } | null {
+  if (!url) return null;
+  const match = url.match(/\/archives\/([A-Z0-9]+)\/p(\d{7,})/);
+  if (!match) return null;
+  const channelId = match[1]!;
+  const compact = match[2]!;
+  // Last 6 digits are microseconds; everything before is seconds.
+  const threadTs = `${compact.slice(0, -6)}.${compact.slice(-6)}`;
+  return { channelId, threadTs };
+}
+
+/**
+ * Build the OpenClaw session key for a specific Slack thread.
+ *
+ * Verified against a live conductor host's
+ * `.openclaw/agents/<id>/sessions/sessions.json` — sessions are keyed by:
+ *   `agent:<agentId>:slack:channel:<channel-lowercased>:thread:<dotted-ts>`
+ *
+ * Passing this as `--session-key` to `openclaw agent` routes the wake into
+ * the same session that's actively chatting in that Slack thread, instead
+ * of the agent's `:main` session (which is the default and was making
+ * NATS-driven wakes invisible to live Slack conversations).
+ */
+function slackThreadSessionKey(agentId: string, channelId: string, threadTs: string): string {
+  return `agent:${agentId}:slack:channel:${channelId.toLowerCase()}:thread:${threadTs}`;
+}
+
+function wakeAgent(
+  agentId: string,
+  message: string,
+  opts?: { sessionKey?: string }
+): void {
   const token = process.env.GATEWAY_TOKEN ?? process.env.OPENCLAW_GATEWAY_TOKEN;
   if (!token) {
     log.warn(`[nats] wakeAgent(${agentId}): no GATEWAY_TOKEN — skipping wake (set the env var via /etc/fleetmind or the systemd EnvironmentFile)`);
     return;
   }
-  const args = ["agent", "--agent", agentId, "--message", message];
+  // Two timeouts are layered here. The openclaw CLI's own --timeout (default
+  // 30s per `openclaw agent --help`) governs how long the CLI waits for the
+  // gateway's WebSocket response before giving up. The execFile timeout
+  // governs how long *we* wait before SIGTERM-ing the CLI subprocess. If
+  // either fires while the agent turn is still running, the WS disconnects,
+  // the gateway aborts the in-flight turn, and OpenClaw surfaces a
+  // *misleading* "LLM request timed out — increase agents.defaults.timeoutSeconds"
+  // (it isn't the LLM that timed out; it's the subscriber-side wrapper). So
+  // both need to be larger than any reasonable agent turn for a bot-reception
+  // flow (Slack post + external tool calls + write the artifact + post completion).
+  // 10 minutes is generous but not unbounded.
+  const turnTimeoutMs = 600_000;
+  const args = ["agent", "--agent", agentId, "--message", message, "--timeout", String(turnTimeoutMs)];
+  // Route into the specific Slack-thread session when the caller has one.
+  // Without this, the wake hits the agent's `:main` session, invisible to
+  // whatever Slack thread the agent is currently chatting in — the source of
+  // "Conductor said the NATS event never made it" even when the subscriber
+  // had already delivered it. See slackThreadSessionKey docstring.
+  if (opts?.sessionKey) {
+    args.push("--session-key", opts.sessionKey);
+  }
   // Pass the gateway token explicitly. `process.env` already carries HOME
   // from the systemd unit (Environment=HOME=$WORKSPACE_DIR), which is what
   // the openclaw CLI needs to find the right openclaw.json + agent registry.
   const env: NodeJS.ProcessEnv = { ...process.env, OPENCLAW_GATEWAY_TOKEN: token };
   const ocBin = process.env.OPENCLAW_BIN ?? "openclaw";
-  // 60s timeout: an agent turn typically completes in 5–10s but can take longer
-  // for complex skills; the old 15s was tight enough to cut off real work.
-  execFile(ocBin, args, { timeout: 60000, env }, (err) => {
+  execFile(ocBin, args, { timeout: turnTimeoutMs + 30_000, env }, (err) => {
     if (err) log.warn(`[nats] wakeAgent(${agentId}) failed: ${err.message}`);
   });
 }
@@ -213,26 +273,45 @@ Examples:
 
           // PM mode: advance DDB lifecycle on worker terminal events.
           if (opts.mode === "pm") {
-            // Wake the OpenClaw PM session on ship/block events.
+            // For ship + block we need the DDB record anyway — ship checks
+            // `lifecycle` to decide auto-signoff, and both wake the PM via
+            // the Slack-thread session derived from `delegation_thread`. Fetch
+            // it ONCE here so we don't double-roundtrip later in the ship branch.
+            //
+            // Fail-safe: a missing record / fetch error means we can't route
+            // the wake to a thread session (PM will land in :main), and ship
+            // defaults to `requires-human-signoff` so we never auto-signoff
+            // something we couldn't read.
+            let taskRecord: Awaited<ReturnType<typeof ledger.getTask>> | undefined;
+            if (event.event === "ship" || event.event === "block") {
+              try {
+                taskRecord = await ledger.getTask(event.task_id);
+              } catch (err) {
+                log.warn(`[nats] task ${event.task_id} getTask failed (PM wake will fall back to :main session; ship will default to requires-human-signoff): ${err}`);
+              }
+            }
+
+            // Wake the OpenClaw PM session on ship/block events. Route into
+            // the Slack thread session when `delegation_thread` is set so the
+            // wake surfaces inside the live PM↔human conversation — instead
+            // of vanishing into the agent's :main session (where it would be
+            // invisible to whatever Slack thread the PM is actively in).
             if (event.event === "ship" || event.event === "block") {
               const pmAgentId = fleet.agents.list.find(a => a.orchestrator)?.id ?? "conductor";
               const msg = event.event === "ship"
                 ? `NATS: Task ${event.task_id} shipped by ${event.worker}. ${event.message ?? ""}`
                 : `NATS: Task ${event.task_id} blocked by ${event.worker}. ${event.reason ?? ""}`;
-              wakeAgent(pmAgentId, msg);
+              // Prefer the DDB record's delegation_thread (authoritative), fall
+              // back to anything the event carried (it's an optional field).
+              const threadUrl = taskRecord?.delegation_thread ?? event.delegation_thread ?? "";
+              const parsed = parseSlackThreadUrl(threadUrl);
+              const sessionKey = parsed
+                ? slackThreadSessionKey(pmAgentId, parsed.channelId, parsed.threadTs)
+                : undefined;
+              wakeAgent(pmAgentId, msg, sessionKey ? { sessionKey } : undefined);
             }
 
             if (event.event === "ship") {
-              // Fetch the DDB record to check lifecycle. Fail-safe: treat a
-              // missing record or missing lifecycle field as
-              // 'requires-human-signoff' so we never accidentally auto-signoff
-              // a task that needs human review.
-              let taskRecord: Awaited<ReturnType<typeof ledger.getTask>> | undefined;
-              try {
-                taskRecord = await ledger.getTask(event.task_id);
-              } catch (err) {
-                log.warn(`[nats] task ${event.task_id} getTask failed (treating as requires-human-signoff): ${err}`);
-              }
               const lifecycle =
                 (taskRecord?.lifecycle) ?? (event as unknown as Record<string, unknown>).lifecycle ?? "requires-human-signoff";
 
