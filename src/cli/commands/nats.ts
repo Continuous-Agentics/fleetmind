@@ -167,6 +167,86 @@ async function postSlackThreadAck(opts: {
 }
 
 /**
+ * Post a top-level (un-threaded) message to a Slack channel and return the
+ * resulting message ts. Used by the worker-side fast-path to open a fresh
+ * thread in the worker's home channel for a new delegation — the returned
+ * `ts` becomes that thread's root, which subsequent worker activity (the
+ * bot-reception "@picked up" announcement, progress updates, the ship
+ * narrative) threads under via session-key routing.
+ *
+ * Returns null on any failure (no token, network, non-2xx, ok: false,
+ * missing ts). Caller falls back to delegation_thread posting in that case.
+ */
+async function postSlackChannelMessage(opts: {
+  channelId: string;
+  text: string;
+}): Promise<{ ts: string } | null> {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) {
+    log.warn(`[nats] postSlackChannelMessage skipped: no SLACK_BOT_TOKEN`);
+    return null;
+  }
+  try {
+    const res = await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Authorization": `Bearer ${token}`,
+      },
+      body: JSON.stringify({ channel: opts.channelId, text: opts.text }),
+    });
+    if (!res.ok) {
+      log.warn(`[nats] postSlackChannelMessage: Slack HTTP ${res.status}`);
+      return null;
+    }
+    const body = (await res.json()) as { ok?: boolean; error?: string; ts?: string };
+    if (!body.ok) {
+      log.warn(`[nats] postSlackChannelMessage: Slack not-ok: ${body.error ?? "unknown"}`);
+      return null;
+    }
+    if (!body.ts) {
+      log.warn(`[nats] postSlackChannelMessage: Slack ok but missing ts`);
+      return null;
+    }
+    return { ts: body.ts };
+  } catch (err) {
+    log.warn(`[nats] postSlackChannelMessage threw: ${err}`);
+    return null;
+  }
+}
+
+/**
+ * Resolve a worker's "home channel" — the Slack channel listed first under
+ * its `channels:` block in fleet.yaml. This is where the worker should post
+ * its picked-up announcement, progress updates, and ship narrative, instead
+ * of inside the PM's delegation thread.
+ *
+ * Why we want this: PM bots live in a shared human channel (#general,
+ * #standup, etc.) where humans ping them. When a PM delegates to a worker,
+ * the worker breaking out into its OWN channel keeps the PM↔human
+ * conversation clean and lets each worker's activity be visible in one
+ * predictable place. Matches how human teams operate (PM in standup
+ * channel, devs in dev channel).
+ *
+ * Returns null if the agent isn't found, has no Slack channels block, or
+ * has no channel ids listed. Caller falls back to delegation_thread posting.
+ */
+function resolveWorkerHomeChannel(
+  fleet: ReturnType<typeof resolveAndLoadFleet>,
+  workerId: string
+): { channelId: string; accountId: string } | null {
+  const agent = fleet.agents.list.find((a) => a.id === workerId);
+  if (!agent) return null;
+  const channels = (agent as unknown as { channels?: Array<{ provider?: string; account_id?: string; channels?: string[] }> }).channels;
+  if (!channels) return null;
+  const slack = channels.find((c) => c.provider === "slack");
+  if (!slack) return null;
+  const channelId = slack.channels?.[0];
+  if (!channelId) return null;
+  return { channelId, accountId: slack.account_id ?? "" };
+}
+
+/**
  * Build the OpenClaw session key for a specific Slack thread.
  *
  * Verified against a live conductor host's
@@ -307,45 +387,82 @@ Examples:
 
           // Worker mode: auto-ack inbound delegations via DDB + wake OpenClaw session.
           //
-          // Two-stage human-visible response, mirroring PM-side:
+          // Routing model: workers break out of the PM's channel into their
+          // OWN home channel for every delegation. The PM bot lives in the
+          // human-facing channel (#general, #standup, …) where humans ping it;
+          // workers run their dev work in their own channel (#development for
+          // forge, etc.). This keeps the human↔PM conversation clean and gives
+          // each worker a predictable place to look for its activity. The
+          // delegation_thread URL on the event is preserved as a back-link so
+          // the worker (and humans) can always trace which PM conversation
+          // triggered which delegation.
           //
-          //   1. INSTANT fast-path ack — postSlackThreadAck() posts a short
-          //      "I got it" line directly to the delegation thread via Slack's
-          //      chat.postMessage API in <300ms. Bridges the gap between the
-          //      subscriber receiving the NATS delegation and bot-reception's
-          //      considered "@requestor — picked up" announcement (which can
-          //      take 10–30s+ because the LLM has to boot the session, read the
-          //      skill, parse the delegation, etc.).
+          // Two-stage human-visible response:
+          //
+          //   1. INSTANT fast-path ack — `postSlackChannelMessage` posts a
+          //      top-level message into the worker's home channel ("👋 Received
+          //      delegation X from PM — picking up. Triggered by <link>."). The
+          //      message's ts becomes the thread root for THIS delegation.
           //
           //   2. CONSIDERED bot-reception flow — wakeAgent dispatches the agent
-          //      turn in the delegation-thread session (via --session-key). The
-          //      LLM then runs bot-reception's step 4 "open Slack thread", which
-          //      posts the formal `@requestor — picked up [task]: <title>...`
-          //      message and stores thread_ts in task-queue.md.
+          //      turn into a session keyed to (worker home channel, ack thread
+          //      root). The LLM's bot-reception step 4 "@requestor — picked up"
+          //      lands as the next reply in that thread, and all subsequent
+          //      worker activity (progress, S3 narrative write notification,
+          //      ship) threads under the same root.
           //
-          // The worker's SLACK_BOT_TOKEN is the worker's own bot (e.g. forge's),
-          // so the fast-path ack appears in the thread AS the worker — exactly
-          // where the human/PM expects it to come from.
+          // Fall-back path: if the worker has no home channel configured (no
+          // `channels:` block under that agent in fleet.yaml) OR the Slack post
+          // fails, the subscriber falls back to the previous behavior — ack +
+          // route into the delegation_thread session. That keeps non-Slack /
+          // misconfigured fleets working exactly as they did before.
           if (opts.mode === "worker" && event.event === "delegation") {
             const workerId = opts.workerId ?? event.worker;
             if (workerId) {
-              const msg = `NATS: Task ${event.task_id} delegated to you. Description: ${event.description ?? "(see DDB)"}`;
-              const parsed = parseSlackThreadUrl(event.delegation_thread ?? "");
-              // Stage 1: instant fast-path ack into the delegation thread.
-              if (parsed) {
-                const ackText = `👋 Received delegation \`${event.task_id}\` from ${event.delegated_by ?? "PM"} — picking up. Details coming.`;
-                void postSlackThreadAck({
-                  channelId: parsed.channelId,
-                  threadTs: parsed.threadTs,
+              const homeChannel = resolveWorkerHomeChannel(fleet, workerId);
+              const delegationParsed = parseSlackThreadUrl(event.delegation_thread ?? "");
+              const backlinkSuffix = event.delegation_thread
+                ? ` (triggered by ${event.delegation_thread})`
+                : "";
+              const ackText = `👋 Received delegation \`${event.task_id}\` from ${event.delegated_by ?? "PM"} — picking up. Description: ${event.description ?? "(see DDB)"}.${backlinkSuffix}`;
+
+              let sessionKey: string | undefined;
+
+              if (homeChannel) {
+                // Preferred path: open a fresh thread in the worker's home channel.
+                // Slack returns the message ts; we use it as the thread root for
+                // this delegation. Awaiting here is intentional — we need the ts
+                // back before we can route the wake. Adds ~200-500ms before the
+                // wakeAgent fires, which is fine (the human already sees the ack).
+                const ackResult = await postSlackChannelMessage({
+                  channelId: homeChannel.channelId,
                   text: ackText,
                 });
+                if (ackResult) {
+                  sessionKey = slackThreadSessionKey(workerId, homeChannel.channelId, ackResult.ts);
+                } else if (delegationParsed) {
+                  // Slack post failed — degrade to threading under delegation_thread
+                  // so the human still sees *something*. Logged via the helper.
+                  void postSlackThreadAck({
+                    channelId: delegationParsed.channelId,
+                    threadTs: delegationParsed.threadTs,
+                    text: `${ackText} (note: failed to post in worker home channel — falling back to delegation thread)`,
+                  });
+                  sessionKey = slackThreadSessionKey(workerId, delegationParsed.channelId, delegationParsed.threadTs);
+                }
+              } else if (delegationParsed) {
+                // No home channel configured for this worker — same behavior as
+                // pre-beta.7 (post in the delegation thread). Path stays available
+                // for fleets/agents without an explicit channels block.
+                void postSlackThreadAck({
+                  channelId: delegationParsed.channelId,
+                  threadTs: delegationParsed.threadTs,
+                  text: ackText,
+                });
+                sessionKey = slackThreadSessionKey(workerId, delegationParsed.channelId, delegationParsed.threadTs);
               }
-              // Stage 2: considered wake, routed into the same thread session
-              // so the LLM's reply (bot-reception's step 4 announcement) lands
-              // in the same thread, not in `:main` or a DM with the requestor.
-              const sessionKey = parsed
-                ? slackThreadSessionKey(workerId, parsed.channelId, parsed.threadTs)
-                : undefined;
+
+              const msg = `NATS: Task ${event.task_id} delegated to you. Description: ${event.description ?? "(see DDB)"}${event.delegation_thread ? ` Original delegation thread (PM↔human): ${event.delegation_thread}` : ""}`;
               wakeAgent(workerId, msg, sessionKey ? { sessionKey } : undefined);
             }
             try {
