@@ -679,6 +679,15 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
     skills: agent.skills ?? [],
     ...(agent.target ? { target: agent.target } : {}),
     ...(agent.delegation ? { delegation: agent.delegation } : {}),
+    // Include the agent's `channels:` block in the slice. The fleetmind NATS
+    // subscriber (`fleetmind nats subscribe`) reads this slice and needs the
+    // channels block to resolve the worker's home Slack channel for the
+    // fast-path ack + session-key routing (see `resolveWorkerHomeChannel` in
+    // src/cli/commands/nats.ts). Tokens stay as `${VAR}` references and are
+    // resolved on the bot side via the systemd unit's `EnvironmentFile=`.
+    // Stripping channels here used to leave the subscriber unable to find
+    // the worker's home channel — the wake silently fell back to delegation_thread.
+    ...((agent as { channels?: unknown }).channels ? { channels: (agent as { channels: unknown }).channels } : {}),
   };
 
   const slice = {

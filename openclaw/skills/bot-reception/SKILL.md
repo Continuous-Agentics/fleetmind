@@ -1,6 +1,6 @@
 ---
 name: bot-reception
-version: 1.3.0
+version: 1.4.0
 description: >
   Protocol for receiving task delegations from a PM bot over NATS transport.
   Use when: (1) a NATS delegation event arrives, (2) you need to ship or block
@@ -120,17 +120,29 @@ post in Slack, not to read DDB), and you haven't posted in step 4 yet,
    fleetmind task get --task-id <task_id> --json
    ```
 
-4. **Post your picked-up announcement in Slack — BEFORE any task work.**
-   Post in the requestor's dev channel (your home channel for picked-up
-   announcements), @-mentioning the requestor. This is the message the
-   human is waiting for; do not skip it, defer it, or parallelize it with
-   the work itself.
+4. **Post your picked-up announcement in YOUR home channel — BEFORE any task work.**
+
+   **Your home channel** is the Slack channel under your `channels:` block in
+   `fleet.yaml` (and renders into the channel-routing entry of your
+   `openclaw.json`). It is the channel YOU live in — separate from the PM
+   bot's channel where the human pinged. The subscriber may already have
+   posted an instant *"👋 Received delegation"* line there and routed your
+   wake into that fresh thread; check the active session's channel via your
+   slack tool. Your job is to reply IN THAT THREAD with the considered
+   picked-up message below. **Do not post in the PM's delegation thread —
+   that thread lives in the PM's channel and is the PM↔human conversation.**
+   Use the delegation_thread URL only as a back-link in your announcement so
+   the human can trace which conversation triggered this work.
+
+   This is the message the human is waiting for in YOUR channel; do not skip
+   it, defer it, or parallelize it with the work itself.
 
    ```
    @<requestor> — picked up [<tracker_id>]: <title>
 
    <one-sentence description of what you'll build>
    Done when: <definition of done verbatim>
+   Triggered by: <delegation_thread URL>
    <tracker_link if present>
 
    Let me know if anything needs clarification before I start.
@@ -140,6 +152,9 @@ post in Slack, not to read DDB), and you haven't posted in step 4 yet,
    `thread_ts: (pending)` with `thread_ts: <ts>`).
 
    **You may now begin task work.** Steps 5+ below are the work itself.
+   All subsequent activity for this delegation (progress updates, the ship
+   announcement) threads under the SAME root in YOUR home channel — never
+   in the PM's delegation thread.
 
 5. *(Optional)* Read prior task narratives for context:
    ```bash

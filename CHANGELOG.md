@@ -8,6 +8,39 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ### Added
 
+- **Worker → home-channel routing for inbound delegations.** Workers no
+  longer post their picked-up announcement into the PM's delegation
+  thread; they break out into THEIR OWN home channel (the first channel
+  listed under that agent's `channels:` block in `fleet.yaml`) and open
+  a fresh thread there. Matches the "PM in central channel, workers in
+  their own channels" team-shape model (e.g. PM in `#general`, Forge in
+  `#development`).
+
+  Three layers changed together:
+  - **Subscriber** (`src/cli/commands/nats.ts`): new
+    `resolveWorkerHomeChannel(fleet, workerId)` looks up the worker's
+    home channel from fleet.yaml; new `postSlackChannelMessage` posts a
+    top-level message to a channel and returns the resulting ts. Worker
+    handler now posts the fast-path ack to the home channel (instead of
+    `delegation_thread`), captures the returned ts, and uses it as the
+    session-key thread root for `wakeAgent`.
+  - **Renderer** (`src/runtime/renderer.ts`): per-agent fleet.yaml slice
+    (`renderAgentFleetYaml`) now includes the agent's `channels:` block
+    so the on-bot subscriber can resolve the home channel. Previously
+    stripped, which is why the subscriber would silently fall back to
+    delegation_thread posting (the home channel was invisible to it).
+  - **`bot-reception` skill (v1.3.0 → v1.4.0):** step 4 prose rewritten
+    to be explicit that the picked-up announcement goes in the agent's
+    OWN home channel — never in the PM's delegation thread. The
+    `delegation_thread` URL is included as a back-link inside the
+    announcement so humans can trace which conversation triggered the
+    work. Companion subscriber-side ack creates the thread root; the
+    skill's announcement is the first considered reply.
+
+  Fall-back: workers with no `channels:` block in fleet.yaml continue
+  to post in `delegation_thread` exactly like beta.6 — same behavior
+  for non-Slack / minimally-configured fleets.
+
 - **Fast-path Slack ack on WORKER delegation receipt.** Symmetric to the
   PM-side fast-path (also in this section). The worker subscriber now
   posts a one-line `👋 Received delegation <task> from <pm> — picking up.
