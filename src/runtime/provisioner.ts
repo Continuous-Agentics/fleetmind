@@ -7,11 +7,10 @@
  *   client  → client's own skills_repo (default)
  */
 
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Fleet, AgentConfig, CronSweepConfig } from "../config/schema.js";
+import type { Fleet, AgentConfig } from "../config/schema.js";
 import { installSkill } from "./resolver.js";
 import { slackChannel } from "../core/channels.js";
 import { log } from "../utils/log.js";
@@ -135,161 +134,6 @@ function writeFile(filePath: string, content: string, dryRun: boolean): void {
 }
 
 // =============================================================================
-// Cron sweep seeding
-// =============================================================================
-
-/** Minimal shape of OpenClaw's ~/.openclaw/cron/jobs.json */
-interface CronJobsFile {
-  version: number;
-  jobs: CronJob[];
-}
-
-interface CronJob {
-  id: string;
-  name: string;
-  enabled: boolean;
-  createdAtMs: number;
-  description?: string;
-  schedule:
-    | { kind: "every"; every: string }
-    | { kind: "cron"; expr: string; tz?: string };
-  sessionTarget: "isolated";
-  wakeMode: "now";
-  payload: { kind: "agentTurn"; message: string; model: string };
-  delivery: { mode: "none" };
-  state: Record<string, unknown>;
-}
-
-/**
- * Derive a stable, deterministic job ID from fleet + agent + sweep name.
- *
- * Uses SHA-256 so the same inputs always produce the same UUID-shaped string.
- * This ensures re-deploying to a fresh instance produces the same job ID,
- * keeping run history coherent. `fleetmind diff` can also detect renames
- * (old name present in jobs.json + new name absent = pending update).
- */
-export function sweepJobId(fleetName: string, agentId: string, sweepName: string): string {
-  const hash = crypto
-    .createHash("sha256")
-    .update(`fleetmind:sweep:${fleetName}:${agentId}:${sweepName}`)
-    .digest("hex");
-  // Format as UUID v4 shape with variant bits set. Not a true RFC 4122 v4 but
-  // stable, collision-resistant, and recognisable in `openclaw cron list`.
-  return [
-    hash.slice(0, 8),
-    hash.slice(8, 12),
-    `4${hash.slice(13, 16)}`,
-    `${((parseInt(hash[16]!, 16) & 0x3) | 0x8).toString(16)}${hash.slice(17, 20)}`,
-    hash.slice(20, 32),
-  ].join("-");
-}
-
-function buildSweepJob(
-  fleetName: string,
-  agentId: string,
-  sweep: CronSweepConfig
-): CronJob {
-  const schedule: CronJob["schedule"] = sweep.every
-    ? { kind: "every", every: sweep.every }
-    : { kind: "cron", expr: sweep.cron_expr!, ...(sweep.tz ? { tz: sweep.tz } : {}) };
-
-  return {
-    id: sweepJobId(fleetName, agentId, sweep.name),
-    name: sweep.name,
-    enabled: true,
-    createdAtMs: Date.now(),
-    ...(sweep.description ? { description: sweep.description } : {}),
-    schedule,
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: {
-      kind: "agentTurn",
-      message: `WORKER_SWEEP: ${sweep.worker_id}`,
-      // Fall back to "haiku" defensively in case the object bypasses Zod defaults.
-      model: sweep.model ?? "haiku",
-    },
-    delivery: { mode: "none" },
-    state: {},
-  };
-}
-
-/**
- * Idempotently seed `WORKER_SWEEP` cron jobs into the PM bot's OpenClaw cron
- * scheduler (`~/.openclaw/cron/jobs.json`).
- *
- * - Only runs for PM bots (`agent.orchestrator === true`).
- * - Reads existing jobs.json if present; skips any sweep whose `name` is
- *   already registered. Checking by name (not ID) means a manual
- *   `openclaw cron edit` to the schedule persists across re-deploys.
- * - New sweeps are appended and the file is written atomically (write to .tmp,
- *   then rename) to avoid corrupting a running gateway's hot-reload read.
- * - The OpenClaw gateway hot-reloads jobs.json on write, so no restart needed.
- */
-async function seedCronSweeps(
-  fleet: Fleet,
-  agent: AgentConfig,
-  dryRun: boolean,
-  /** Same localBase as provisionAgent — cron output goes to <localBase>/rendered/cron/. */
-  localBase: string
-): Promise<void> {
-  if (!agent.orchestrator) return;
-  const sweeps = agent.delegation?.sweeps;
-  if (!sweeps?.length) return;
-
-  // Cron sweeps are written locally to ./rendered/cron/jobs.json so the
-  // rendered output can be SCP'd to workspace_base/cron/ on the EC2.
-  // We do NOT use workspace_base as a local mkdir target.
-  const cronDir = path.join(localBase, "rendered", "cron");
-  const jobsPath = path.join(cronDir, "jobs.json");
-  const tmpPath = `${jobsPath}.tmp`;
-
-  // Load existing jobs.json (graceful on missing or malformed file).
-  let existing: CronJobsFile = { version: 1, jobs: [] };
-  if (fs.existsSync(jobsPath)) {
-    try {
-      existing = JSON.parse(fs.readFileSync(jobsPath, "utf-8")) as CronJobsFile;
-    } catch {
-      log.warn(`  Warning: could not parse ${jobsPath} — will append to a fresh file`);
-    }
-  }
-
-  const existingNames = new Set(existing.jobs.map((j) => j.name));
-  const toAdd: CronJob[] = [];
-
-  for (const sweep of sweeps) {
-    if (existingNames.has(sweep.name)) {
-      log.info(`    sweep '${sweep.name}' already registered — skipping`);
-    } else {
-      if (sweep.every) {
-        log.warn(
-          `    ⚠️  sweep '${sweep.name}' uses deprecated 'every' — migrate to 'cron_expr' + 'tz'. ` +
-          `Example: cron_expr: "*/15 * * * *", tz: UTC`
-        );
-      }
-      toAdd.push(buildSweepJob(fleet.fleet.name, agent.id, sweep));
-      const schedule = sweep.every ? `every ${sweep.every}` : sweep.cron_expr!;
-      log.info(
-        `    sweep '${sweep.name}' → WORKER_SWEEP: ${sweep.worker_id} (${schedule}, model=${sweep.model})`
-      );
-    }
-  }
-
-  if (toAdd.length === 0) return;
-
-  if (!dryRun) {
-    fs.mkdirSync(cronDir, { recursive: true });
-    const updated: CronJobsFile = {
-      version: existing.version,
-      jobs: [...existing.jobs, ...toAdd],
-    };
-    // Atomic write: write to .tmp then rename, so the gateway never reads a
-    // partially-written file during its hot-reload path.
-    fs.writeFileSync(tmpPath, JSON.stringify(updated, null, 2) + "\n", "utf-8");
-    fs.renameSync(tmpPath, jobsPath);
-  }
-}
-
-// =============================================================================
 // Public API
 // =============================================================================
 
@@ -372,9 +216,6 @@ export async function provisionAgent(
   }
 
   log.dim(`  workspace → ${workspace}`);
-
-  // Seed WORKER_SWEEP cron jobs into jobs.json for PM bots.
-  await seedCronSweeps(fleet, agent, dryRun, localBase);
 }
 
 export async function provisionFleet(
@@ -433,26 +274,6 @@ export function diffFleet(
       }
     }
 
-    // Cron sweeps diff — report any new sweeps that haven't been seeded yet.
-    if (agent.orchestrator && agent.delegation?.sweeps?.length) {
-      const cronDir = path.join(localBase, "rendered", "cron");
-      const jobsPath = path.join(cronDir, "jobs.json");
-      let existingNames = new Set<string>();
-      if (fs.existsSync(jobsPath)) {
-        try {
-          const f = JSON.parse(fs.readFileSync(jobsPath, "utf-8")) as CronJobsFile;
-          existingNames = new Set(f.jobs.map((j) => j.name));
-        } catch { /* ignore */ }
-      }
-      for (const sweep of agent.delegation.sweeps) {
-        if (!existingNames.has(sweep.name)) {
-          const schedule = sweep.every ? `every ${sweep.every}` : sweep.cron_expr!;
-          changes.push(
-            `[+] ${agent.name}: seed cron sweep '${sweep.name}' → WORKER_SWEEP: ${sweep.worker_id} (${schedule})`
-          );
-        }
-      }
-    }
   }
 
   return changes.length > 0 ? changes : ["No changes detected."];

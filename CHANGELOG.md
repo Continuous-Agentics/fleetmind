@@ -6,6 +6,48 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Removed
+
+- **`delegation.sweeps` schema field + `WORKER_SWEEP` cron-seeding pipeline.**
+  Sweeps were the pre-NATS polling backstop: PM bots seeded an
+  `~/.openclaw/cron/jobs.json` entry per worker that fired an isolated Haiku
+  turn every N minutes asking "anything stuck with `<worker>`?" The NATS
+  subscriber (live since 0.8.0-beta.x) is the canonical wake path now —
+  workers publish `task.shipped` / `task.blocked` on close, which wakes the
+  PM on the delegation thread directly. The sweep was redundant on every
+  happy path and contradicted the bot-delegation skill's own guidance
+  ("This subscriber replaces sweep cron jobs"). What this removes:
+  - `CronSweepSchema`, `CronSweepConfig` type, and `sweeps:` field on
+    `DelegationAgentSchema` in [src/config/schema.ts](src/config/schema.ts).
+    Fleets that still declare `delegation.sweeps:` will fail Zod validation.
+  - `seedCronSweeps`, `sweepJobId`, `buildSweepJob`, and the `CronJob` /
+    `CronJobsFile` interfaces in
+    [src/runtime/provisioner.ts](src/runtime/provisioner.ts) (plus the
+    diff-reporter branch that surfaced "[+] seed cron sweep" lines).
+  - The orchestrator-only `cron/jobs.json` shipping branch in
+    [src/cli/commands/push-fleet.ts](src/cli/commands/push-fleet.ts).
+  - `src/test/cron-sweeps.test.ts` (deleted) and the sweep-seeding test in
+    [src/test/provisioner-deploy-path.test.ts](src/test/provisioner-deploy-path.test.ts).
+
+  pm-bot AGENTS.md, bot-delegation SKILL.md, the `fleet.example.yaml`
+  example block, [docs/integration/delegation.md](docs/integration/delegation.md),
+  and [docs/test/gg-sandbox/RUNBOOK.md](docs/test/gg-sandbox/RUNBOOK.md)
+  all updated to reflect NATS-wake as the close-the-loop path. The
+  "defer close-the-loop to the next sweep sub-agent" rule was removed from
+  the PM's Hard Limits — PMs now close the loop directly on the NATS-wake
+  turn.
+
+  **Migration for existing fleets with seeded sweeps:** the schema removal
+  stops new seeding, but `fleetmind deploy` was never wired to *remove*
+  jobs from a remote `jobs.json`. Operators with legacy `forge-sweep`-style
+  jobs running on their PM instances should clean up once:
+
+  ```bash
+  # SSH to each PM instance
+  openclaw cron list          # find the WORKER_SWEEP job(s)
+  openclaw cron rm <job-id>   # remove each one
+  ```
+
 ### Added
 
 - **Worker → home-channel routing for inbound delegations.** Workers no
