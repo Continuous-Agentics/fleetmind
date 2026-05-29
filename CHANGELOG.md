@@ -6,6 +6,24 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Fast-path Slack ack on PM ship/block.** The PM subscriber now posts a
+  one-line `✓ Received ship for <task> from <worker> — reviewing` directly
+  to the delegation Slack thread via Slack's `chat.postMessage` API the
+  moment a NATS ship/block event arrives — BEFORE dispatching the
+  considered agent-turn response. New `postSlackThreadAck()` helper. Two
+  surfaces now: instant "I heard you" (~300ms via Slack API; no LLM, no
+  session lock) and considered "I have an opinion" (the wakeAgent turn,
+  which still legitimately takes 30s–3min). Without this, observed
+  human-visible delay was 28–48 minutes between a worker shipping and the
+  human seeing Conductor acknowledge anything — turns were correctly
+  routed (per the beta.4 fix) but serialized on the same Slack-thread
+  session and queued behind prior work. Tolerant of missing pieces
+  (`SLACK_BOT_TOKEN` absent → skip the ack but still fire the wake;
+  `delegation_thread` empty → skip both). Fire-and-forget — never blocks
+  the subscriber.
+
 ### Fixed
 
 - **Worker-side `wakeAgent` now routes inbound delegations into the live
