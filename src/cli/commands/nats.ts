@@ -306,19 +306,43 @@ Examples:
           }
 
           // Worker mode: auto-ack inbound delegations via DDB + wake OpenClaw session.
+          //
+          // Two-stage human-visible response, mirroring PM-side:
+          //
+          //   1. INSTANT fast-path ack — postSlackThreadAck() posts a short
+          //      "I got it" line directly to the delegation thread via Slack's
+          //      chat.postMessage API in <300ms. Bridges the gap between the
+          //      subscriber receiving the NATS delegation and bot-reception's
+          //      considered "@requestor — picked up" announcement (which can
+          //      take 10–30s+ because the LLM has to boot the session, read the
+          //      skill, parse the delegation, etc.).
+          //
+          //   2. CONSIDERED bot-reception flow — wakeAgent dispatches the agent
+          //      turn in the delegation-thread session (via --session-key). The
+          //      LLM then runs bot-reception's step 4 "open Slack thread", which
+          //      posts the formal `@requestor — picked up [task]: <title>...`
+          //      message and stores thread_ts in task-queue.md.
+          //
+          // The worker's SLACK_BOT_TOKEN is the worker's own bot (e.g. forge's),
+          // so the fast-path ack appears in the thread AS the worker — exactly
+          // where the human/PM expects it to come from.
           if (opts.mode === "worker" && event.event === "delegation") {
-            // Wake the worker agent so it starts processing the delegation immediately.
-            // Route into the delegation's Slack thread session when present, for the
-            // same reason as PM-side: a wake into `:main` makes the worker pick a
-            // default reply target (often a DM with the requestor), instead of
-            // replying in the thread the PM started. With the session-key set, the
-            // worker's agent turn runs in a session whose `route.thread.id` is the
-            // delegation thread, so bot-reception's "post a picked-up announcement"
-            // lands in the same Slack thread the PM and human are watching.
             const workerId = opts.workerId ?? event.worker;
             if (workerId) {
               const msg = `NATS: Task ${event.task_id} delegated to you. Description: ${event.description ?? "(see DDB)"}`;
               const parsed = parseSlackThreadUrl(event.delegation_thread ?? "");
+              // Stage 1: instant fast-path ack into the delegation thread.
+              if (parsed) {
+                const ackText = `👋 Received delegation \`${event.task_id}\` from ${event.delegated_by ?? "PM"} — picking up. Details coming.`;
+                void postSlackThreadAck({
+                  channelId: parsed.channelId,
+                  threadTs: parsed.threadTs,
+                  text: ackText,
+                });
+              }
+              // Stage 2: considered wake, routed into the same thread session
+              // so the LLM's reply (bot-reception's step 4 announcement) lands
+              // in the same thread, not in `:main` or a DM with the requestor.
               const sessionKey = parsed
                 ? slackThreadSessionKey(workerId, parsed.channelId, parsed.threadTs)
                 : undefined;

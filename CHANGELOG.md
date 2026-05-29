@@ -8,6 +8,19 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ### Added
 
+- **Fast-path Slack ack on WORKER delegation receipt.** Symmetric to the
+  PM-side fast-path (also in this section). The worker subscriber now
+  posts a one-line `👋 Received delegation <task> from <pm> — picking up.
+  Details coming.` directly to the delegation Slack thread the moment
+  the NATS delegation event arrives — BEFORE wakeAgent dispatches the
+  considered bot-reception turn (which can take 10–30s+ to boot the
+  session, read the skill, and run the full step-4 announcement).
+  Closes the gap where the human pings the PM, the PM delegates over
+  NATS, and there's a multi-second silence before the worker's
+  considered "@requestor — picked up" message arrives. With this, the
+  human sees the worker acknowledge receipt instantly, then the formal
+  picked-up announcement follows when the LLM is ready. Worker's own
+  bot token is used (so the post appears as the worker, not the PM).
 - **Fast-path Slack ack on PM ship/block.** The PM subscriber now posts a
   one-line `✓ Received ship for <task> from <worker> — reviewing` directly
   to the delegation Slack thread via Slack's `chat.postMessage` API the
