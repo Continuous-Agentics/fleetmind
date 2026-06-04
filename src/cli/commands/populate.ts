@@ -25,6 +25,7 @@ import readline from "node:readline";
 import yaml from "js-yaml";
 import chalk from "chalk";
 import { SecretsManagerClient, PutSecretValueCommand } from "@aws-sdk/client-secrets-manager";
+import { STSClient, GetCallerIdentityCommand } from "@aws-sdk/client-sts";
 import { log } from "../../utils/log.js";
 import {
   providerApiKeyVar,
@@ -467,10 +468,60 @@ async function emitSecret(
     results.push({ ...base, ok: true, pushed: false, keyCount });
     return;
   }
-  await client!.send(
-    new PutSecretValueCommand({ SecretId: base.secretName, SecretString: JSON.stringify(data) })
-  );
+  try {
+    await client!.send(
+      new PutSecretValueCommand({ SecretId: base.secretName, SecretString: JSON.stringify(data) })
+    );
+  } catch (err) {
+    throw await annotateSecretError(err, base.secretName, client!);
+  }
   results.push({ ...base, ok: true, pushed: true, keyCount });
+}
+
+/** Look up the current AWS account id via STS, in the same region as the
+ *  Secrets Manager client. Returns null with a reason string if it fails. */
+async function describeCallerIdentity(
+  region: string
+): Promise<{ accountId: string | null; reason?: string }> {
+  try {
+    const sts = new STSClient({ region });
+    const id = await sts.send(new GetCallerIdentityCommand({}));
+    return { accountId: id.Account ?? null };
+  } catch (err) {
+    const e = err as { name?: string; message?: string };
+    return { accountId: null, reason: `${e?.name ?? "Error"}: ${e?.message ?? String(err)}` };
+  }
+}
+
+/** Re-throw AWS Secrets Manager errors with the secret name, account, and
+ *  region attached so users see exactly which secret is missing in which AWS
+ *  identity instead of the bare "can't find the specified secret" message. */
+async function annotateSecretError(
+  err: unknown,
+  secretName: string,
+  client: SecretsManagerClient
+): Promise<Error> {
+  const e = err as { name?: string; message?: string };
+  const name = e?.name ?? "Error";
+  const msg = e?.message ?? String(err);
+  if (name === "ResourceNotFoundException") {
+    const region =
+      (await (client.config.region as () => Promise<string>)?.()) ?? "<unknown>";
+    const caller = await describeCallerIdentity(region);
+    const acct = caller.accountId
+      ? `account ${caller.accountId}`
+      : `account <unable to determine — STS GetCallerIdentity failed: ${caller.reason}>`;
+    const wrapped = new Error(
+      `Secret "${secretName}" was not found in AWS Secrets Manager for ${acct} in region ${region} ` +
+      `(the AWS identity you're currently logged in as). ` +
+      `Create it first (typically via \`terraform apply\` in your fleetmind-template repo), ` +
+      `or re-check your AWS profile/region, then re-run \`fleetmind secrets populate\`. ` +
+      `(AWS: ${msg})`
+    );
+    (wrapped as NodeJS.ErrnoException).name = name;
+    return wrapped;
+  }
+  return new Error(`Failed to write secret "${secretName}": ${name}: ${msg}`);
 }
 
 export async function populateSecrets(options: PopulateOptions): Promise<PopulateResult[]> {
@@ -606,10 +657,14 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
           keyCount: r.keyCount,
         });
       } else {
-        await interactiveClient!.send(new PutSecretValueCommand({
-          SecretId: r.secretName,
-          SecretString: JSON.stringify(r.data),
-        }));
+        try {
+          await interactiveClient!.send(new PutSecretValueCommand({
+            SecretId: r.secretName,
+            SecretString: JSON.stringify(r.data),
+          }));
+        } catch (err) {
+          throw await annotateSecretError(err, r.secretName, interactiveClient!);
+        }
         interactiveResults.push({
           agentId: r.agentId,
           secretType: r.secretType,
