@@ -270,20 +270,25 @@ cd /path/to/fleetmind   # repo root
 fleetmind secrets populate --interactive --region us-west-2
 ```
 
-The `populate` command reads `fleet.yaml`, identifies the `${VAR}` placeholders in each agent's `slack.bot_token` and `app_token` fields, resolves them from your environment, and pushes them to Secrets Manager using the standard key names (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`).
+The `populate` command reads `fleet.yaml`, identifies the `${VAR}` placeholders in each agent's `slack.bot_token` and `app_token` fields, resolves them from your environment, and pushes them to Secrets Manager using the standard key names (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`). It also fans out one secret per `(agent, provider)` pair under `gg-sandbox/agents/<id>/providers/<provider>` for every provider listed under that agent's `providers:` field in `fleet.yaml` — so `ANTHROPIC_API_KEY` for both agents in this fleet is staged automatically.
 
 > **Note:** `signing_secret` / `SLACK_SIGNING_SECRET` is **not** required for socket-mode bots and is not prompted for or stored.
 
-For the Anthropic key (one per agent in this fleet):
+Verify the result without mutating anything:
+```bash
+fleetmind secrets check --region us-west-2
+```
+
+If you would rather push the Anthropic key manually:
 ```bash
 aws secretsmanager put-secret-value \
   --region us-west-2 \
-  --secret-id "gg-sandbox/agents/conductor/anthropic" \
+  --secret-id "gg-sandbox/agents/conductor/providers/anthropic" \
   --secret-string "{\"ANTHROPIC_API_KEY\":\"$ANTHROPIC_API_KEY\"}"
 
 aws secretsmanager put-secret-value \
   --region us-west-2 \
-  --secret-id "gg-sandbox/agents/forge/anthropic" \
+  --secret-id "gg-sandbox/agents/forge/providers/anthropic" \
   --secret-string "{\"ANTHROPIC_API_KEY\":\"$ANTHROPIC_API_KEY\"}"
 ```
 

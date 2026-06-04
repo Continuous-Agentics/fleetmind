@@ -6,6 +6,68 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### ⚠️ Breaking
+
+- **Per-provider Secrets Manager layout; combined `/model` secret removed.**
+  `fleetmind secrets populate` now writes one secret per `(agent, provider)`
+  pair at `<fleet>/agents/<id>/providers/<provider>` (each holding a single
+  `{"<PROVIDER>_API_KEY": "..."}` JSON object). The previous combined
+  `<fleet>/agents/<id>/model` secret is no longer written or read. This
+  matches the canonical layout shared with `terraform-aws-fleetmind` v0.5.0
+  via `src/core/secret-names.ts` (TS) and `modules/agent/main.tf` locals
+  (TF) — they MUST stay in lockstep.
+- **`providers:` is now required on every agent in `fleet.yaml`.** Provider
+  inference from the `model:` string has been removed. Each agent must
+  declare its providers explicitly:
+  ```yaml
+  agents:
+    list:
+      - id: ranger
+        model: anthropic/claude-sonnet-4-6
+        providers:
+          - anthropic
+  ```
+  Multi-provider agents list every provider they use
+  (`providers: [anthropic, openai]`). Missing or empty `providers:` raises
+  a clear error pointing at the agent id.
+- **Migration from a fleet on the old `/model` shape:**
+  1. Upgrade `terraform-aws-fleetmind` to `v0.5.0`, bump your
+     `fleetmind-template` ref, and add `providers:` to every agent in
+     `fleet.yaml`.
+  2. Delete the stale combined secrets (one per agent) so the new per-provider
+     resources can be created on the same name:
+     ```bash
+     aws secretsmanager delete-secret \
+       --secret-id "<fleet>/agents/<id>/model" \
+       --force-delete-without-recovery --region <region>
+     ```
+  3. `terraform apply` to create the new `providers/<provider>` secrets.
+  4. `fleetmind secrets populate` (or `--interactive`) to push API keys.
+  5. `fleetmind secrets check` to confirm every expected secret exists.
+
+### Added
+
+- **`fleetmind secrets check`** — read-only counterpart to `secrets populate`.
+  `DescribeSecret`s every name `populate` would target and prints a
+  present/absent report per `(agent, provider)` so naming drift between
+  the CLI and the applied Terraform module is visible without mutating
+  anything.
+- **`src/core/secret-names.ts`** — single TS source of truth for Secrets
+  Manager naming (`slackSecretName`, `hooksSecretName`,
+  `providerSecretName`, `agentSecretPrefix`). The matching Terraform helper
+  lives in `terraform-aws-fleetmind` `modules/agent/main.tf` `locals`; both
+  sides include a parity comment pointing at the other.
+- **Strict-providers errors.** Missing/empty `providers:` raises a clear
+  message naming the agent and pointing at `fleet.yaml`.
+
+### Changed
+
+- **`fleetmind onboard`** uses the same per-provider fan-out as
+  `secrets populate`; the interactive path writes one secret per provider.
+- **`ResourceNotFoundException` reporting** in `secrets populate` now hints
+  at the module-version mismatch when a `providers/<provider>` secret is
+  missing ("terraform-aws-fleetmind must be at >= v0.5.0 and applied").
+
 ## [0.8.0-beta.9] — 2026-06-03
 
 ### Changed

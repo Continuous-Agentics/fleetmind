@@ -183,7 +183,8 @@ See `fleet.example.yaml` for the full annotated schema.
 | `fleetmind secrets set KEY value` | Store a secret locally (resolved in `${VAR}` fleet.yaml refs) |
 | `fleetmind secrets list` | List stored secret keys |
 | `fleetmind secrets export` | Export secrets as shell exports |
-| `fleetmind secrets populate [--interactive]` | Push Slack + Anthropic credentials into Secrets Manager |
+| `fleetmind secrets populate [--interactive]` | Push Slack + per-provider API keys into AWS Secrets Manager (one secret per `(agent, provider)` pair under `<fleet>/agents/<id>/providers/<provider>`) |
+| `fleetmind secrets check` | Verify every expected `(agent, provider)` secret exists in AWS Secrets Manager without mutating anything |
 
 ### Slack
 
