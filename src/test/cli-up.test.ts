@@ -86,6 +86,7 @@ agents:
     - id: solo
       name: Solo
       orchestrator: true
+      providers: [anthropic]
       channels:
         - provider: slack
           account_id: solo

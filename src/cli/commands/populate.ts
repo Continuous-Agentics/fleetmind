@@ -4,14 +4,19 @@
  *
  * Secret naming follows the Terraform convention:
  *   ${fleet_name}/agents/${agent_id}/slack
- *   ${fleet_name}/agents/${agent_id}/model   — combined: one JSON object holding
- *      every <PROVIDER>_API_KEY the agent uses (ANTHROPIC_API_KEY, OPENAI_API_KEY,
- *      …). The on-host fetch-agent-secrets dumps these into the gateway env, so a
- *      single secret covers any provider mix (no per-provider secret/IAM/fetch).
+ *   ${fleet_name}/agents/${agent_id}/providers/<provider>  — one secret per
+ *      (agent, provider). JSON payload is { "<PROVIDER>_API_KEY": "<value>" }.
+ *      The on-host fetch-agent-secrets iterates the agent's declared providers
+ *      and merges every blob into the gateway env. Multi-provider agents get
+ *      multiple secrets.
  *   ${fleet_name}/agents/${agent_id}/hooks
  *
- * FleetMind is provider-neutral: the set of providers an agent needs is derived
- * from its `model` ("provider/model") plus any explicit `api_keys` entries.
+ * Secret names come from src/core/secret-names.ts (shared with the Terraform
+ * module — see terraform-aws-fleetmind/modules/agent/main.tf).
+ *
+ * FleetMind is provider-neutral, but providers are now EXPLICIT: each agent in
+ * fleet.yaml must declare `providers: [anthropic, ...]`. There is no silent
+ * inference from `model:` strings.
  * Per-provider key resolution order (provider P):
  *   1. ${<AGENT_ID_UPPER>_<P_UPPER>_API_KEY}  (per-agent)
  *   2. agent.api_keys[P] placeholder/literal from fleet.yaml
@@ -32,6 +37,11 @@ import {
   agentProviderApiKeyVar,
   providersForAgent,
 } from "../../core/model-provider.js";
+import {
+  slackSecretName,
+  hooksSecretName,
+  providerSecretName,
+} from "../../core/secret-names.js";
 import { slackChannel } from "../../core/channels.js";
 import type { Fleet } from "../../core/model.js";
 
@@ -72,6 +82,8 @@ interface RawAgent {
   channels?: RawChannel[];
   /** Per-provider API-key placeholders/literals. */
   api_keys?: Record<string, string>;
+  /** REQUIRED — lowercase provider tokens this agent needs API keys for. */
+  providers?: string[];
 }
 
 interface RawFleet {
@@ -87,9 +99,16 @@ function rawAgentSlack(agent: RawAgent): AgentSlack | undefined {
   return { bot_token: ch.bot_token, app_token: ch.app_token, account_id: ch.account_id };
 }
 
-/** The model providers a raw agent needs keys for (see providersForAgent). */
+/** The model providers a raw agent needs keys for. Strict — throws if the
+ *  agent does not declare an explicit providers list in fleet.yaml. */
 function agentProviders(agent: RawAgent, defaultsModel: string | undefined): string[] {
-  return providersForAgent({ model: agent.model, apiKeys: agent.api_keys, defaultModel: defaultsModel });
+  return providersForAgent({
+    agentId: agent.id,
+    providers: agent.providers,
+    model: agent.model,
+    apiKeys: agent.api_keys,
+    defaultModel: defaultsModel,
+  });
 }
 
 // ── Env-file loader ───────────────────────────────────────────────────────────
@@ -353,6 +372,8 @@ export function materializeHostEnv(
 
     // Model-provider keys — <PROVIDER>_API_KEY, read by OpenClaw from env.
     const providers = providersForAgent({
+      agentId: agent.id,
+      providers: agent.providers,
       model: agent.model,
       apiKeys: agent.api_keys,
       defaultModel: fleet.agents.defaults.model,
@@ -511,12 +532,19 @@ async function annotateSecretError(
     const acct = caller.accountId
       ? `account ${caller.accountId}`
       : `account <unable to determine — STS GetCallerIdentity failed: ${caller.reason}>`;
+    const providerHint = /\/providers\/([a-z0-9_-]+)$/.exec(secretName);
+    const providerSuffix = providerHint
+      ? ` Expected because fleet.yaml lists provider '${providerHint[1]}' for this agent. ` +
+        `Confirm your terraform-aws-fleetmind module is at >= v0.5.0 (the per-provider ` +
+        `secret release; older modules created a single '/model' secret instead) and re-apply.`
+      : "";
     const wrapped = new Error(
       `Secret "${secretName}" was not found in AWS Secrets Manager for ${acct} in region ${region} ` +
       `(the AWS identity you're currently logged in as). ` +
       `Create it first (typically via \`terraform apply\` in your fleetmind-template repo), ` +
-      `or re-check your AWS profile/region, then re-run \`fleetmind secrets populate\`. ` +
-      `(AWS: ${msg})`
+      `or re-check your AWS profile/region, then re-run \`fleetmind secrets populate\`.` +
+      providerSuffix +
+      ` (AWS: ${msg})`
     );
     (wrapped as NodeJS.ErrnoException).name = name;
     return wrapped;
@@ -588,36 +616,34 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
       const agentName = agent.name ?? agentId;
 
       // Slack
-      const slackSecretName = `${fleetName}/agents/${agentId}/slack`;
+      const slackName = slackSecretName(fleetName, agentId);
       const slackRes = await resolveSlackInteractive(agentId, agentName, rawAgentSlack(agent), env, promptFn);
       ready.push({
         agentId,
         secretType: "slack",
-        secretName: slackSecretName,
+        secretName: slackName,
         data: slackRes.values as Record<string, string>,
         keyCount: Object.keys(slackRes.values).length,
       });
 
-      // Model-provider keys — one combined /model secret holding every
-      // <PROVIDER>_API_KEY this agent uses (OpenClaw reads them from env).
-      const modelKeys: Record<string, string> = {};
+      // Model-provider keys — fan out, one secret per (agent, provider).
       for (const provider of agentProviders(agent, defaultsModel)) {
         const res = await resolveProviderKeyInteractive(agentId, agentName, provider, agent.api_keys, env, promptFn);
-        modelKeys[providerApiKeyVar(provider)] = res.value!;
+        const keyVar = providerApiKeyVar(provider);
+        ready.push({
+          agentId,
+          secretType: `provider:${provider}`,
+          secretName: providerSecretName(fleetName, agentId, provider),
+          data: { [keyVar]: res.value! },
+          keyCount: 1,
+        });
       }
-      ready.push({
-        agentId,
-        secretType: "model",
-        secretName: `${fleetName}/agents/${agentId}/model`,
-        data: modelKeys,
-        keyCount: Object.keys(modelKeys).length,
-      });
 
       // Hooks token — always auto-generated; never read from env
       ready.push({
         agentId,
         secretType: "hooks",
-        secretName: `${fleetName}/agents/${agentId}/hooks`,
+        secretName: hooksSecretName(fleetName, agentId),
         data: { HOOKS_TOKEN: generateHooksToken() },
         keyCount: 1,
       });
@@ -695,37 +721,40 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
     if (targetIds && !targetIds.has(agentId)) continue;
 
     // ── Slack ────────────────────────────────────────────────────────────────
-    const slackSecretName = `${fleetName}/agents/${agentId}/slack`;
+    const slackName = slackSecretName(fleetName, agentId);
     const slackRes = resolveSlack(agentId, rawAgentSlack(agent), env);
     if (slackRes.ok) {
       await emitSecret(results, client, options.dryRun,
-        { agentId, secretType: "slack", secretName: slackSecretName },
+        { agentId, secretType: "slack", secretName: slackName },
         slackRes.values);
     } else {
-      results.push({ agentId, secretType: "slack", secretName: slackSecretName, ok: false, missing: slackRes.missing });
+      results.push({ agentId, secretType: "slack", secretName: slackName, ok: false, missing: slackRes.missing });
     }
 
-    // ── Model-provider keys — one combined /model secret holding every
-    //    <PROVIDER>_API_KEY this agent uses (OpenClaw reads them from env). ──────
-    const modelSecretName = `${fleetName}/agents/${agentId}/model`;
-    const modelKeys: Record<string, string> = {};
-    const modelMissing: string[] = [];
+    // ── Model-provider keys — fan out: one Secrets Manager secret per
+    //    (agent, provider). Each holds { <PROVIDER>_API_KEY: <value> }. ────────
     for (const provider of agentProviders(agent, defaultsModel)) {
+      const secretName = providerSecretName(fleetName, agentId, provider);
       const res = resolveProviderKey(agentId, provider, agent.api_keys, env);
-      if (res.ok) modelKeys[providerApiKeyVar(provider)] = res.value!;
-      else modelMissing.push(...res.missing);
-    }
-    if (modelMissing.length === 0) {
-      await emitSecret(results, client, options.dryRun,
-        { agentId, secretType: "model", secretName: modelSecretName },
-        modelKeys);
-    } else {
-      results.push({ agentId, secretType: "model", secretName: modelSecretName, ok: false, missing: modelMissing });
+      const keyVar = providerApiKeyVar(provider);
+      if (res.ok) {
+        await emitSecret(results, client, options.dryRun,
+          { agentId, secretType: `provider:${provider}`, secretName },
+          { [keyVar]: res.value! });
+      } else {
+        results.push({
+          agentId,
+          secretType: `provider:${provider}`,
+          secretName,
+          ok: false,
+          missing: res.missing,
+        });
+      }
     }
 
     // ── Hooks token — always auto-generated; never read from env ────────────────
     await emitSecret(results, client, options.dryRun,
-      { agentId, secretType: "hooks", secretName: `${fleetName}/agents/${agentId}/hooks` },
+      { agentId, secretType: "hooks", secretName: hooksSecretName(fleetName, agentId) },
       { HOOKS_TOKEN: generateHooksToken() });
   }
 

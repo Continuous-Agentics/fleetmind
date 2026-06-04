@@ -54,26 +54,54 @@ export function agentProviderApiKeyVar(agentId: string, provider: string): strin
   return `${envToken(agentId)}_${providerApiKeyVar(provider)}`;
 }
 
-/** FleetMind's default model provider — used when an agent's model has no
- *  provider prefix and it lists no explicit api_keys, so every agent still
- *  resolves at least one provider (preserves the original Anthropic default). */
+/** FleetMind's historical default model provider. Kept as a constant for
+ *  back-compat callers that still need it, but the strict providersForAgent()
+ *  no longer uses it as a silent fallback. */
 export const DEFAULT_MODEL_PROVIDER = "anthropic";
 
 /**
- * The set of providers an agent needs API keys for: the provider of its
- * resolved model, plus any provider it lists an explicit `api_keys` entry for.
- * Falls back to [DEFAULT_MODEL_PROVIDER] when nothing can be derived. Order:
- * model provider first, then api_keys insertion order.
+ * The set of providers an agent needs API keys for.
+ *
+ * STRICT / EXPLICIT-ONLY (changed Nov 2026):
+ *   - If `opts.providers` is set and non-empty, that list IS the answer.
+ *   - Otherwise this function THROWS. There is no fallback to inferring the
+ *     provider from a `model:` string or from an `api_keys:` map, because
+ *     silent inference is exactly what produced the WRI fleet's wedged
+ *     `secrets populate` (CLI wrote ANTHROPIC, terraform created MODEL).
+ *     Operators must declare providers explicitly in fleet.yaml.
+ *
+ * Migration: every agent in fleet.yaml needs a top-level `providers: [...]`
+ * list. Example:
+ *   - id: ranger
+ *     model: anthropic/claude-sonnet-4-6
+ *     providers: [anthropic]
  */
 export function providersForAgent(opts: {
+  agentId?: string;
+  providers?: string[];
   model?: string;
   apiKeys?: Record<string, string>;
   defaultModel?: string;
 }): string[] {
-  const set = new Set<string>();
-  const fromModel = modelProvider(opts.model ?? opts.defaultModel);
-  if (fromModel) set.add(fromModel);
-  for (const p of Object.keys(opts.apiKeys ?? {})) set.add(p.toLowerCase());
-  if (set.size === 0) set.add(DEFAULT_MODEL_PROVIDER);
-  return [...set];
+  if (opts.providers && opts.providers.length > 0) {
+    // Preserve declared order but lowercase + dedupe.
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const raw of opts.providers) {
+      const p = String(raw).toLowerCase();
+      if (!seen.has(p)) {
+        seen.add(p);
+        out.push(p);
+      }
+    }
+    return out;
+  }
+  const id = opts.agentId ?? "<unknown>";
+  throw new Error(
+    `Agent '${id}' is missing required field \`providers: [...]\` in fleet.yaml. ` +
+      `Explicit provider declaration is required — FleetMind no longer infers ` +
+      `providers from \`model:\` strings or \`api_keys:\` entries. ` +
+      `Add e.g. \`providers: [anthropic]\` (or [anthropic, openai] for multi-provider agents) ` +
+      `to the agent block and re-run.`,
+  );
 }

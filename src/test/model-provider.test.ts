@@ -47,26 +47,41 @@ describe("agentProviderApiKeyVar", () => {
   });
 });
 
-describe("providersForAgent", () => {
-  it("derives the provider from the agent's own model", () => {
-    assert.deepEqual(providersForAgent({ model: "openai/gpt-4o" }), ["openai"]);
-  });
-  it("falls back to the fleet default model when the agent has none", () => {
+describe("providersForAgent (strict / explicit-only)", () => {
+  it("returns the explicit providers list, lowercased and deduped", () => {
     assert.deepEqual(
-      providersForAgent({ defaultModel: "anthropic/claude-sonnet-4-6" }),
-      ["anthropic"]
+      providersForAgent({ providers: ["Anthropic", "OpenAI", "anthropic"] }),
+      ["anthropic", "openai"],
     );
   });
-  it("unions the model provider with explicit api_keys providers (model first)", () => {
+  it("preserves declared order", () => {
     assert.deepEqual(
-      providersForAgent({
-        model: "anthropic/claude-sonnet-4-6",
-        apiKeys: { openai: "${OPENAI_API_KEY}", anthropic: "${ANTHROPIC_API_KEY}" },
-      }),
-      ["anthropic", "openai"]
+      providersForAgent({ providers: ["openai", "anthropic"] }),
+      ["openai", "anthropic"],
     );
   });
-  it("falls back to anthropic when nothing can be derived", () => {
-    assert.deepEqual(providersForAgent({}), ["anthropic"]);
+  it("throws when providers is missing", () => {
+    assert.throws(
+      () => providersForAgent({ agentId: "ranger", model: "anthropic/claude-sonnet-4-6" }),
+      /Agent 'ranger' is missing required field `providers: \[\.\.\.\]`/,
+    );
+  });
+  it("throws when providers is an empty list", () => {
+    assert.throws(
+      () => providersForAgent({ agentId: "ranger", providers: [] }),
+      /missing required field `providers/,
+    );
+  });
+  it("does not infer from model strings (the old fallback is gone)", () => {
+    assert.throws(
+      () => providersForAgent({ model: "openai/gpt-4o" }),
+      /Explicit provider declaration is required/,
+    );
+  });
+  it("does not infer from api_keys map (the old fallback is gone)", () => {
+    assert.throws(
+      () => providersForAgent({ apiKeys: { anthropic: "${ANTHROPIC_API_KEY}" } }),
+      /Explicit provider declaration is required/,
+    );
   });
 });
