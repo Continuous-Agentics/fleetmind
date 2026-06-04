@@ -6,6 +6,19 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.8.0-beta.9] — 2026-06-03
+
+### Changed
+
+- **`fleetmind secrets populate`: clearer `ResourceNotFoundException` errors.**
+  When AWS Secrets Manager returns "can't find the specified secret",
+  the CLI now reports the missing secret name, the AWS account id (looked
+  up lazily via STS `GetCallerIdentity`), and the region from the client
+  config so the user can immediately see *which* AWS identity is missing
+  the secret. Falls back gracefully (`account <unable to determine — STS
+  GetCallerIdentity failed: ...>`) if STS can't resolve caller identity.
+  (#209)
+
 ### Removed
 
 - **`delegation.sweeps` schema field + `WORKER_SWEEP` cron-seeding pipeline.**
