@@ -143,8 +143,10 @@ export interface OnboardFsDeps {
 /**
  * All external dependencies required by the onboard wizard.
  *
- * Pass a partial/mocked implementation to `runOnboard` for testing.
- * Production callers omit this argument — the default is `createDefaultDeps(region)`.
+ * Pass a complete OnboardDeps to `runOnboard` for testing (the helper
+ * function fields like pushFleet/provisionFleet/writeOutputs are optional
+ * and fall back to the production imports when omitted). Production callers
+ * omit the deps argument entirely — the default is `createDefaultDeps(region)`.
  */
 export interface OnboardDeps {
   /** Interactive terminal helpers — prompt/hiddenPrompt/confirm. */
@@ -438,6 +440,7 @@ export async function runOnboard(
         region,
         dryRun: false,
         overwrite: true,
+        ssmClient: deps.ssm,
       });
       // Mark as manifest-handled so Step 10 knows there's nothing left to do.
       ghAppManifestHandled.add(agent.id);
@@ -609,7 +612,7 @@ export async function runOnboard(
       await storeGithubApp({
         fleet: fleetName, agent: agentId,
         appId: creds.appId, installationId: creds.installationId, pemFile: creds.pemFile,
-        region, dryRun: false, overwrite: true,
+        region, dryRun: false, overwrite: true, ssmClient: deps.ssm,
       });
       log.ok(`  ${agentId}: GitHub App credentials stored`);
     }

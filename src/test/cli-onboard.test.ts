@@ -486,9 +486,14 @@ describe("happy path — delegation: true", () => {
 // ── Step 9 — provider-prompt matrix ──────────────────────────────────────────
 
 describe("step 9 — provider-prompt matrix", () => {
-  let tmpDir: string;
+  let tmpDir: string | undefined;
 
-  afterEach(() => cleanupTempDir(tmpDir));
+  afterEach(() => {
+    if (tmpDir) {
+      cleanupTempDir(tmpDir);
+      tmpDir = undefined;
+    }
+  });
 
   /**
    * Run the wizard through steps 1-8 quickly (accepting defaults), then
@@ -753,8 +758,13 @@ describe("step 9 — provider-prompt matrix", () => {
 // ── Idempotency tests ─────────────────────────────────────────────────────────
 
 describe("idempotency", () => {
-  let tmpDir: string;
-  afterEach(() => cleanupTempDir(tmpDir));
+  let tmpDir: string | undefined;
+  afterEach(() => {
+    if (tmpDir) {
+      cleanupTempDir(tmpDir);
+      tmpDir = undefined;
+    }
+  });
 
   test("re-run after step 3 complete — step 3 skips, later steps proceed", async () => {
     // All agents have bot_user_id pre-set → step 3 (Collect Slack Credentials) should skip.
@@ -934,8 +944,13 @@ describe("idempotency", () => {
 // ── Fallback tests ────────────────────────────────────────────────────────────
 
 describe("fallback", () => {
-  let tmpDir: string;
-  afterEach(() => cleanupTempDir(tmpDir));
+  let tmpDir: string | undefined;
+  afterEach(() => {
+    if (tmpDir) {
+      cleanupTempDir(tmpDir);
+      tmpDir = undefined;
+    }
+  });
 
   test("--legacy-github-apps flag: owner prompt skipped; App ID + PEM prompts fired", async () => {
     const fleetName = "legacy-fleet";
