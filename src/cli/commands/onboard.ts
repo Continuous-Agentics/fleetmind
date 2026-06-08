@@ -131,24 +131,86 @@ function isRealChannelId(id: string | undefined): boolean {
   return /^C[A-Z0-9]+$/.test(id ?? "");
 }
 
-// ── AWS helpers ──────────────────────────────────────────────────────────────
+// ── Dependency-injection types ────────────────────────────────────────────────
 
-async function ssmExists(name: string, region: string): Promise<boolean> {
-  const ssm = new SSMClient({ region });
-  try { await ssm.send(new SsmGetCommand({ Name: name })); return true; } catch { return false; }
+/** File-system surface required by the onboard wizard. */
+export interface OnboardFsDeps {
+  existsSync(path: fs.PathLike): boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  writeFileSync(path: fs.PathOrFileDescriptor, data: string, encoding: BufferEncoding): void;
+  readdirSync(path: fs.PathLike): string[];
 }
 
-async function getSecret(secretId: string, region: string): Promise<string | null> {
-  const sm = new SecretsManagerClient({ region });
+/**
+ * All external dependencies required by the onboard wizard.
+ *
+ * Pass a partial/mocked implementation to `runOnboard` for testing.
+ * Production callers omit this argument — the default is `createDefaultDeps(region)`.
+ */
+export interface OnboardDeps {
+  /** Interactive terminal helpers — prompt/hiddenPrompt/confirm. */
+  prompter: {
+    prompt: (question: string) => Promise<string>;
+    hiddenPrompt: (question: string) => Promise<string>;
+    confirm: (question: string, defaultYes?: boolean) => Promise<boolean>;
+  };
+  /** AWS Secrets Manager client instance. */
+  secretsManager: SecretsManagerClient;
+  /** AWS SSM Parameter Store client instance. */
+  ssm: SSMClient;
+  /** File-system operations (existsSync / writeFileSync / readdirSync). */
+  fs: OnboardFsDeps;
+  /** Push fleet to S3 + trigger pull-self on instances. */
+  pushFleet?: typeof runPushFleet;
+  /** Provision fleet workspaces (render step). */
+  provisionFleet?: typeof provisionFleet;
+  /** Write rendered tfvars + openclaw.json outputs. */
+  writeOutputs?: typeof writeOutputs;
+}
+
+/**
+ * Build the default production deps for a given region.
+ *
+ * Called as the default argument to `runOnboard` so tests can pass mocks
+ * without touching any CLI plumbing. Production callers never need to call
+ * this explicitly — simply omit `deps`.
+ */
+export function createDefaultDeps(region?: string): OnboardDeps {
+  const clientCfg = region ? { region } : {};
+  return {
+    prompter: { prompt, hiddenPrompt, confirm },
+    secretsManager: new SecretsManagerClient(clientCfg),
+    ssm: new SSMClient(clientCfg),
+    fs: {
+      existsSync: (p) => fs.existsSync(p),
+      writeFileSync: (p, data, enc) => fs.writeFileSync(p, data, enc),
+      readdirSync: (p) => fs.readdirSync(p) as string[],
+    },
+    pushFleet: runPushFleet,
+    provisionFleet,
+    writeOutputs,
+  };
+}
+
+// ── AWS helpers ──────────────────────────────────────────────────────────────
+
+async function ssmExistsViaClient(ssmClient: SSMClient, name: string): Promise<boolean> {
+  try { await ssmClient.send(new SsmGetCommand({ Name: name })); return true; } catch { return false; }
+}
+
+async function getSecretViaClient(smClient: SecretsManagerClient, secretId: string): Promise<string | null> {
   try {
-    const r = await sm.send(new GetSecretValueCommand({ SecretId: secretId }));
+    const r = await smClient.send(new GetSecretValueCommand({ SecretId: secretId }));
     return r.SecretString ?? null;
   } catch { return null; }
 }
 
-async function putSecret(secretId: string, value: Record<string, string>, region: string): Promise<void> {
-  const sm = new SecretsManagerClient({ region });
-  await sm.send(new PutSecretValueCommand({
+async function putSecretViaClient(
+  smClient: SecretsManagerClient,
+  secretId: string,
+  value: Record<string, string>,
+): Promise<void> {
+  await smClient.send(new PutSecretValueCommand({
     SecretId: secretId,
     SecretString: JSON.stringify(value),
   }));
@@ -160,12 +222,13 @@ export async function runOnboard(
   fleetFile: string,
   region: string,
   opts: { legacyGithubApps?: boolean } = {},
+  deps: OnboardDeps = createDefaultDeps(region),
 ): Promise<void> {
   let legacyGithubApps = opts.legacyGithubApps ?? false;
   console.log("\n\x1b[1mfleetmind onboard\x1b[0m — guided fleet setup wizard\n");
 
   // ── Load fleet ──────────────────────────────────────────────────────────────
-  if (!fs.existsSync(fleetFile)) {
+  if (!deps.fs.existsSync(fleetFile)) {
     log.error(`fleet.yaml not found at ${fleetFile}. Run from your fleet repo root.`);
     process.exit(1);
   }
@@ -179,14 +242,14 @@ export async function runOnboard(
 
   // ── Pre-flight status ───────────────────────────────────────────────────────
   const manifestsDir = path.join(path.dirname(fleetFile), "docs", "slack-manifests");
-  const manifestsExist = fs.existsSync(manifestsDir) &&
-    fs.readdirSync(manifestsDir).some(f => f.endsWith(".yaml"));
+  const manifestsExist = deps.fs.existsSync(manifestsDir) &&
+    deps.fs.readdirSync(manifestsDir).some(f => f.endsWith(".yaml"));
 
   const allUserIdsSet = agents.every(a => isRealUserId(slackChannel(a)?.bot_user_id));
   const allChannelsSet = agents.every(a => (slackChannel(a)?.channels ?? []).every(c => isRealChannelId(c)));
 
   const derivedTfvars = path.join(path.dirname(fleetFile), `workspaces/${fleetName}.derived.tfvars`);
-  const tfvarsExist = fs.existsSync(derivedTfvars);
+  const tfvarsExist = deps.fs.existsSync(derivedTfvars);
 
   console.log();
   step(1, TOTAL, "fleet.yaml configured", "done");
@@ -203,7 +266,7 @@ export async function runOnboard(
   step(12, TOTAL, "Verify", "next");
   console.log();
 
-  if (!await confirm("Start onboarding?")) {
+  if (!await deps.prompter.confirm("Start onboarding?")) {
     console.log("Aborted.");
     return;
   }
@@ -219,7 +282,7 @@ export async function runOnboard(
   if (!manifestsExist) {
     header("Step 2 / 12 — Generate Slack App Manifests");
     console.log("  Generates a YAML manifest for each agent that you paste into api.slack.com.");
-    if (await confirm("  Generate manifests now?")) {
+    if (await deps.prompter.confirm("  Generate manifests now?")) {
       await generateManifests({
         fleet: fleetFile,
         out: manifestsDir,
@@ -242,9 +305,9 @@ export async function runOnboard(
 
     for (const agent of agents) {
       console.log(`\x1b[1m  Agent: ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
-      const botToken = await hiddenPrompt(`    Bot Token (xoxb-...): `);
-      const signingSecret = await hiddenPrompt(`    Signing Secret:       `);
-      const appToken = await hiddenPrompt(`    App Token (xapp-...): `);
+      const botToken = await deps.prompter.hiddenPrompt(`    Bot Token (xoxb-...): `);
+      const signingSecret = await deps.prompter.hiddenPrompt(`    Signing Secret:       `);
+      const appToken = await deps.prompter.hiddenPrompt(`    App Token (xapp-...): `);
       slackCreds[agent.id] = { botToken, signingSecret, appToken };
       console.log();
     }
@@ -261,7 +324,7 @@ export async function runOnboard(
       }
       console.log(`\x1b[1m  ${agent.emoji} ${agent.name} — channel IDs\x1b[0m`);
       console.log("    (comma-separated, format: C0123456789)");
-      const channelInput = await prompt("    Channel IDs: ");
+      const channelInput = await deps.prompter.prompt("    Channel IDs: ");
       const channelIds = channelInput.split(",").map(c => c.trim()).filter(Boolean);
       if (channelIds.length > 0) {
         channelUpdates.set(agent.id, channelIds);
@@ -271,7 +334,7 @@ export async function runOnboard(
     if (channelUpdates.size > 0) {
       // Write channel IDs into each agent's slack channel entry via the yaml
       // document API (preserves comments; targets the v2 nested channels list).
-      writeSlackChannelIds(fleetFile, channelUpdates, (p, content) => fs.writeFileSync(p, content, "utf-8"));
+      writeSlackChannelIds(fleetFile, channelUpdates, (p, content) => deps.fs.writeFileSync(p, content, "utf-8"));
       log.ok("  fleet.yaml updated with channel IDs");
     }
   } else {
@@ -283,7 +346,7 @@ export async function runOnboard(
   if (!allUserIdsSet) {
     header("Step 4 / 12 — Discover bot_user_ids");
     console.log("  Calls Slack auth.test using the tokens entered in step 3.");
-    if (await confirm("  Run fleetmind slack discover?")) {
+    if (await deps.prompter.confirm("  Run fleetmind slack discover?")) {
       // Pass tokens via env vars — the discover command resolves
       // <AGENT_UPPER>_BOT_TOKEN before falling back to Secrets Manager.
       const toClean: string[] = [];
@@ -321,7 +384,7 @@ export async function runOnboard(
   let ghOwner: string | null = null;
   let ghOrgOwned = true;
   if (!legacyGithubApps) {
-    const ownerInput = await prompt(`  GitHub owner for all bots (org name, or 'username:<user>' for user-owned): `);
+    const ownerInput = await deps.prompter.prompt(`  GitHub owner for all bots (org name, or 'username:<user>' for user-owned): `);
     const trimmed = ownerInput.trim();
     if (trimmed.startsWith("username:")) {
       ghOwner = trimmed.slice("username:".length).trim();
@@ -338,10 +401,10 @@ export async function runOnboard(
 
   for (const agent of agents) {
     const ssmKey = `/fleetmind/${fleetName}/agents/${agent.id}/github-app/app-id`;
-    const alreadyInSsm = await ssmExists(ssmKey, region);
+    const alreadyInSsm = await ssmExistsViaClient(deps.ssm, ssmKey);
 
     if (alreadyInSsm) {
-      const override = await confirm(`  ${agent.emoji} ${agent.name}: GitHub App already in SSM. Override?`, false);
+      const override = await deps.prompter.confirm(`  ${agent.emoji} ${agent.name}: GitHub App already in SSM. Override?`, false);
       if (!override) {
         log.ok(`  ${agent.name}: using existing GitHub App credentials`);
         continue;
@@ -351,15 +414,15 @@ export async function runOnboard(
     }
 
     if (legacyGithubApps) {
-      const appId = await prompt(`    App ID:          `);
-      const installationId = await prompt(`    Installation ID: `);
-      const pemFile = await prompt(`    PEM file path:   `);
+      const appId = await deps.prompter.prompt(`    App ID:          `);
+      const installationId = await deps.prompter.prompt(`    Installation ID: `);
+      const pemFile = await deps.prompter.prompt(`    PEM file path:   `);
       ghAppCreds[agent.id] = { appId: appId.trim(), installationId: installationId.trim(), pemFile: pemFile.trim() };
       continue;
     }
 
     // Manifest flow path — createGithubApp writes to SSM directly.
-    const doIt = await confirm(`    Set up GitHub App for ${agent.id} now?`, true);
+    const doIt = await deps.prompter.confirm(`    Set up GitHub App for ${agent.id} now?`, true);
     if (!doIt) {
       log.warn(`    ${agent.id}: skipped — run 'fleetmind github-app create' later for this bot`);
       continue;
@@ -382,9 +445,9 @@ export async function runOnboard(
     } catch (err) {
       log.error(`    ${agent.id}: createGithubApp failed — ${String(err)}`);
       log.warn(`    Falling back to manual prompts for this agent.`);
-      const appId = await prompt(`    App ID:          `);
-      const installationId = await prompt(`    Installation ID: `);
-      const pemFile = await prompt(`    PEM file path:   `);
+      const appId = await deps.prompter.prompt(`    App ID:          `);
+      const installationId = await deps.prompter.prompt(`    Installation ID: `);
+      const pemFile = await deps.prompter.prompt(`    PEM file path:   `);
       ghAppCreds[agent.id] = { appId: appId.trim(), installationId: installationId.trim(), pemFile: pemFile.trim() };
     }
   }
@@ -395,13 +458,12 @@ export async function runOnboard(
   console.log("  Bots install the fleetmind CLI from GitHub Packages at bootstrap.");
   console.log(`  SSM path: /fleetmind/shared/github-packages-token  (region: ${region})`);
 
-  if (await ssmExists("/fleetmind/shared/github-packages-token", region)) {
+  if (await ssmExistsViaClient(deps.ssm, "/fleetmind/shared/github-packages-token")) {
     log.ok("  PAT already set in SSM — skipping");
   } else {
-    const pat = await hiddenPrompt("  GitHub Packages PAT (ghp_...): ");
+    const pat = await deps.prompter.hiddenPrompt("  GitHub Packages PAT (ghp_...): ");
     if (pat.trim()) {
-      const ssm = new SSMClient({ region });
-      await ssm.send(new SsmPutCommand({
+      await deps.ssm.send(new SsmPutCommand({
         Name: "/fleetmind/shared/github-packages-token",
         Type: "SecureString",
         Value: pat.trim(),
@@ -414,10 +476,18 @@ export async function runOnboard(
   // ── Step 7: Render ──────────────────────────────────────────────────────────
   header("Step 7 / 12 — Render");
   console.log("  Generates per-agent openclaw.json and workspaces/derived.tfvars from fleet.yaml.");
-  if (await confirm("  Run fleetmind render?")) {
+  if (await deps.prompter.confirm("  Run fleetmind render?")) {
     const reloadedFleet = loadFleet(fleetFile);
-    await provisionFleet(reloadedFleet, false, path.dirname(fleetFile));
-    writeOutputs(reloadedFleet, path.dirname(fleetFile));
+    if (deps.provisionFleet) {
+      await deps.provisionFleet(reloadedFleet, false, path.dirname(fleetFile));
+    } else {
+      await provisionFleet(reloadedFleet, false, path.dirname(fleetFile));
+    }
+    if (deps.writeOutputs) {
+      deps.writeOutputs(reloadedFleet, path.dirname(fleetFile));
+    } else {
+      writeOutputs(reloadedFleet, path.dirname(fleetFile));
+    }
     log.ok("  Rendered successfully");
   }
 
@@ -429,7 +499,7 @@ export async function runOnboard(
   const infraTfvarsPath = (() => {
     // Look for <fleet>.tfvars, default.tfvars, or any .tfvars that isn't derived
     const candidates = [`workspaces/${fleetName}.tfvars`, "workspaces/default.tfvars"];
-    return candidates.find(f => fs.existsSync(path.join(fleetDir, f))) ?? `workspaces/${fleetName}.tfvars`;
+    return candidates.find(f => deps.fs.existsSync(path.join(fleetDir, f))) ?? `workspaces/${fleetName}.tfvars`;
   })();
   const tfvarsFile = `workspaces/${fleetName}.derived.tfvars`;
 
@@ -440,21 +510,24 @@ export async function runOnboard(
   console.log(`    -var-file=${infraTfvarsPath} \\`);
   console.log(`    -var-file=${tfvarsFile}\x1b[0m\n`);
   console.log("  Instances will boot but agents crash-loop until secrets are populated.\n");
-  await confirm("  Terraform apply complete?", false);
+  await deps.prompter.confirm("  Terraform apply complete?", false);
+
+  // suppress unused variable warning — derivedTfvarsPath is for future use
+  void derivedTfvarsPath;
 
   // ── Step 9: Populate Secrets Manager ────────────────────────────────────────
   header("Step 9 / 12 — Populate Secrets Manager");
   console.log("  Writes Slack tokens + model-provider API keys per agent.");
   console.log("  Slack tokens from step 3 are used automatically; provider keys are prompted.\n");
 
-  if (await confirm("  Populate secrets now?")) {
+  if (await deps.prompter.confirm("  Populate secrets now?")) {
     for (const agent of agents) {
       console.log(`\n\x1b[1m  ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
       const slackSecretId = slackSecretName(fleetName, agent.id);
 
       // ── Slack tokens ────────────────────────────────────────────────────────
       const collected = slackCreds[agent.id];
-      const existingSlack = await getSecret(slackSecretId, region);
+      const existingSlack = await getSecretViaClient(deps.secretsManager, slackSecretId);
       const slackIsPlaceholder = !existingSlack || existingSlack.includes("REPLACE_ME");
 
       let writeSlack = false;
@@ -463,7 +536,7 @@ export async function runOnboard(
       if (collected) {
         if (!slackIsPlaceholder) {
           // Already has real values — offer override
-          writeSlack = await confirm("    Slack tokens already in SM. Override with step-3 values?", false);
+          writeSlack = await deps.prompter.confirm("    Slack tokens already in SM. Override with step-3 values?", false);
         } else {
           writeSlack = true;
         }
@@ -476,19 +549,19 @@ export async function runOnboard(
         }
       } else {
         // No tokens from step 3 — prompt now
-        if (!slackIsPlaceholder && !await confirm("    Slack tokens already in SM. Override?", false)) {
+        if (!slackIsPlaceholder && !await deps.prompter.confirm("    Slack tokens already in SM. Override?", false)) {
           log.ok("    Slack tokens unchanged");
         } else {
-          const botToken = await hiddenPrompt("    Bot Token (xoxb-...):      ");
-          const signingSecret = await hiddenPrompt("    Signing Secret:           ");
-          const appToken = await hiddenPrompt("    App Token (xapp-...):     ");
+          const botToken = await deps.prompter.hiddenPrompt("    Bot Token (xoxb-...):      ");
+          const signingSecret = await deps.prompter.hiddenPrompt("    Signing Secret:           ");
+          const appToken = await deps.prompter.hiddenPrompt("    App Token (xapp-...):     ");
           slackPayload = { SLACK_BOT_TOKEN: botToken, SLACK_SIGNING_SECRET: signingSecret, SLACK_APP_TOKEN: appToken };
           writeSlack = true;
         }
       }
 
       if (writeSlack && slackPayload) {
-        await putSecret(slackSecretId, slackPayload, region);
+        await putSecretViaClient(deps.secretsManager, slackSecretId, slackPayload);
         log.ok("    Slack tokens written");
       }
 
@@ -503,16 +576,16 @@ export async function runOnboard(
       for (const provider of providers) {
         const secretId = providerSecretName(fleetName, agent.id, provider);
         const keyVar = providerApiKeyVar(provider);
-        const existingRaw = await getSecret(secretId, region);
+        const existingRaw = await getSecretViaClient(deps.secretsManager, secretId);
         const isPlaceholder = !existingRaw || existingRaw.includes("REPLACE_ME");
         let writeKey = isPlaceholder;
         if (!isPlaceholder) {
-          writeKey = await confirm(`    ${provider} API key already in SM. Override?`, false);
+          writeKey = await deps.prompter.confirm(`    ${provider} API key already in SM. Override?`, false);
         }
         if (writeKey) {
-          const apiKey = await hiddenPrompt(`    ${provider} API key (${keyVar}): `);
+          const apiKey = await deps.prompter.hiddenPrompt(`    ${provider} API key (${keyVar}): `);
           if (apiKey.trim()) {
-            await putSecret(secretId, { [keyVar]: apiKey.trim() }, region);
+            await putSecretViaClient(deps.secretsManager, secretId, { [keyVar]: apiKey.trim() });
             log.ok(`    ${provider} key written (${keyVar})`);
           } else {
             log.warn(`    ${provider} key skipped (empty)`);
@@ -534,13 +607,13 @@ export async function runOnboard(
     if (ghAppManifestHandled.size === 0) {
       log.ok("Step 10: no new GitHub App credentials to store — skipping");
     }
-  } else if (await confirm(`  Store ${agentsWithNewCreds.length} legacy-flow GitHub App credential set${agentsWithNewCreds.length === 1 ? "" : "s"}?`)) {
+  } else if (await deps.prompter.confirm(`  Store ${agentsWithNewCreds.length} legacy-flow GitHub App credential set${agentsWithNewCreds.length === 1 ? "" : "s"}?`)) {
     for (const [agentId, creds] of Object.entries(ghAppCreds)) {
       if (!creds.appId || !creds.installationId || !creds.pemFile) {
         log.warn(`  ${agentId}: incomplete credentials — skipping`);
         continue;
       }
-      if (!fs.existsSync(creds.pemFile)) {
+      if (!deps.fs.existsSync(creds.pemFile)) {
         log.warn(`  ${agentId}: pem file not found at ${creds.pemFile} — skipping`);
         continue;
       }
@@ -557,9 +630,10 @@ export async function runOnboard(
   header("Step 11 / 12 — Push Fleet");
   console.log("  Packages workspace + skills → uploads to S3 → triggers pull-self on each EC2.");
   console.log("  Also upgrades the fleetmind CLI on each instance to the current version.\n");
-  if (await confirm("  Run fleetmind push fleet --restart --upgrade-cli?")) {
+  if (await deps.prompter.confirm("  Run fleetmind push fleet --restart --upgrade-cli?")) {
     const reloadedFleet = loadFleet(fleetFile);
-    await runPushFleet({
+    const pushFn = deps.pushFleet ?? runPushFleet;
+    await pushFn({
       fleet: fleetFile,
       region,
       restart: true,
@@ -567,6 +641,7 @@ export async function runOnboard(
       dryRun: false,
       noApply: false,
     });
+    void reloadedFleet; // loaded for side-effects (validate fleet still valid before push)
   }
 
   // ── Step 12: Verify ──────────────────────────────────────────────────────────

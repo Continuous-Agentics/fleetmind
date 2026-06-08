@@ -6,6 +6,25 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`OnboardDeps` injection seam for `runOnboard`** — Introduces an `OnboardDeps`
+  interface and a `createDefaultDeps(region?)` factory that bundles the wizard's
+  external dependencies (AWS `SecretsManagerClient` + `SSMClient`, file-system
+  ops, terminal prompter, `pushFleet` / `provisionFleet` / `writeOutputs`).
+  `runOnboard` now accepts an optional fourth argument `deps: OnboardDeps =
+  createDefaultDeps(region)`. Production callers that omit `deps` observe
+  byte-identical behavior — this is a non-breaking, additive change.
+  ([#216](https://github.com/Continuous-Agentics/fleetmind/issues/216))
+
+- **`src/test/cli-onboard.test.ts`** — Integration test suite for the onboard
+  wizard. Uses the `OnboardDeps` seam to drive all 12 steps with mocked AWS
+  clients and a queue-based mock prompter. Covers: happy paths (delegation
+  enabled/disabled), step-9 provider-prompt matrix (openai-only, multi-provider,
+  existing-secret override, missing-providers error), idempotency (step-3 skip,
+  step-5 already-in-SSM, partial-step-9 re-prompt), and fallback paths
+  (--legacy-github-apps, empty-owner fallback to legacy mode).
+
 ### ⚠️ Breaking
 
 - **Per-provider Secrets Manager layout; combined `/model` secret removed.**
