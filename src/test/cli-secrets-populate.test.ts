@@ -290,6 +290,7 @@ agents:
   list:
     - id: conductor
       name: Conductor
+      providers: [anthropic]
       channels:
         - provider: slack
           account_id: conductor
@@ -297,6 +298,7 @@ agents:
           app_token: "\${CONDUCTOR_APP_TOKEN}"
     - id: forge
       name: Forge
+      providers: [anthropic]
       channels:
         - provider: slack
           account_id: forge
@@ -331,16 +333,16 @@ agents:
     try {
       const results = await populateSecrets(opts);
 
-      // 6 results: conductor/slack, conductor/model, conductor/hooks,
-      //            forge/slack, forge/model, forge/hooks
+      // 6 results: conductor/slack, conductor/providers/anthropic, conductor/hooks,
+      //            forge/slack, forge/providers/anthropic, forge/hooks
       assert.equal(results.length, 6);
 
       const names = results.map((r) => r.secretName);
       assert.ok(names.includes("test-fleet/agents/conductor/slack"));
-      assert.ok(names.includes("test-fleet/agents/conductor/model"));
+      assert.ok(names.includes("test-fleet/agents/conductor/providers/anthropic"));
       assert.ok(names.includes("test-fleet/agents/conductor/hooks"));
       assert.ok(names.includes("test-fleet/agents/forge/slack"));
-      assert.ok(names.includes("test-fleet/agents/forge/model"));
+      assert.ok(names.includes("test-fleet/agents/forge/providers/anthropic"));
       assert.ok(names.includes("test-fleet/agents/forge/hooks"));
 
       // All dry-run — pushed=false
@@ -373,7 +375,7 @@ agents:
 
       assert.equal(results.length, 3);
       assert.equal(results[0]!.secretName, "test-fleet/agents/conductor/slack");
-      assert.equal(results[1]!.secretName, "test-fleet/agents/conductor/model");
+      assert.equal(results[1]!.secretName, "test-fleet/agents/conductor/providers/anthropic");
       assert.equal(results[2]!.secretName, "test-fleet/agents/conductor/hooks");
     } finally {
       for (const v of vars) {
@@ -398,6 +400,7 @@ agents:
   list:
     - id: conductor
       name: Conductor
+      providers: [anthropic]
       channels:
         - provider: slack
           account_id: conductor
@@ -497,9 +500,9 @@ agents:
       assert.ok(slackRes);
       assert.equal(slackRes.ok, true, "slack should resolve from env file");
 
-      const modelRes = results.find((r) => r.secretType === "model");
+      const modelRes = results.find((r) => r.secretType === "provider:anthropic");
       assert.ok(modelRes);
-      assert.equal(modelRes.ok, true, "model keys should resolve from env file");
+      assert.equal(modelRes.ok, true, "anthropic key should resolve from env file");
     } finally {
       for (const [k, v] of Object.entries(savedVars)) {
         if (v === undefined) delete process.env[k];
@@ -526,6 +529,7 @@ agents:
     - id: pixel
       name: Pixel
       model: openai/gpt-4o
+      providers: [openai, google]
       api_keys:
         google: "\${GOOGLE_API_KEY}"
       channels:
@@ -542,12 +546,11 @@ agents:
     try {
       const results = await populateSecrets({ fleet: openaiFleet, dryRun: true, agent: [] });
       const names = new Set(results.map((r) => r.secretName));
-      // Exactly one model secret, holding both provider keys.
-      assert.ok(names.has("multi-fleet/agents/pixel/model"), "should write /model");
-      assert.ok(!names.has("multi-fleet/agents/pixel/openai"), "no per-provider /openai");
-      assert.ok(!names.has("multi-fleet/agents/pixel/anthropic"), "no /anthropic");
-      const modelRes = results.find((r) => r.secretName === "multi-fleet/agents/pixel/model")!;
-      assert.equal(modelRes.keyCount, 2, "/model holds OPENAI_API_KEY + GOOGLE_API_KEY");
+      // Per-provider fan-out: one secret per (agent, provider).
+      assert.ok(names.has("multi-fleet/agents/pixel/providers/openai"), "should write /providers/openai");
+      assert.ok(names.has("multi-fleet/agents/pixel/providers/google"), "should write /providers/google");
+      assert.ok(!names.has("multi-fleet/agents/pixel/model"), "no combined /model");
+      assert.ok(!names.has("multi-fleet/agents/pixel/providers/anthropic"), "no /providers/anthropic");
       assert.ok(results.every((r) => r.ok), "all should resolve from env");
     } finally {
       for (const v of vars) {
@@ -581,6 +584,7 @@ agents:
   list:
     - id: conductor
       name: Conductor
+      providers: [anthropic]
       channels:
         - provider: slack
           account_id: conductor
@@ -588,6 +592,7 @@ agents:
           app_token: "\${CONDUCTOR_APP_TOKEN}"
     - id: forge
       name: Forge
+      providers: [anthropic]
       channels:
         - provider: slack
           account_id: forge
@@ -758,10 +763,10 @@ agents:
 
     const combined = summaryLines.join("\n");
     assert.ok(combined.includes("conductor/slack"), "summary should mention conductor/slack");
-    assert.ok(combined.includes("conductor/model"), "summary should mention conductor/model");
+    assert.ok(combined.includes("conductor/provider:anthropic"), "summary should mention conductor/provider:anthropic");
     assert.ok(combined.includes("conductor/hooks"), "summary should mention conductor/hooks");
     assert.ok(combined.includes("forge/slack"), "summary should mention forge/slack");
-    assert.ok(combined.includes("forge/model"), "summary should mention forge/model");
+    assert.ok(combined.includes("forge/provider:anthropic"), "summary should mention forge/provider:anthropic");
     assert.ok(combined.includes("forge/hooks"), "summary should mention forge/hooks");
     assert.ok(combined.includes("6 secrets"), "summary should state total secret count");
   });
@@ -971,11 +976,11 @@ describe("materializeHostEnv", () => {
           defaults: { target: "box", model: "anthropic/claude-sonnet-4-6" },
           list: [
             {
-              id: "conductor", name: "C",
+              id: "conductor", name: "C", providers: ["anthropic"],
               channels: [{ provider: "slack", account_id: "conductor", bot_token: "${CONDUCTOR_BOT_TOKEN}", app_token: "${CONDUCTOR_APP_TOKEN}" }],
             },
             {
-              id: "pixel", name: "P", model: "openai/gpt-4o",
+              id: "pixel", name: "P", model: "openai/gpt-4o", providers: ["openai"],
               channels: [{ provider: "slack", account_id: "pixel", bot_token: "${PIXEL_BOT_TOKEN}", app_token: "${PIXEL_APP_TOKEN}" }],
             },
           ],

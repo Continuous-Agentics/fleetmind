@@ -1,8 +1,18 @@
 import { Command } from "commander";
 import chalk from "chalk";
+import fs from "node:fs";
+import path from "node:path";
+import yaml from "js-yaml";
+import { SecretsManagerClient, DescribeSecretCommand } from "@aws-sdk/client-secrets-manager";
 import { saveSecret, listSecretKeys, exportSecrets } from "../../utils/secrets.js";
 import { log } from "../../utils/log.js";
 import { populateSecrets, printResults, loadEnvFile, promptHidden, promptConfirm } from "./populate.js";
+import { providersForAgent } from "../../core/model-provider.js";
+import {
+  slackSecretName,
+  hooksSecretName,
+  providerSecretName,
+} from "../../core/secret-names.js";
 
 export function registerSecrets(program: Command): void {
   const secrets = program
@@ -14,6 +24,7 @@ Subcommands:
   list       List stored secret keys
   export     Export secrets as shell export statements
   populate   Push agent credentials into AWS Secrets Manager
+  check      Verify which expected AWS Secrets Manager secrets exist (read-only)
 
 Run \`fleetmind secrets <subcommand> --help\` for examples.
 `);
@@ -110,6 +121,101 @@ Examples:
           interactive: opts.interactive as boolean,
         });
         printResults(results, opts.dryRun, env);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error(msg);
+        process.exit(1);
+      }
+    });
+
+  secrets
+    .command("check")
+    .description("Verify which expected per-agent Secrets Manager secrets exist (read-only, no mutation)")
+    .option("-f, --fleet <path>", "Path to fleet.yaml", "fleet.yaml")
+    .option("--agent <id>", "Check only this agent (repeatable)", (val: string, prev: string[]) => [...prev, val], [] as string[])
+    .option("--region <region>", "AWS region (default: delegation.aws_region from fleet.yaml or AWS env)")
+    .addHelpText("after", `
+Verifies naming parity between fleet.yaml + the per-provider Secrets Manager
+layout that 'fleetmind secrets populate' targets and the per-agent module of
+terraform-aws-fleetmind (>= v0.5.0) actually provisions. Does not read or
+write secret values — only DescribeSecret per expected name.
+
+Examples:
+  $ fleetmind secrets check
+  $ fleetmind secrets check --agent ranger
+`)
+    .action(async (opts) => {
+      try {
+        const fleetPath = path.resolve(opts.fleet);
+        if (!fs.existsSync(fleetPath)) {
+          throw new Error(`Fleet file not found: ${fleetPath}`);
+        }
+        const raw = yaml.load(fs.readFileSync(fleetPath, "utf-8")) as {
+          fleet?: { name?: string };
+          delegation?: { aws_region?: string };
+          agents?: {
+            defaults?: { model?: string };
+            list?: Array<{ id?: string; model?: string; providers?: string[]; api_keys?: Record<string, string> }>;
+          };
+        };
+        const fleetName = raw?.fleet?.name;
+        if (!fleetName) throw new Error("fleet.name is required in fleet.yaml");
+        const region = opts.region
+          ?? raw?.delegation?.aws_region
+          ?? process.env.AWS_REGION
+          ?? process.env.AWS_DEFAULT_REGION;
+        if (!region) throw new Error("AWS region not specified (use --region or set AWS_REGION).");
+
+        const filter: Set<string> | null = (opts.agent && opts.agent.length > 0)
+          ? new Set(opts.agent as string[])
+          : null;
+        const agents = (raw?.agents?.list ?? []).filter(a => a.id && (!filter || filter.has(a.id)));
+        if (agents.length === 0) {
+          log.warn("No matching agents in fleet.yaml.");
+          return;
+        }
+
+        const client = new SecretsManagerClient({ region });
+        let okCount = 0;
+        let missCount = 0;
+
+        for (const agent of agents) {
+          const agentId = agent.id!;
+          const providers = providersForAgent({
+            agentId,
+            providers: agent.providers,
+            model: agent.model,
+            apiKeys: agent.api_keys,
+            defaultModel: raw.agents?.defaults?.model,
+          });
+          const expected: string[] = [
+            slackSecretName(fleetName, agentId),
+            hooksSecretName(fleetName, agentId),
+            ...providers.map((p) => providerSecretName(fleetName, agentId, p)),
+          ];
+          for (const name of expected) {
+            try {
+              await client.send(new DescribeSecretCommand({ SecretId: name }));
+              okCount++;
+              console.log(`  ${chalk.green("✓")} ${name}`);
+            } catch (err: unknown) {
+              missCount++;
+              const e = err as { name?: string; message?: string };
+              const reason = e?.name === "ResourceNotFoundException" ? "missing" : (e?.name ?? "error");
+              console.log(`  ${chalk.red("✗")} ${name}  ${chalk.dim(`(${reason})`)}`);
+            }
+          }
+        }
+
+        console.log();
+        console.log(`Present: ${okCount}   Missing/Errored: ${missCount}   Region: ${region}`);
+        if (missCount > 0) {
+          console.log();
+          console.log(chalk.yellow("Hint: if /providers/<provider> secrets are missing but /model is present,"));
+          console.log(chalk.yellow("      your terraform-aws-fleetmind module is older than v0.5.0 — bump the"));
+          console.log(chalk.yellow("      ref= in main.tf, terraform apply, then re-run `fleetmind secrets populate`."));
+          process.exitCode = 1;
+        }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         log.error(msg);

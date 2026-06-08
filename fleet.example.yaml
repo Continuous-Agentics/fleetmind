@@ -147,6 +147,13 @@ agents:
       description: "Orchestrator. Routes requests to specialist agents."
       orchestrator: true
       target: conductor-host
+      # REQUIRED: every model provider this agent needs an API key for.
+      # One Secrets Manager secret is created per (agent, provider) at
+      # <fleet>/agents/<id>/providers/<provider>. List every provider the
+      # agent uses (primary model + any fallback_models). Inference from
+      # the `model:` string was removed; this list must be explicit.
+      providers:
+        - anthropic
       # Optional: point specific providers at specific credentials. Omit to use
       # the ${ANTHROPIC_API_KEY} / ${OPENAI_API_KEY} env-var convention.
       # api_keys:
@@ -199,6 +206,8 @@ agents:
       description: "Frontend specialist. React, design systems, UX, browser."
       orchestrator: false
       target: pixel-host
+      providers:
+        - anthropic
       persona:
         soul: |
           You are Pixel, a frontend engineering specialist.
@@ -238,6 +247,8 @@ agents:
       description: "Backend specialist. APIs, databases, infrastructure."
       orchestrator: false
       target: forge-host
+      providers:
+        - anthropic
       persona:
         soul: |
           You are Forge, a backend engineering specialist.

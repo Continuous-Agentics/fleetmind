@@ -27,6 +27,7 @@ import type { Command } from "commander";
 import { loadFleet } from "../../config/loader.js";
 import { slackChannel } from "../../core/channels.js";
 import { providersForAgent, providerApiKeyVar } from "../../core/model-provider.js";
+import { slackSecretName, providerSecretName } from "../../core/secret-names.js";
 import { log } from "../../utils/log.js";
 import { generateManifests, discoverSlackBotUserIds, writeSlackChannelIds } from "./slack.js";
 import { storeGithubApp, createGithubApp } from "./github-app.js";
@@ -449,7 +450,7 @@ export async function runOnboard(
   if (await confirm("  Populate secrets now?")) {
     for (const agent of agents) {
       console.log(`\n\x1b[1m  ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
-      const slackSecretId = `${fleetName}/agents/${agent.id}/slack`;
+      const slackSecretId = slackSecretName(fleetName, agent.id);
 
       // ── Slack tokens ────────────────────────────────────────────────────────
       const collected = slackCreds[agent.id];
@@ -491,34 +492,34 @@ export async function runOnboard(
         log.ok("    Slack tokens written");
       }
 
-      // ── Model-provider API keys — one combined /model secret holding every
-      //    <PROVIDER>_API_KEY the agent uses (any provider mix, one secret). ──────
+      // ── Model-provider API keys — one secret per (agent, provider). ────────────
       const providers = providersForAgent({
+        agentId: agent.id,
+        providers: (agent as { providers?: string[] }).providers,
         model: agent.model,
         apiKeys: agent.api_keys,
         defaultModel: fleet.agents.defaults.model,
       });
-      const modelSecretId = `${fleetName}/agents/${agent.id}/model`;
-      const existingRaw = await getSecret(modelSecretId, region);
-      const isPlaceholder = !existingRaw || existingRaw.includes("REPLACE_ME");
-
-      let writeKeys = isPlaceholder;
-      if (!isPlaceholder) {
-        writeKeys = await confirm(`    Model keys already in SM. Override?`, false);
-      }
-      if (writeKeys) {
-        const modelKeys: Record<string, string> = {};
-        for (const provider of providers) {
-          const keyVar = providerApiKeyVar(provider);                     // e.g. ANTHROPIC_API_KEY / OPENAI_API_KEY
+      for (const provider of providers) {
+        const secretId = providerSecretName(fleetName, agent.id, provider);
+        const keyVar = providerApiKeyVar(provider);
+        const existingRaw = await getSecret(secretId, region);
+        const isPlaceholder = !existingRaw || existingRaw.includes("REPLACE_ME");
+        let writeKey = isPlaceholder;
+        if (!isPlaceholder) {
+          writeKey = await confirm(`    ${provider} API key already in SM. Override?`, false);
+        }
+        if (writeKey) {
           const apiKey = await hiddenPrompt(`    ${provider} API key (${keyVar}): `);
-          if (apiKey.trim()) modelKeys[keyVar] = apiKey.trim();
+          if (apiKey.trim()) {
+            await putSecret(secretId, { [keyVar]: apiKey.trim() }, region);
+            log.ok(`    ${provider} key written (${keyVar})`);
+          } else {
+            log.warn(`    ${provider} key skipped (empty)`);
+          }
+        } else {
+          log.ok(`    ${provider} key unchanged`);
         }
-        if (Object.keys(modelKeys).length > 0) {
-          await putSecret(modelSecretId, modelKeys, region);
-          log.ok(`    model keys written (${Object.keys(modelKeys).join(", ")})`);
-        }
-      } else {
-        log.ok(`    model keys unchanged`);
       }
     }
   }

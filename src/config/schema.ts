@@ -227,6 +227,10 @@ export const AgentSchema = z.object({
   channels: z.array(ChannelSchema).default([]),
   /** Optional per-agent API keys, keyed by model provider (anthropic, openai, …). */
   api_keys: ApiKeysSchema.optional(),
+  /** REQUIRED — lowercase model-provider tokens this agent needs API keys for
+   *  (e.g. ["anthropic"] or ["anthropic", "openai"]). Drives per-provider
+   *  Secrets Manager naming. Explicit declaration only; no inference. */
+  providers: z.array(z.string()).optional(),
   skills: z.array(SkillRefSchema).default([]),
   plugins: z.array(z.string()).optional(),
   agent_to_agent: AgentToAgentSchema.default({}),
