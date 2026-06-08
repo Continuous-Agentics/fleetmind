@@ -136,7 +136,6 @@ function isRealChannelId(id: string | undefined): boolean {
 /** File-system surface required by the onboard wizard. */
 export interface OnboardFsDeps {
   existsSync(path: fs.PathLike): boolean;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   writeFileSync(path: fs.PathOrFileDescriptor, data: string, encoding: BufferEncoding): void;
   readdirSync(path: fs.PathLike): string[];
 }
@@ -478,16 +477,10 @@ export async function runOnboard(
   console.log("  Generates per-agent openclaw.json and workspaces/derived.tfvars from fleet.yaml.");
   if (await deps.prompter.confirm("  Run fleetmind render?")) {
     const reloadedFleet = loadFleet(fleetFile);
-    if (deps.provisionFleet) {
-      await deps.provisionFleet(reloadedFleet, false, path.dirname(fleetFile));
-    } else {
-      await provisionFleet(reloadedFleet, false, path.dirname(fleetFile));
-    }
-    if (deps.writeOutputs) {
-      deps.writeOutputs(reloadedFleet, path.dirname(fleetFile));
-    } else {
-      writeOutputs(reloadedFleet, path.dirname(fleetFile));
-    }
+    const provisionFn = deps.provisionFleet ?? provisionFleet;
+    const writeFn = deps.writeOutputs ?? writeOutputs;
+    await provisionFn(reloadedFleet, false, path.dirname(fleetFile));
+    writeFn(reloadedFleet, path.dirname(fleetFile));
     log.ok("  Rendered successfully");
   }
 
@@ -495,7 +488,6 @@ export async function runOnboard(
   header("Step 8 / 12 — Terraform");
   // Detect tfvars filenames from what render actually produced
   const fleetDir = path.dirname(fleetFile);
-  const derivedTfvarsPath = path.join(fleetDir, `workspaces/${fleetName}.derived.tfvars`);
   const infraTfvarsPath = (() => {
     // Look for <fleet>.tfvars, default.tfvars, or any .tfvars that isn't derived
     const candidates = [`workspaces/${fleetName}.tfvars`, "workspaces/default.tfvars"];
@@ -511,9 +503,6 @@ export async function runOnboard(
   console.log(`    -var-file=${tfvarsFile}\x1b[0m\n`);
   console.log("  Instances will boot but agents crash-loop until secrets are populated.\n");
   await deps.prompter.confirm("  Terraform apply complete?", false);
-
-  // suppress unused variable warning — derivedTfvarsPath is for future use
-  void derivedTfvarsPath;
 
   // ── Step 9: Populate Secrets Manager ────────────────────────────────────────
   header("Step 9 / 12 — Populate Secrets Manager");
@@ -631,7 +620,6 @@ export async function runOnboard(
   console.log("  Packages workspace + skills → uploads to S3 → triggers pull-self on each EC2.");
   console.log("  Also upgrades the fleetmind CLI on each instance to the current version.\n");
   if (await deps.prompter.confirm("  Run fleetmind push fleet --restart --upgrade-cli?")) {
-    const reloadedFleet = loadFleet(fleetFile);
     const pushFn = deps.pushFleet ?? runPushFleet;
     await pushFn({
       fleet: fleetFile,
@@ -641,7 +629,6 @@ export async function runOnboard(
       dryRun: false,
       noApply: false,
     });
-    void reloadedFleet; // loaded for side-effects (validate fleet still valid before push)
   }
 
   // ── Step 12: Verify ──────────────────────────────────────────────────────────

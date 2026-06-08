@@ -30,6 +30,7 @@ import {
 } from "@aws-sdk/client-ssm";
 
 import { runOnboard, type OnboardDeps } from "../cli/commands/onboard.js";
+import { loadFleet } from "../config/loader.js";
 import type { PushFleetResult } from "../cli/commands/push-fleet.js";
 
 // ── Mock builders ─────────────────────────────────────────────────────────────
@@ -555,6 +556,28 @@ describe("step 9 — provider-prompt matrix", () => {
   }
 
   test("agent with providers: [openai] — OPENAI_API_KEY prompted, ANTHROPIC not", async () => {
+    // Assert that the test agent inherits `model: anthropic/claude-sonnet-4-6` from fleet defaults
+    // while declaring `providers: [openai]` — this is the exact model+providers mismatch that
+    // motivated issue #210. Making it explicit here ensures future changes don't silently drop it.
+    {
+      const yaml = makeFleetYaml({ fleetName: "s9-fleet", agents: [{ id: "oai-agent", providers: ["openai"] }] });
+      const setup = makeTempFleet(yaml);
+      try {
+        const fleet = loadFleet(setup.fleetFile);
+        const fleetDefault = fleet.agents.defaults.model;
+        const agent = fleet.getAgent("oai-agent");
+        assert.ok(agent, "oai-agent should exist in fleet");
+        assert.equal(
+          agent.model ?? fleetDefault,
+          "anthropic/claude-sonnet-4-6",
+          "test agent should inherit anthropic model from fleet defaults — this is the model+providers mismatch that motivated #210",
+        );
+        assert.deepEqual(agent.providers, ["openai"], "oai-agent should declare providers: [openai]");
+      } finally {
+        fs.rmSync(setup.tmpDir, { recursive: true, force: true });
+      }
+    }
+
     // Slack secret is missing (null), so 3 hiddenPrompts for slack first, then 1 for openai
     const { mockPrompter, smMock } = await runStep9Test({
       agents: [{ id: "oai-agent", providers: ["openai"] }],
