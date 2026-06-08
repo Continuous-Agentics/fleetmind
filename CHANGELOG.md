@@ -6,6 +6,8 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.8.0-beta.10] — 2026-06-08
+
 ### Added
 
 - **`OnboardDeps` injection seam for `runOnboard`** — Introduces an `OnboardDeps`
@@ -24,6 +26,18 @@ All notable changes to fleetmind are documented in this file. Format follows
   existing-secret override, missing-providers error), idempotency (step-3 skip,
   step-5 already-in-SSM, partial-step-9 re-prompt), and fallback paths
   (--legacy-github-apps, empty-owner fallback to legacy mode).
+- **`fleetmind secrets check`** — read-only counterpart to `secrets populate`.
+  `DescribeSecret`s every name `populate` would target and prints a
+  present/absent report per `(agent, provider)` so naming drift between
+  the CLI and the applied Terraform module is visible without mutating
+  anything.
+- **`src/core/secret-names.ts`** — single TS source of truth for Secrets
+  Manager naming (`slackSecretName`, `hooksSecretName`,
+  `providerSecretName`, `agentSecretPrefix`). The matching Terraform helper
+  lives in `terraform-aws-fleetmind` `modules/agent/main.tf` `locals`; both
+  sides include a parity comment pointing at the other.
+- **Strict-providers errors.** Missing/empty `providers:` raises a clear
+  message naming the agent and pointing at `fleet.yaml`.
 
 ### ⚠️ Breaking
 
@@ -47,8 +61,7 @@ All notable changes to fleetmind are documented in this file. Format follows
           - anthropic
   ```
   Multi-provider agents list every provider they use
-  (`providers: [anthropic, openai]`). Missing or empty `providers:` raises
-  a clear error pointing at the agent id.
+  (`providers: [anthropic, openai]`). Missing or empty `providers:` raises a clear error pointing at the agent id.
 - **Migration from a fleet on the old `/model` shape:**
   1. Upgrade `terraform-aws-fleetmind` to `v0.5.0`, bump your
      `fleetmind-template` ref, and add `providers:` to every agent in
@@ -64,21 +77,6 @@ All notable changes to fleetmind are documented in this file. Format follows
   4. `fleetmind secrets populate` (or `--interactive`) to push API keys.
   5. `fleetmind secrets check` to confirm every expected secret exists.
 
-### Added
-
-- **`fleetmind secrets check`** — read-only counterpart to `secrets populate`.
-  `DescribeSecret`s every name `populate` would target and prints a
-  present/absent report per `(agent, provider)` so naming drift between
-  the CLI and the applied Terraform module is visible without mutating
-  anything.
-- **`src/core/secret-names.ts`** — single TS source of truth for Secrets
-  Manager naming (`slackSecretName`, `hooksSecretName`,
-  `providerSecretName`, `agentSecretPrefix`). The matching Terraform helper
-  lives in `terraform-aws-fleetmind` `modules/agent/main.tf` `locals`; both
-  sides include a parity comment pointing at the other.
-- **Strict-providers errors.** Missing/empty `providers:` raises a clear
-  message naming the agent and pointing at `fleet.yaml`.
-
 ### Changed
 
 - **`fleetmind onboard`** uses the same per-provider fan-out as
@@ -86,6 +84,31 @@ All notable changes to fleetmind are documented in this file. Format follows
 - **`ResourceNotFoundException` reporting** in `secrets populate` now hints
   at the module-version mismatch when a `providers/<provider>` secret is
   missing ("terraform-aws-fleetmind must be at >= v0.5.0 and applied").
+
+### Fixed
+
+- **`fleetmind self-upgrade` and skill-resolver hangs.** Added explicit
+  timeouts to `clawhub -V` (10s) and `clawhub install ...` (120s)
+  `execSync` calls in `src/runtime/resolver.ts`. A misbehaving or absent
+  `clawhub` binary no longer freezes the resolver indefinitely; it now
+  fails fast with a clear error message.
+  ([#172](https://github.com/Continuous-Agentics/fleetmind/pull/172))
+- **DI seam closure for GitHub App helpers** —
+  `createGithubApp` and `storeGithubApp` now accept an injected `ssmClient`
+  parameter. Both helpers previously instantiated their own `SSMClient`
+  inline, which bypassed the `OnboardDeps` seam and could trigger real
+  AWS calls in tests using mocked deps. Production callers continue to
+  omit the parameter (default behavior unchanged).
+  ([#218](https://github.com/Continuous-Agentics/fleetmind/pull/218))
+
+### Internal
+
+- **Test scaffolding hardening.** `cli-onboard.test.ts` `tmpDir` cleanup
+  guards against undefined assignment (no longer masks real test failures
+  when setup throws). Dead-variable cleanup in `onboard.ts`
+  (`derivedTfvarsPath`, Step-11 `reloadedFleet`). Consistent `??` fallback
+  pattern for optional deps.
+  ([#218](https://github.com/Continuous-Agentics/fleetmind/pull/218))
 
 ## [0.8.0-beta.9] — 2026-06-03
 
