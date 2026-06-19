@@ -1,5 +1,5 @@
 # FleetMind Test Deploy Runbook
-**Branch:** `test/gg-sandbox` · **Target account:** `251714435910` (gg-sandbox) · **Region:** `us-west-2`  
+**Branch:** `test/gg-sandbox` · **Target account:** `624905204775` (dogfood) · **Region:** `us-west-2`  
 **Fleet:** 1 PM (Conductor 🎼) + 1 worker (Forge ⚙️)  
 **Last updated:** 2026-05-12
 
@@ -41,7 +41,7 @@ This runbook covers the full end-to-end deployment: Terraform infra → secrets 
 
 ## What We Learned From the First Deploy (PR #47)
 
-Five bootstrap/renderer bugs surfaced during the first live deploy attempt. All fixed in one PR (`fix/gg-sandbox-deploy-followups`, PR #47 against `test/gg-sandbox`):
+Five bootstrap/renderer bugs surfaced during the first live deploy attempt. All fixed in one PR (`fix/dogfood-deploy-followups`, PR #47 against `test/gg-sandbox`):
 
 1. **`EnvironmentFile=` needs `-` prefix** — without it, systemd fails at unit-load time if `/run/openclaw-<agent>.env` doesn't yet exist (fresh tmpfs). Added `-` so a missing file is silently tolerated until `ExecStartPre` creates it.
 2. **`ExecStartPre=` needs `+` prefix** — the unit runs as `ec2-user`, but `/run` is `root:root 755`. `fetch-agent-secrets` uses `install -m 600` which requires root. Added `+` so `ExecStartPre` runs as root regardless of `User=`.
@@ -55,7 +55,7 @@ Five bootstrap/renderer bugs surfaced during the first live deploy attempt. All 
 
 ### Operator machine
 - `terraform` ≥ 1.6 (or use `tfenv` — `.terraform-version` is committed)
-- `aws` CLI v2 configured with access to gg-sandbox (`251714435910`)
+- `aws` CLI v2 configured with access to dogfood (`624905204775`)
 - `node` ≥ 20, `npm` ≥ 10
 - `fleetmind` CLI: `npm install -g @continuous-agentics/fleetmind` (see npm auth setup below)
 - SSH key with access to EC2 (if using SCP transport — see Step 5)
@@ -91,7 +91,7 @@ fleetmind slack manifests --out docs/test/gg-sandbox/slack-manifests/
 ```
 This writes one `<agent_id>.yaml` per agent (e.g. `conductor.yaml`, `forge.yaml`). Upload each YAML into the Slack app-create wizard (`https://api.slack.com/apps → Create New App → From a manifest`).
 
-The generated manifests include the full scope + event set verified to work with the live gg-sandbox bots. Committed reference copies live in `docs/test/gg-sandbox/slack-manifests/` and can be re-generated at any time from `fleet.yaml`.
+The generated manifests include the full scope + event set verified to work with the live dogfood bots. Committed reference copies live in `docs/test/gg-sandbox/slack-manifests/` and can be re-generated at any time from `fleet.yaml`.
 
 After creating each app, collect and export to your shell:
 ```bash
@@ -124,7 +124,7 @@ npm run build          # confirm: 0 errors
 npm test               # confirm: 199 pass
 ```
 
-The working `fleet.yaml` for this deploy is in the repo root. Review it before proceeding — it references the gg-sandbox account, us-west-2 region, and the gg-sandbox Slack workspace.
+The working `fleet.yaml` for this deploy is in the repo root. Review it before proceeding — it references the dogfood account, us-west-2 region, and the dogfood Slack workspace.
 
 ---
 
@@ -141,22 +141,22 @@ terraform init
 
 ### 2b. Review the tfvars
 
-The file `infra/terraform/terraform-extras.tfvars` contains the gg-sandbox-specific overrides (already committed in the repo):
+The file `infra/terraform/terraform-extras.tfvars` contains the dogfood-specific overrides (already committed in the repo):
 
 ```hcl
 aws_region                = "us-west-2"
-fleet_name                = "gg-sandbox"
+fleet_name                = "dogfood"
 agent_names               = ["conductor", "forge"]
 enable_interface_endpoints = true    # SSM + SecretsManager + ec2messages endpoints
 delegation_enabled         = true
 wake_target_session_key    = "REPLACE_ME"   # see note below
 ```
 
-**Set `wake_target_session_key` before applying.** This is the SSM session parameter key that EventBridge uses to wake Conductor when Forge ships a delegated task. Set it to a meaningful string (e.g., `"gg-sandbox-conductor-wake"`). There is no Terraform validation that catches an empty string when `delegation_enabled = true` — a blank value silently breaks the wake pipeline.
+**Set `wake_target_session_key` before applying.** This is the SSM session parameter key that EventBridge uses to wake Conductor when Forge ships a delegated task. Set it to a meaningful string (e.g., `"dogfood-conductor-wake"`). There is no Terraform validation that catches an empty string when `delegation_enabled = true` — a blank value silently breaks the wake pipeline.
 
 Edit `terraform-extras.tfvars`:
 ```hcl
-wake_target_session_key = "gg-sandbox-conductor-wake"
+wake_target_session_key = "dogfood-conductor-wake"
 ```
 
 ### 2c. Plan & Apply — root module
@@ -172,7 +172,7 @@ Resources created (~25 total):
 - 2 EC2 instances (conductor + forge) in private subnets — **no public IPs**
 - Per-agent IAM roles + instance profiles
 - Per-agent Secrets Manager placeholders (6 total: 2 slack + 2 anthropic... wait — 1 slack + 1 anthropic per agent = 4 total)
-- DynamoDB context-store table (`gg-sandbox-context-store`)
+- DynamoDB context-store table (`dogfood-context-store`)
 - Module: task-ledger DynamoDB table, S3 narratives bucket, EventBridge Pipe, SQS DLQ, CloudWatch alarm
 
 **Capture outputs** — you'll need them in later steps:
@@ -202,7 +202,7 @@ All 13 stages should complete. Specifically look for:
 ```
 [bootstrap] STAGE 2c: amazon-ssm-agent install/start at ...
 [bootstrap] amazon-ssm-agent: active
-[bootstrap] Done. Agent conductor provisioned (fleet: gg-sandbox) — gateway will start on next boot or manual start
+[bootstrap] Done. Agent conductor provisioned (fleet: dogfood) — gateway will start on next boot or manual start
 ```
 
 If you see `amazon-ssm-agent: inactive` in STAGE 13 output: the instance is running the bootstrap but SSM agent failed to start (likely a transient dnf issue). SSH in via the bastion or wait for the next boot cycle.
@@ -213,7 +213,7 @@ After bootstrap completes (allow 3–5 min from instance launch), both instances
 
 ```bash
 aws ssm describe-instance-information --region us-west-2 \
-  --filters Key=tag:fleet_name,Values=gg-sandbox \
+  --filters Key=tag:fleet_name,Values=dogfood \
   --query 'InstanceInformationList[*].{ID:InstanceId,Ping:PingStatus,Platform:PlatformName}' \
   --output table
 ```
@@ -241,10 +241,10 @@ cd ../modules/task-ledger
 terraform init
 
 terraform apply \
-  -var="fleet_name=gg-sandbox" \
+  -var="fleet_name=dogfood" \
   -var="aws_region=us-west-2" \
-  -var="table_name=gg-sandbox-tasks" \
-  -var="s3_bucket=gg-sandbox-narratives-251714435910" \
+  -var="table_name=dogfood-tasks" \
+  -var="s3_bucket=dogfood-narratives-624905204775" \
   -var="pm_role_names=[\"$CONDUCTOR_ROLE\"]" \
   -var="worker_role_names=[\"$FORGE_ROLE\"]"
 
@@ -270,7 +270,7 @@ cd /path/to/fleetmind   # repo root
 fleetmind secrets populate --interactive --region us-west-2
 ```
 
-The `populate` command reads `fleet.yaml`, identifies the `${VAR}` placeholders in each agent's `slack.bot_token` and `app_token` fields, resolves them from your environment, and pushes them to Secrets Manager using the standard key names (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`). It also fans out one secret per `(agent, provider)` pair under `gg-sandbox/agents/<id>/providers/<provider>` for every provider listed under that agent's `providers:` field in `fleet.yaml` — so `ANTHROPIC_API_KEY` for both agents in this fleet is staged automatically.
+The `populate` command reads `fleet.yaml`, identifies the `${VAR}` placeholders in each agent's `slack.bot_token` and `app_token` fields, resolves them from your environment, and pushes them to Secrets Manager using the standard key names (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`). It also fans out one secret per `(agent, provider)` pair under `dogfood/agents/<id>/providers/<provider>` for every provider listed under that agent's `providers:` field in `fleet.yaml` — so `ANTHROPIC_API_KEY` for both agents in this fleet is staged automatically.
 
 > **Note:** `signing_secret` / `SLACK_SIGNING_SECRET` is **not** required for socket-mode bots and is not prompted for or stored.
 
@@ -283,12 +283,12 @@ If you would rather push the Anthropic key manually:
 ```bash
 aws secretsmanager put-secret-value \
   --region us-west-2 \
-  --secret-id "gg-sandbox/agents/conductor/providers/anthropic" \
+  --secret-id "dogfood/agents/conductor/providers/anthropic" \
   --secret-string "{\"ANTHROPIC_API_KEY\":\"$ANTHROPIC_API_KEY\"}"
 
 aws secretsmanager put-secret-value \
   --region us-west-2 \
-  --secret-id "gg-sandbox/agents/forge/providers/anthropic" \
+  --secret-id "dogfood/agents/forge/providers/anthropic" \
   --secret-string "{\"ANTHROPIC_API_KEY\":\"$ANTHROPIC_API_KEY\"}"
 ```
 
@@ -298,7 +298,7 @@ aws secretsmanager put-secret-value \
 # Conductor Slack tokens
 aws secretsmanager put-secret-value \
   --region us-west-2 \
-  --secret-id "gg-sandbox/agents/conductor/slack" \
+  --secret-id "dogfood/agents/conductor/slack" \
   --secret-string "{
     \"SLACK_BOT_TOKEN\":\"$CONDUCTOR_BOT_TOKEN\",
     \"SLACK_APP_TOKEN\":\"$CONDUCTOR_APP_TOKEN\"
@@ -307,7 +307,7 @@ aws secretsmanager put-secret-value \
 # Forge Slack tokens
 aws secretsmanager put-secret-value \
   --region us-west-2 \
-  --secret-id "gg-sandbox/agents/forge/slack" \
+  --secret-id "dogfood/agents/forge/slack" \
   --secret-string "{
     \"SLACK_BOT_TOKEN\":\"$FORGE_BOT_TOKEN\",
     \"SLACK_APP_TOKEN\":\"$FORGE_APP_TOKEN\"
@@ -338,7 +338,7 @@ For each agent that needs GitHub access:
 **CLI (preferred):**
 ```bash
 fleetmind github-app store \
-  --fleet gg-sandbox \
+  --fleet dogfood \
   --agent <agent_id> \
   --app-id <app-id> \
   --installation-id <installation-id> \
@@ -348,14 +348,14 @@ fleetmind github-app store \
 **Bash fallback:**
 ```bash
 infra/scripts/store-bot-github-app.sh \
-  --fleet gg-sandbox \
+  --fleet dogfood \
   --agent <agent_id> \
   --app-id <app-id> \
   --installation-id <installation-id> \
   --pem-file /path/to/private-key.pem
 ```
 
-The agent's IAM role (provisioned by Terraform) already has SSM read permissions scoped to its own `/fleetmind/gg-sandbox/agents/<agent_id>/github-app/*` path. No IAM changes are needed.
+The agent's IAM role (provisioned by Terraform) already has SSM read permissions scoped to its own `/fleetmind/dogfood/agents/<agent_id>/github-app/*` path. No IAM changes are needed.
 
 To verify after storing, SSH into the agent EC2 and run `gh-app-token` — it should print a short-lived token.
 
@@ -486,7 +486,7 @@ The intent: `openclaw onboard` is an interactive setup command. It prompts for S
 
 The rendered `openclaw.json` has no `gateway.auth` section. `openclaw onboard` would normally set either a token (`--gateway-auth token`) or password (`--gateway-auth password`).
 
-This is acceptable for the gg-sandbox test deploy because:
+This is acceptable for the dogfood test deploy because:
 - The gateway binds to `loopback` (`127.0.0.1`) only — not reachable from the network
 - Agents run in private subnets with no public IPs
 - The only external access path is SSM Session Manager (IAM-authenticated)
@@ -516,10 +516,10 @@ replaces the manual tar / S3 copy / SSM flow.
 **Prerequisites:**
 - Create the deploy-staging S3 bucket (one-time):
   ```bash
-  aws s3 mb s3://gg-sandbox-ledger --region us-west-2
+  aws s3 mb s3://dogfood-ledger --region us-west-2
   ```
 - Your AWS identity needs `ssm:SendCommand`, `ssm:DescribeInstanceInformation`, and
-  `s3:PutObject` on `gg-sandbox-ledger/deploy-staging/*`. See `docs/OPERATING.md` for
+  `s3:PutObject` on `dogfood-ledger/deploy-staging/*`. See `docs/OPERATING.md` for
   the full IAM policy.
 
 **Dry-run first (always recommended):**
@@ -540,7 +540,7 @@ fleetmind push fleet
 This:
 1. Renders workspaces + per-agent `openclaw.json` (same as `fleetmind deploy`)
 2. Packages each agent's workspace into a signed tarball
-3. Uploads tarball + manifest to `s3://gg-sandbox-ledger/deploy-staging/`
+3. Uploads tarball + manifest to `s3://dogfood-ledger/deploy-staging/`
 4. Sends an SSM command to each agent to run `fleetmind pull-self --apply`
 5. Prints the SSM command ID per agent for follow-up
 
@@ -681,7 +681,7 @@ openclaw-conductor[...]: Agent conductor ready
 ```
 
 If the service fails:
-1. Check secrets are populated: `aws secretsmanager get-secret-value --secret-id gg-sandbox/agents/conductor/slack --region us-west-2`
+1. Check secrets are populated: `aws secretsmanager get-secret-value --secret-id dogfood/agents/conductor/slack --region us-west-2`
 2. Check the env file was written: `cat /run/openclaw-conductor.env` (accessible via SSM)
 3. Check `ExecStartPre` logs in journal: `journalctl -u openclaw-conductor -n 100` — look for `[secrets]` lines from `fetch-agent-secrets`
 4. Confirm `openclaw.json` is at `/opt/openclaw/workspace/conductor/.openclaw/openclaw.json` (the gateway defaults to reading from `$WORKSPACE/.openclaw/openclaw.json`)
@@ -727,7 +727,7 @@ Expected: Conductor lists Forge (this tests the `agentToAgent.allow` config and 
    ```bash
    aws dynamodb scan \
      --region us-west-2 \
-     --table-name gg-sandbox-tasks \
+     --table-name dogfood-tasks \
      --query 'Items[*].{id:task_id.S, status:status.S, worker:worker_id.S}' \
      --output table
    ```
@@ -745,7 +745,7 @@ The DynamoDB context store is accessible to all agents. Verify the table exists 
 ```bash
 aws dynamodb describe-table \
   --region us-west-2 \
-  --table-name gg-sandbox-context-store \
+  --table-name dogfood-context-store \
   --query 'Table.{Status:TableStatus, Items:ItemCount}' \
   --output table
 ```
@@ -770,10 +770,10 @@ When testing is done:
 # From infra/terraform/modules/task-ledger:
 cd infra/terraform/modules/task-ledger
 terraform destroy \
-  -var="fleet_name=gg-sandbox" \
+  -var="fleet_name=dogfood" \
   -var="aws_region=us-west-2" \
-  -var="table_name=gg-sandbox-tasks" \
-  -var="s3_bucket=gg-sandbox-narratives-251714435910" \
+  -var="table_name=dogfood-tasks" \
+  -var="s3_bucket=dogfood-narratives-624905204775" \
   -var="pm_role_names=[\"$CONDUCTOR_ROLE\"]" \
   -var="worker_role_names=[\"$FORGE_ROLE\"]"
 
@@ -784,7 +784,7 @@ terraform destroy -var-file=terraform-extras.tfvars
 
 > The task-ledger DynamoDB table has `prevent_destroy = true` — intentional (task data is irreplaceable in production). For a test teardown, remove the lifecycle block from `modules/task-ledger/main.tf` before running destroy, or delete the table manually first:
 > ```bash
-> aws dynamodb delete-table --region us-west-2 --table-name gg-sandbox-tasks
+> aws dynamodb delete-table --region us-west-2 --table-name dogfood-tasks
 > ```
 
 ---
@@ -793,7 +793,7 @@ terraform destroy -var-file=terraform-extras.tfvars
 
 ### A1. DynamoDB context-store table name doubles fleet_name
 **File:** `infra/terraform/dynamodb.tf`  
-With `fleet_name = "fleetmind"` (the default), the table is named `fleetmind-fleetmind`. The gg-sandbox fleet uses `fleet_name = "gg-sandbox"` which produces `gg-sandbox-gg-sandbox`. Not a functional problem but looks wrong.  
+With `fleet_name = "fleetmind"` (the default), the table is named `fleetmind-fleetmind`. The dogfood fleet uses `fleet_name = "dogfood"` which produces `dogfood-dogfood`. Not a functional problem but looks wrong.  
 **Fix:** `name = "${var.fleet_name}-context-store"`
 
 ### A2. Tag schema inconsistency
@@ -857,7 +857,7 @@ cat /run/openclaw-conductor.env
 cat /opt/openclaw/workspace/conductor/.openclaw/openclaw.json | jq .
 
 # Re-fetch secrets manually (runs ExecStartPre manually)
-/usr/local/bin/fetch-agent-secrets gg-sandbox conductor /run/openclaw-conductor.env us-west-2
+/usr/local/bin/fetch-agent-secrets dogfood conductor /run/openclaw-conductor.env us-west-2
 
 # Check SSM registration
 aws ssm describe-instance-information --region us-west-2
@@ -871,6 +871,6 @@ terraform -chdir=infra/terraform output -json
 # Verify Secrets Manager value
 aws secretsmanager get-secret-value \
   --region us-west-2 \
-  --secret-id gg-sandbox/agents/conductor/slack \
+  --secret-id dogfood/agents/conductor/slack \
   --query SecretString --output text | jq .
 ```

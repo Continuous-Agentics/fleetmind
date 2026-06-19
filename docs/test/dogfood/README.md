@@ -1,7 +1,7 @@
-# gg-sandbox test fleet
+# dogfood test fleet
 
-First real test of fleetmind end-to-end, deployed in the Carpe `gg-sandbox` AWS
-account (`251714435910`).
+First real test of fleetmind end-to-end, deployed in the Carpe `dogfood` AWS
+account (`624905204775`).
 
 ## Fleet shape
 
@@ -30,8 +30,8 @@ Both run in the same Slack channel (set in `terraform-extras.tfvars`).
 ## Deploy steps
 
 ```bash
-# Set AWS profile for gg-sandbox
-export AWS_PROFILE=gg-sandbox
+# Set AWS profile for dogfood
+export AWS_PROFILE=dogfood
 
 # Install fleetmind deps
 npm install
