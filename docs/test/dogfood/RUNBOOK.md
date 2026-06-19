@@ -461,16 +461,16 @@ Per-agent slice contents:
 
 > **tl;dr: `openclaw onboard` is never run in a FleetMind deploy. FleetMind replaces it entirely. Skip to Step 5d.**
 
-In a normal (non-FleetMind) OpenClaw deploy — the pattern Carpe uses for their bots — the operator runs `openclaw onboard` manually on each EC2 instance after provisioning. Carpe's `userdata.sh.tftpl` explicitly says:
+In a normal (non-FleetMind) OpenClaw deploy — the standard manual-onboard pattern — the operator runs `openclaw onboard` manually on each EC2 instance after provisioning. A typical `userdata.sh.tftpl` in that pattern explicitly says:
 
 ```
 # Don't include anything related to configuring openclaw in the userdata.
 # Onboard manually.
 ```
 
-The intent: `openclaw onboard` is an interactive setup command. It prompts for Slack tokens, the LLM API key, gateway port and auth, installs the systemd daemon, and bootstraps workspace files. The Carpe pattern keeps the bootstrap lean and defers all OpenClaw configuration to a human-driven post-provision step.
+The intent: `openclaw onboard` is an interactive setup command. It prompts for Slack tokens, the LLM API key, gateway port and auth, installs the systemd daemon, and bootstraps workspace files. The manual-onboard pattern keeps the bootstrap lean and defers all OpenClaw configuration to a human-driven post-provision step.
 
-**FleetMind's approach is a deliberate divergence from the Carpe pattern.** It replaces every piece of what `openclaw onboard` does with automated, declarative equivalents:
+**FleetMind's approach is a deliberate divergence from the manual-onboard pattern.** It replaces every piece of what `openclaw onboard` does with automated, declarative equivalents:
 
 | What `openclaw onboard` does | FleetMind replacement | Status |
 |---|---|---|
@@ -819,9 +819,9 @@ validation {
 
 ---
 
-## Appendix B: Carpe Pattern vs FleetMind Pattern
+## Appendix B: Manual-Onboard Pattern vs FleetMind Pattern
 
-| | Carpe bots | FleetMind |
+| | Manual-onboard bots | FleetMind |
 |---|---|---|
 | **Config approach** | Manual `openclaw onboard` on each instance post-provision | Declarative `fleet.yaml` → `fleetmind render` → `openclaw.json` |
 | **`openclaw onboard` run?** | ✅ Yes — deliberately deferred to post-provision | ❌ No — replaced entirely |
@@ -830,11 +830,11 @@ validation {
 | **Workspace files** | Created by `onboard` (default workspace bootstrap) | `fleetmind deploy` provisioner → SCP to EC2 |
 | **Systemd unit** | Written by `onboard --install-daemon` | Bootstrap script writes unit directly in user_data |
 | **Gateway auth** | Configured by `onboard` (token or password) | Not configured (loopback-only, acceptable) |
-| **AMI** | Custom Carpe golden AMI (arm64, SSM pre-installed) | Public AL2023 x86_64 (`al2023-ami-2023*`) + bootstrap installs SSM agent |
+| **AMI** | Custom golden AMI (arm64, SSM pre-installed) | Public AL2023 x86_64 (`al2023-ami-2023*`) + bootstrap installs SSM agent |
 | **Service user** | Dedicated `openclaw` system user | `ec2-user` (shared account — acceptable for single-agent-per-EC2) |
 | **Node.js** | NodeSource RPM via `dnf` | NVM (more fragile in cloud-init; works but watch for transient curl failures) |
 
-Carpe's deliberate choice ("onboard manually, not in userdata") reflects the same principle FleetMind automates: keeping userdata lean and deferring OpenClaw config to a well-understood, reproducible process. FleetMind's innovation is making that process declarative and fleet-wide rather than per-instance interactive.
+The deliberate choice in that pattern ("onboard manually, not in userdata") reflects the same principle FleetMind automates: keeping userdata lean and deferring OpenClaw config to a well-understood, reproducible process. FleetMind's innovation is making that process declarative and fleet-wide rather than per-instance interactive.
 
 ---
 

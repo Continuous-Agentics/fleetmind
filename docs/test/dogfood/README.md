@@ -1,6 +1,6 @@
 # dogfood test fleet
 
-First real test of fleetmind end-to-end, deployed in the Carpe `dogfood` AWS
+First real test of fleetmind end-to-end, deployed in the `dogfood` AWS
 account (`624905204775`).
 
 ## Fleet shape

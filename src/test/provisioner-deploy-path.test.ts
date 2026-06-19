@@ -47,7 +47,7 @@ function makeFleet(workspaceBase = EC2_WORKSPACE_BASE): Fleet {
     aws: { region: "us-west-2" },
   };
   return {
-    fleet: { name: "dogfood", version: "1.0.0", client: "carpe", description: "" },
+    fleet: { name: "dogfood", version: "1.0.0", client: "acme", description: "" },
     targets: { [TEST_TARGET_ID]: target },
     targetMap: new Map([[TEST_TARGET_ID, target]]),
     targetForAgent: () => target,
