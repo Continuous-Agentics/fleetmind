@@ -1131,10 +1131,22 @@ describe("renderTerraformVars — wake_target_session_key", () => {
     fleet.agents.list = [conductorWithChannels(["C07GGJPQJCD", "C0B5ADA7REH"]), makeForgeAgent()];
     const out = renderTerraformVars(fleet);
     assert.ok(
-      out.includes(`wake_target_session_key = "agent:main:slack:channel:C07GGJPQJCD"`),
-      "must use first channel from orchestrator's Slack channels list",
+      out.includes(`wake_target_session_key = "agent:conductor:slack:channel:c07ggjpqjcd"`),
+      "must use orchestrator id + first channel (lowercased) from the Slack channels list",
     );
-    assert.ok(!out.includes("C0B5ADA7REH"), "must NOT use the second channel");
+    assert.ok(!out.includes("C07GGJPQJCD"), "must lowercase the channel id to match live OpenClaw session keys");
+    assert.ok(!out.toLowerCase().includes("c0b5ada7reh"), "must NOT use the second channel");
+    assert.ok(!out.includes("agent:main:slack"), "must NOT hardcode `main` in the agentId slot");
+  });
+
+  test("filters placeholder channel ids and uses the first real one", () => {
+    const fleet = makeFleet();
+    fleet.agents.list = [conductorWithChannels(["REPLACE_ME", "C07GGJPQJCD"]), makeForgeAgent()];
+    const out = renderTerraformVars(fleet);
+    assert.ok(
+      out.includes(`wake_target_session_key = "agent:conductor:slack:channel:c07ggjpqjcd"`),
+      "must skip placeholder ids and derive from the first channel matching /^C[A-Z0-9]+$/",
+    );
   });
 
   test("omits wake_target_session_key when orchestrator has no Slack channels", () => {

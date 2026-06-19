@@ -507,14 +507,23 @@ export function renderTerraformVars(fleet: Fleet): string {
   // channel. The TF task-ledger module uses this to configure the
   // DDB-to-OpenClaw wake rule (EventBridge Pipe → SSM/hooks) that wakes the PM
   // session on terminal task-ledger events. Format:
-  //   agent:main:slack:channel:<channel_id>
+  //   agent:<orchestratorId>:slack:channel:<channel_id_lowercased>
+  // The agentId slot MUST be the orchestrator's real id (e.g. `conductor`),
+  // not a literal `main` — OpenClaw keys sessions by the actual agent id, so a
+  // hardcoded `main` points at a nonexistent session and the wake silently
+  // no-ops. The channel id MUST be lowercased to match how OpenClaw stores
+  // live Slack session keys (verified against a running session key and the
+  // slackThreadSessionKey() helper in cli/commands/nats.ts). Placeholder
+  // channel ids are filtered out the same way renderAgentOpenClawJson does.
   // Omitted (with an explanatory comment) when no orchestrator exists or the
-  // orchestrator has no Slack channels — TF then falls back to its variable
-  // default rather than getting a malformed value.
+  // orchestrator has no usable Slack channel — TF then falls back to its
+  // variable default rather than getting a malformed value.
   const orchestrator = fleet.agents.list.find((a) => a.orchestrator);
-  const firstChannel = orchestrator ? slackChannel(orchestrator)?.channels?.[0] : undefined;
-  const wakeSessionKey = firstChannel
-    ? `agent:main:slack:channel:${firstChannel}`
+  const firstChannel = orchestrator
+    ? (slackChannel(orchestrator)?.channels ?? []).find((c) => /^C[A-Z0-9]+$/.test(c))
+    : undefined;
+  const wakeSessionKey = orchestrator && firstChannel
+    ? `agent:${orchestrator.id}:slack:channel:${firstChannel.toLowerCase()}`
     : null;
 
   const lines: string[] = [
