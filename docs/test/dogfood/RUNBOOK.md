@@ -87,11 +87,11 @@ Two Slack apps are required — one per agent. Create them in your test workspac
 
 **Generate the manifests** (run from the repo root after `npm install`):
 ```bash
-fleetmind slack manifests --out docs/test/gg-sandbox/slack-manifests/
+fleetmind slack manifests --out docs/test/dogfood/slack-manifests/
 ```
 This writes one `<agent_id>.yaml` per agent (e.g. `conductor.yaml`, `forge.yaml`). Upload each YAML into the Slack app-create wizard (`https://api.slack.com/apps → Create New App → From a manifest`).
 
-The generated manifests include the full scope + event set verified to work with the live dogfood bots. Committed reference copies live in `docs/test/gg-sandbox/slack-manifests/` and can be re-generated at any time from `fleet.yaml`.
+The generated manifests include the full scope + event set verified to work with the live dogfood bots. Committed reference copies live in `docs/test/dogfood/slack-manifests/` and can be re-generated at any time from `fleet.yaml`.
 
 After creating each app, collect and export to your shell:
 ```bash

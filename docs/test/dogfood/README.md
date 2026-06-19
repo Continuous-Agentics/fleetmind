@@ -18,7 +18,7 @@ Both run in the same Slack channel (set in `terraform-extras.tfvars`).
 - `infra/terraform/terraform-extras.tfvars` — infra-only vars (region, ports,
   delegation, wake-target session key). Append to `rendered/fleet.derived.tfvars`
   after running `npx fleetmind render`.
-- `docs/test/gg-sandbox/slack-manifests/{conductor,forge}.yaml` — paste these
+- `docs/test/dogfood/slack-manifests/{conductor,forge}.yaml` — paste these
   at <https://api.slack.com/apps/manifest> to create the two Slack apps.
 
 ## Open placeholders
