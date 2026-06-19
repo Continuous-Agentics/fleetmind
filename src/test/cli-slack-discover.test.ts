@@ -446,7 +446,7 @@ describe("writeFleetYaml — comment preservation", () => {
 
   test("preserves fleet-level comments and structure", () => {
     const yamlWithHeader = `
-# fleet.yaml — minimal viable test fleet for gg-sandbox (251714435910)
+# fleet.yaml — minimal viable test fleet for dogfood (624905204775)
 # 1 PM (Conductor) + 1 worker (Forge, backend specialty)
 fleet:
   name: myfleet

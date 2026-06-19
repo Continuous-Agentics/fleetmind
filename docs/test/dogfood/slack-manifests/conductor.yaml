@@ -1,12 +1,12 @@
 display_information:
-  name: Forge
-  description: Backend worker — gg-sandbox test fleet
-  background_color: "#8B4513"
+  name: Conductor
+  description: PM bot — dogfood test fleet
+  background_color: "#2C3E50"
   long_description: |
-    Forge is the backend specialty worker bot for Grace's gg-sandbox test fleet (Continuous-Agentics/fleetmind). It receives task envelopes from Conductor (the PM bot), acknowledges with :eyes:, ships work back through a DynamoDB task ledger, and posts completion summaries. Runs on dedicated EC2 in AWS account 251714435910 (us-west-2).
+    Conductor is the project-manager bot for Grace's dogfood test fleet (Continuous-Agentics/fleetmind). It receives tasks from humans, delegates work to specialty worker bots (Forge), tracks tasks in a DynamoDB ledger, and closes the loop on every delegation. Runs on dedicated EC2 in AWS account 624905204775 (us-west-2).
 features:
   bot_user:
-    display_name: Forge
+    display_name: Conductor
     always_online: true
 oauth_config:
   scopes:

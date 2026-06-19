@@ -1,7 +1,7 @@
-# gg-sandbox test fleet
+# dogfood test fleet
 
-First real test of fleetmind end-to-end, deployed in the Carpe `gg-sandbox` AWS
-account (`251714435910`).
+First real test of fleetmind end-to-end, deployed in the `dogfood` AWS
+account (`624905204775`).
 
 ## Fleet shape
 
@@ -18,7 +18,7 @@ Both run in the same Slack channel (set in `terraform-extras.tfvars`).
 - `infra/terraform/terraform-extras.tfvars` — infra-only vars (region, ports,
   delegation, wake-target session key). Append to `rendered/fleet.derived.tfvars`
   after running `npx fleetmind render`.
-- `docs/test/gg-sandbox/slack-manifests/{conductor,forge}.yaml` — paste these
+- `docs/test/dogfood/slack-manifests/{conductor,forge}.yaml` — paste these
   at <https://api.slack.com/apps/manifest> to create the two Slack apps.
 
 ## Open placeholders
@@ -30,8 +30,8 @@ Both run in the same Slack channel (set in `terraform-extras.tfvars`).
 ## Deploy steps
 
 ```bash
-# Set AWS profile for gg-sandbox
-export AWS_PROFILE=gg-sandbox
+# Set AWS profile for dogfood
+export AWS_PROFILE=dogfood
 
 # Install fleetmind deps
 npm install

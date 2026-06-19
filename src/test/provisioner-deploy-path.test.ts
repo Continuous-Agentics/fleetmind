@@ -47,7 +47,7 @@ function makeFleet(workspaceBase = EC2_WORKSPACE_BASE): Fleet {
     aws: { region: "us-west-2" },
   };
   return {
-    fleet: { name: "gg-sandbox", version: "1.0.0", client: "carpe", description: "" },
+    fleet: { name: "dogfood", version: "1.0.0", client: "acme", description: "" },
     targets: { [TEST_TARGET_ID]: target },
     targetMap: new Map([[TEST_TARGET_ID, target]]),
     targetForAgent: () => target,
@@ -970,7 +970,7 @@ describe("fleet roster — buildFleetRoster", () => {
     const roster = buildFleetRoster(fleet, pm);
 
     // Must include fleet name
-    assert.ok(roster.includes("gg-sandbox"), "roster must include fleet name");
+    assert.ok(roster.includes("dogfood"), "roster must include fleet name");
     // Must list the worker
     assert.ok(roster.includes("Forge"), "PM roster must list worker Forge");
     assert.ok(roster.includes("U0FORGE"), "PM roster must include worker's bot_user_id");
@@ -1027,7 +1027,7 @@ describe("fleet roster — buildFleetRoster", () => {
 
     assert.ok(roster.includes("solo bot"), "solo roster must say 'solo bot'");
     assert.ok(roster.includes("No peer bots configured"), "solo roster must say no peers");
-    assert.ok(roster.includes("gg-sandbox"), "solo roster must include fleet name");
+    assert.ok(roster.includes("dogfood"), "solo roster must include fleet name");
     // Must not have any peer listing lines
     assert.ok(!roster.includes("Slack user:"), "solo roster must not have any peer Slack user lines");
   });

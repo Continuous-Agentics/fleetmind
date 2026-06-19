@@ -1,4 +1,4 @@
-# fleet-test-fleet-2.yaml — minimal viable test fleet for gg-sandbox (251714435910)
+# fleet-test-fleet-2.yaml — minimal viable test fleet for dogfood (624905204775)
 # 1 PM (Blanket) + 1 worker (Charlie, backend specialty)
 #
 # Operator workflow:
@@ -19,7 +19,7 @@ fleet:
   name: fleet-test-2
   version: "1.0.0"
   client: "Continuous-Agentics"
-  description: "Test fleet on gg-sandbox — validate fleetmind end-to-end"
+  description: "Test fleet on dogfood — validate fleetmind end-to-end"
 
 delegation:
   enabled: true
@@ -60,7 +60,7 @@ agents:
           (Continuous-Agentics/fleetmind). It receives tasks from humans,
           delegates work to specialty worker bots (Charlie), tracks tasks in a
           DynamoDB ledger, and closes the loop on every delegation. Runs on
-          dedicated EC2 in AWS account 251714435910 (us-west-2).
+          dedicated EC2 in AWS account 624905204775 (us-west-2).
       skills:
         - name: bot-delegation
           source: fleetmind
@@ -97,7 +97,7 @@ agents:
           test fleet (Continuous-Agentics/fleetmind). It receives task envelopes
           from Blanket (the PM bot), acknowledges with :eyes:, ships work back
           through a DynamoDB task ledger, and posts completion summaries. Runs
-          on dedicated EC2 in AWS account 251714435910 (us-west-2).
+          on dedicated EC2 in AWS account 624905204775 (us-west-2).
       skills:
         - name: bot-reception
           source: fleetmind

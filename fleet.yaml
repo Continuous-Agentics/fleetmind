@@ -1,11 +1,11 @@
-# fleet.yaml — minimal viable test fleet for gg-sandbox (251714435910)
+# fleet.yaml — minimal viable test fleet for dogfood (624905204775)
 # 1 PM (Conductor) + 1 worker (Forge, backend specialty)
 
 fleet:
-  name: gg-sandbox
+  name: dogfood
   version: "1.0.0"
   client: ""
-  description: "Test fleet on gg-sandbox — validate fleetmind end-to-end"
+  description: "Test fleet on dogfood — validate fleetmind end-to-end"
 
 skills_repo:
   local: ./openclaw # use bundled fleetmind role templates + skills
@@ -16,8 +16,8 @@ secrets:
 delegation:
   enabled: true
   aws_region: us-west-2
-  table_name: gg-sandbox-tasks
-  s3_bucket: gg-sandbox-narratives-251714435910 # MUST be globally unique; add 6-char suffix
+  table_name: dogfood-tasks
+  s3_bucket: dogfood-narratives-624905204775 # MUST be globally unique; add 6-char suffix
   nats:
     servers:
       - nats://REPLACE_ME:4222 # set to your NATS server URL (Cloud Map DNS or IP)
@@ -34,12 +34,12 @@ agents:
       name: Conductor
       emoji: 🎼
       role: pm
-      description: "PM bot — gg-sandbox test fleet"
+      description: "PM bot — dogfood test fleet"
       orchestrator: true
       model: anthropic/claude-sonnet-4-6 # PM gets a bit more horsepower
       persona:
         soul: |
-          You are Conductor, the project-manager bot for the gg-sandbox test fleet.
+          You are Conductor, the project-manager bot for the dogfood test fleet.
           You delegate tasks to worker bots via the bot-delegation skill and close
           the loop on every assignment.
       slack:
@@ -50,11 +50,11 @@ agents:
         app_token: "${CONDUCTOR_APP_TOKEN}"
         background_color: "#2C3E50" # Slack App manifest display colour
         long_description: >
-          Conductor is the project-manager bot for Grace's gg-sandbox test fleet
+          Conductor is the project-manager bot for Grace's dogfood test fleet
           (Continuous-Agentics/fleetmind). It receives tasks from humans,
           delegates work to specialty worker bots (Forge), tracks tasks in a
           DynamoDB ledger, and closes the loop on every delegation. Runs on
-          dedicated EC2 in AWS account 251714435910 (us-west-2).
+          dedicated EC2 in AWS account 624905204775 (us-west-2).
       skills:
         - name: bot-delegation
           source: fleetmind
@@ -72,7 +72,7 @@ agents:
       name: Forge
       emoji: ⚙️
       role: backend-worker
-      description: "Backend worker — gg-sandbox test fleet"
+      description: "Backend worker — dogfood test fleet"
       orchestrator: false
       persona:
         soul: |
@@ -88,11 +88,11 @@ agents:
         app_token: "${FORGE_APP_TOKEN}"
         background_color: "#8B4513" # Slack App manifest display colour (role default)
         long_description: >
-          Forge is the backend specialty worker bot for Grace's gg-sandbox test
+          Forge is the backend specialty worker bot for Grace's dogfood test
           fleet (Continuous-Agentics/fleetmind). It receives task envelopes from
           Conductor (the PM bot), acknowledges with :eyes:, ships work back
           through a DynamoDB task ledger, and posts completion summaries. Runs
-          on dedicated EC2 in AWS account 251714435910 (us-west-2).
+          on dedicated EC2 in AWS account 624905204775 (us-west-2).
       skills:
         - name: bot-reception
           source: fleetmind

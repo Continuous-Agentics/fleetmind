@@ -32,10 +32,10 @@ Examples:
   $ fleetmind push skill browser-automation --agent pm-bot
 
   # Push a skill to all agents in the fleet
-  $ fleetmind push skill carpe-jenkins --all
+  $ fleetmind push skill jenkins --all
 
   # Push a pinned version of a skill to a specific agent
-  $ fleetmind push skill carpe-jenkins --agent forge --version 1.2.0
+  $ fleetmind push skill jenkins --agent forge --version 1.2.0
 `)
     .action((skillName: string, opts) => {
       try {

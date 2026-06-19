@@ -89,7 +89,7 @@ describe("parseAgentEnv", () => {
   });
 
   test("defaults WORKSPACE_BASE to /opt/openclaw/workspace when absent", () => {
-    const text = `FLEET_NAME=gg-sandbox\nAGENT_ID=forge\n`;
+    const text = `FLEET_NAME=dogfood\nAGENT_ID=forge\n`;
     const env = parseAgentEnv(text);
     assert.equal(env.workspaceBase, "/opt/openclaw/workspace");
   });
@@ -105,9 +105,9 @@ describe("parseAgentEnv", () => {
   });
 
   test("trims whitespace from values", () => {
-    const text = `FLEET_NAME=  gg-sandbox  \nAGENT_ID=  forge  \n`;
+    const text = `FLEET_NAME=  dogfood  \nAGENT_ID=  forge  \n`;
     const env = parseAgentEnv(text);
-    assert.equal(env.fleetName, "gg-sandbox");
+    assert.equal(env.fleetName, "dogfood");
     assert.equal(env.agentId, "forge");
   });
 });

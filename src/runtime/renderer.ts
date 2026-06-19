@@ -58,7 +58,7 @@ function buildModelsMap(
 /**
  * Build the per-agent openclaw.json slice for a single gateway/EC2 instance.
  *
- * Each gg-sandbox EC2 runs one gateway process for one agent. That gateway only
+ * Each dogfood EC2 runs one gateway process for one agent. That gateway only
  * has its own agent's Slack secret in its EnvironmentFile — so shipping the
  * full fleet-wide config is wrong. This function returns a config slice that
  * contains only what the named agent's gateway needs:
@@ -310,7 +310,7 @@ export function renderAgentOpenClawJson(
  *
  * Returns a single fleet-wide openclaw.json with all agents, all bindings,
  * and all Slack accounts merged together. This shape targets a future
- * "one gateway, N agents" topology — it does NOT match the gg-sandbox deploy
+ * "one gateway, N agents" topology — it does NOT match the dogfood deploy
  * (one gateway per agent EC2). Kept for backward compatibility only.
  */
 /** The agents whose runtime target resolves to `targetId` — i.e. the agents

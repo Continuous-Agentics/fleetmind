@@ -1,9 +1,9 @@
 {
   "display_information": {
     "name": "Conductor",
-    "description": "PM bot for gg-sandbox fleetmind test fleet - delegates work to worker bots.",
+    "description": "PM bot for dogfood fleetmind test fleet - delegates work to worker bots.",
     "background_color": "#2C3E50",
-    "long_description": "Conductor is the project-manager bot for Grace's gg-sandbox test fleet (Continuous-Agentics/fleetmind). It receives tasks from humans, delegates work to specialty worker bots (Forge), tracks tasks in a DynamoDB ledger, and closes the loop on every delegation. Runs on dedicated EC2 in AWS account 251714435910 (us-west-2).\n"
+    "long_description": "Conductor is the project-manager bot for Grace's dogfood test fleet (Continuous-Agentics/fleetmind). It receives tasks from humans, delegates work to specialty worker bots (Forge), tracks tasks in a DynamoDB ledger, and closes the loop on every delegation. Runs on dedicated EC2 in AWS account 624905204775 (us-west-2).\n"
   },
   "features": {
     "bot_user": {
