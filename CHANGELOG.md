@@ -6,6 +6,8 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.8.5] — 2026-06-20
+
 ### Fixed
 
 - **`fleetmind secrets populate` now generates the gateway auth token.** The
