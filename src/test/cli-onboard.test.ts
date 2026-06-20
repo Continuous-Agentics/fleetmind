@@ -661,7 +661,7 @@ describe("step 9 — provider-prompt matrix", () => {
     assert.ok(putIds.some(id => id.includes("providers/openai")), "openai secret written");
   });
 
-  test("existing non-placeholder secret — Override? confirm(false) is shown", async () => {
+  test("existing non-placeholder secret — Override? confirm(true) is shown", async () => {
     const fleetName = "s9-fleet";
     const yaml = makeFleetYaml({
       fleetName,
@@ -689,8 +689,8 @@ describe("step 9 — provider-prompt matrix", () => {
         false,  // Render? → no
         false,  // Terraform ack
         true,   // Populate? → yes
-        false,  // "Slack tokens already in SM. Override?" (defaultYes=false expected)
-        false,  // "anthropic API key already in SM. Override?" (defaultYes=false expected)
+        false,  // "Slack tokens already in SM. Override?" (defaultYes=true expected)
+        false,  // "anthropic API key already in SM. Override?" (defaultYes=true expected)
         false,  // Push? → no
       ],
       ["test-org"],
@@ -705,12 +705,12 @@ describe("step 9 — provider-prompt matrix", () => {
     );
     assert.ok(overrideConfirms.length >= 2, "at least 2 Override? confirms should appear");
 
-    // All override prompts should have defaultYes=false (opt-in to override, not opt-out)
+    // All prompts default to yes (consistent default-yes UX across the wizard).
     for (const c of overrideConfirms) {
       assert.equal(
         c.defaultYes,
-        false,
-        `Override? confirm for "${c.question}" should have defaultYes=false`,
+        true,
+        `Override? confirm for "${c.question}" should have defaultYes=true`,
       );
     }
 
@@ -870,8 +870,8 @@ describe("idempotency", () => {
     );
     assert.equal(step5Overrides.length, 2, "Override? should be shown once per agent in step 5");
     assert.ok(
-      step5Overrides.every(c => c.defaultYes === false),
-      "step 5 Override? should default to false (opt-in)",
+      step5Overrides.every(c => c.defaultYes === true),
+      "step 5 Override? should default to true (consistent default-yes UX)",
     );
 
     // No SSM PUTs for GitHub App (skipped)
@@ -934,7 +934,7 @@ describe("idempotency", () => {
       c => c.type === "confirm" && c.question.toLowerCase().includes("anthropic"),
     );
     assert.ok(antOverride, "anthropic override prompt should be shown (key exists)");
-    assert.equal(antOverride!.defaultYes, false, "anthropic override should default to false");
+    assert.equal(antOverride!.defaultYes, true, "anthropic override should default to true (consistent default-yes UX)");
 
     // OpenAI was prompted (missing secret)
     const oaiHidden = mock.calls.find(

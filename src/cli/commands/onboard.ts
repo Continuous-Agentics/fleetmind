@@ -530,7 +530,7 @@ export async function runOnboard(
     const alreadyInSsm = await ssmExistsViaClient(deps.ssm, ssmKey);
 
     if (alreadyInSsm) {
-      const override = await deps.prompter.confirm(`  ${agent.emoji} ${agent.name}: GitHub App already in SSM. Override?`, false);
+      const override = await deps.prompter.confirm(`  ${agent.emoji} ${agent.name}: GitHub App already in SSM. Override?`, true);
       if (!override) {
         log.ok(`  ${agent.name}: using existing GitHub App credentials`);
         continue;
@@ -631,7 +631,7 @@ export async function runOnboard(
   console.log(`    -var-file=${infraTfvarsPath} \\`);
   console.log(`    -var-file=${tfvarsFile}\x1b[0m\n`);
   console.log("  Instances will boot but agents crash-loop until secrets are populated.\n");
-  await deps.prompter.confirm("  Terraform apply complete?", false);
+  await deps.prompter.confirm("  Terraform apply complete?", true);
 
   // ── Step 9: Populate Secrets Manager ────────────────────────────────────────
   header("Step 9 / 12 — Populate Secrets Manager");
@@ -654,7 +654,7 @@ export async function runOnboard(
       if (collected) {
         if (!slackIsPlaceholder) {
           // Already has real values — offer override
-          writeSlack = await deps.prompter.confirm("    Slack tokens already in SM. Override with step-3 values?", false);
+          writeSlack = await deps.prompter.confirm("    Slack tokens already in SM. Override with step-3 values?", true);
         } else {
           writeSlack = true;
         }
@@ -667,7 +667,7 @@ export async function runOnboard(
         }
       } else {
         // No tokens from step 3 — prompt now
-        if (!slackIsPlaceholder && !await deps.prompter.confirm("    Slack tokens already in SM. Override?", false)) {
+        if (!slackIsPlaceholder && !await deps.prompter.confirm("    Slack tokens already in SM. Override?", true)) {
           log.ok("    Slack tokens unchanged");
         } else {
           const botToken = await deps.prompter.hiddenPrompt("    Bot Token (xoxb-...):      ");
@@ -698,7 +698,7 @@ export async function runOnboard(
         const isPlaceholder = !existingRaw || existingRaw.includes("REPLACE_ME");
         let writeKey = isPlaceholder;
         if (!isPlaceholder) {
-          writeKey = await deps.prompter.confirm(`    ${provider} API key already in SM. Override?`, false);
+          writeKey = await deps.prompter.confirm(`    ${provider} API key already in SM. Override?`, true);
         }
         if (writeKey) {
           const apiKey = await deps.prompter.hiddenPrompt(`    ${provider} API key (${keyVar}): `);

@@ -6,6 +6,19 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-06-20
+
+### Changed
+
+- **`fleetmind onboard` confirm prompts now default to yes consistently.** Every
+  interactive confirm in the wizard now defaults to yes, so pressing Enter
+  advances. Previously five prompts defaulted to no (`[y/N]`): "Terraform apply
+  complete?", the three "Override existing secret?" prompts in step 9, and the
+  step-5 "GitHub App already in SSM. Override?" prompt. They now default to yes
+  (`[Y/n]`) like the rest of the wizard. Note: this means an Enter-through re-run
+  will overwrite existing Slack tokens, provider API keys, and GitHub App
+  credentials by default; answer `n` to keep an existing secret.
+
 ## [0.8.1] — 2026-06-20
 
 ### Changed
