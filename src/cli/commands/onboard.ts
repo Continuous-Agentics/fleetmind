@@ -40,6 +40,7 @@ import {
   SSMClient,
   GetParameterCommand as SsmGetCommand,
   PutParameterCommand as SsmPutCommand,
+  DescribeInstanceInformationCommand,
 } from "@aws-sdk/client-ssm";
 import { runPushFleet } from "./push-fleet.js";
 import { writeOutputs } from "../../runtime/renderer.js";
@@ -217,6 +218,106 @@ async function putSecretViaClient(
   }));
 }
 
+/** A secret value is "real" if it exists and isn't a render placeholder. */
+function secretIsReal(raw: string | null): boolean {
+  return !!raw && !raw.includes("REPLACE_ME");
+}
+
+/** Does any agent declare a GitHub App? When none do, steps 5/10 are N/A. */
+function anyAgentNeedsGithubApp(agents: { github_app?: unknown }[]): boolean {
+  return agents.some(a => a.github_app != null);
+}
+
+interface PreflightState {
+  /** "done" when GH Apps are all stored, "skip" when no agent needs one, else "next". */
+  githubApps: "done" | "next" | "skip";
+  packagesPat: boolean;
+  terraformApplied: boolean;
+  secretsPopulated: boolean;
+}
+
+/**
+ * Detect real completion of the AWS-touching steps (5/6/8/9) for the pre-flight
+ * summary so re-running onboard doesn't show finished work as outstanding.
+ *
+ * Every probe is wrapped so any AWS failure (offline, missing creds, throttling)
+ * degrades to the not-done value. We never report a false "done".
+ */
+async function detectRemoteState(args: {
+  deps: OnboardDeps;
+  fleet: ReturnType<typeof loadFleet>;
+  fleetName: string;
+  agents: ReturnType<typeof loadFleet>["agents"]["list"];
+  region: string;
+}): Promise<PreflightState> {
+  const { deps, fleet, fleetName, agents } = args;
+
+  // Step 6: GitHub Packages PAT in shared SSM.
+  const packagesPat = await ssmExistsViaClient(
+    deps.ssm, "/fleetmind/shared/github-packages-token",
+  ).catch(() => false);
+
+  // Step 8: Terraform applied — every agent's EC2 instance is registered in SSM
+  // under the fleetmind tag namespace. All resolve = apply landed. Uses the
+  // injected SSM client (mockable) rather than constructing its own.
+  let terraformApplied = false;
+  try {
+    const hosts = await Promise.all(agents.map(async (a) => {
+      const resp = await deps.ssm.send(new DescribeInstanceInformationCommand({
+        Filters: [
+          { Key: "tag:fleetmind:fleet_name", Values: [fleetName] },
+          { Key: "tag:fleetmind:agent_id", Values: [a.id] },
+        ],
+      }));
+      return resp.InstanceInformationList?.[0]?.InstanceId ?? null;
+    }));
+    terraformApplied = agents.length > 0 && hosts.every(h => !!h);
+  } catch { terraformApplied = false; }
+
+  // Step 9: Secrets populated — every agent has a real (non-placeholder) Slack
+  // secret AND a real key for each of its declared providers.
+  let secretsPopulated = false;
+  try {
+    const checks = await Promise.all(agents.map(async (agent) => {
+      const slackOk = secretIsReal(
+        await getSecretViaClient(deps.secretsManager, slackSecretName(fleetName, agent.id)),
+      );
+      if (!slackOk) return false;
+      const providers = providersForAgent({
+        agentId: agent.id,
+        providers: (agent as { providers?: string[] }).providers,
+        model: agent.model,
+        apiKeys: agent.api_keys,
+        defaultModel: fleet.agents.defaults.model,
+      });
+      const provChecks = await Promise.all(providers.map(async (p) =>
+        secretIsReal(await getSecretViaClient(
+          deps.secretsManager, providerSecretName(fleetName, agent.id, p))),
+      ));
+      return provChecks.every(Boolean);
+    }));
+    secretsPopulated = agents.length > 0 && checks.every(Boolean);
+  } catch { secretsPopulated = false; }
+
+  // Steps 5/10: GitHub Apps. Skip entirely when no agent declares one. When some
+  // do, "done" once every such agent has an app-id parameter in SSM.
+  let githubApps: "done" | "next" | "skip";
+  if (!anyAgentNeedsGithubApp(agents as { github_app?: unknown }[])) {
+    githubApps = "skip";
+  } else {
+    try {
+      const needed = agents.filter(a => (a as { github_app?: unknown }).github_app != null);
+      const stored = await Promise.all(needed.map(a =>
+        ssmExistsViaClient(deps.ssm,
+          `/fleetmind/${fleetName}/agents/${a.id}/github-app/app-id`).catch(() => false),
+      ));
+      githubApps = stored.every(Boolean) ? "done" : "next";
+    } catch { githubApps = "next"; }
+  }
+
+  return { githubApps, packagesPat, terraformApplied, secretsPopulated };
+}
+
 // ── Main wizard ───────────────────────────────────────────────────────────────
 
 export async function runOnboard(
@@ -249,20 +350,35 @@ export async function runOnboard(
   const allUserIdsSet = agents.every(a => isRealUserId(slackChannel(a)?.bot_user_id));
   const allChannelsSet = agents.every(a => (slackChannel(a)?.channels ?? []).every(c => isRealChannelId(c)));
 
-  const derivedTfvars = path.join(path.dirname(fleetFile), `workspaces/${fleetName}.derived.tfvars`);
-  const tfvarsExist = deps.fs.existsSync(derivedTfvars);
+  // Render output: the renderer writes the derived tfvars next to the workspace
+  // infra tfvars. Single-fleet repos render to `default.derived.tfvars` (the
+  // "default" Terraform workspace); multi-fleet repos render to
+  // `<fleet>.derived.tfvars`. Accept either so step 7 isn't a false negative.
+  const derivedTfvarsCandidates = [
+    `workspaces/${fleetName}.derived.tfvars`,
+    "workspaces/default.derived.tfvars",
+  ];
+  const tfvarsExist = derivedTfvarsCandidates.some(f =>
+    deps.fs.existsSync(path.join(path.dirname(fleetFile), f)));
+
+  // Steps 5/6/8/9 touch AWS (SSM + Secrets Manager). Detect real completion so
+  // re-runs don't show already-finished steps as outstanding. Any AWS error
+  // (offline, no creds) falls back to "next" — never a false "done".
+  const preflight = await detectRemoteState({
+    deps, fleet, fleetName, agents, region,
+  });
 
   console.log();
   step(1, TOTAL, "fleet.yaml configured", "done");
   step(2, TOTAL, "Slack app manifests", manifestsExist ? "done" : "next");
-  step(3, TOTAL, "Slack credentials", allUserIdsSet && allChannelsSet ? "done" : allUserIdsSet ? "next" : "next");
+  step(3, TOTAL, "Slack credentials", allUserIdsSet && allChannelsSet ? "done" : "next");
   step(4, TOTAL, "bot_user_ids", allUserIdsSet ? "done" : "next");
-  step(5, TOTAL, "GitHub Apps", "next");
-  step(6, TOTAL, "GitHub Packages PAT", "next");
+  step(5, TOTAL, "GitHub Apps", preflight.githubApps);
+  step(6, TOTAL, "GitHub Packages PAT", preflight.packagesPat ? "done" : "next");
   step(7, TOTAL, "Render tfvars", tfvarsExist ? "done" : "next");
-  step(8, TOTAL, "Terraform apply", "next");
-  step(9, TOTAL, "Populate secrets", "next");
-  step(10, TOTAL, "Store GitHub App credentials", "next");
+  step(8, TOTAL, "Terraform apply", preflight.terraformApplied ? "done" : "next");
+  step(9, TOTAL, "Populate secrets", preflight.secretsPopulated ? "done" : "next");
+  step(10, TOTAL, "Store GitHub App credentials", preflight.githubApps);
   step(11, TOTAL, "Push fleet", "next");
   step(12, TOTAL, "Verify", "next");
   console.log();
@@ -369,6 +485,15 @@ export async function runOnboard(
   }
 
   // ── Step 5: GitHub Apps ─────────────────────────────────────────────────────
+  // GitHub Apps are optional: only agents that declare a `github_app` block in
+  // fleet.yaml need one. When none do, skip the whole step (no owner prompt, no
+  // per-agent prompts) so fleets that don't touch GitHub aren't dragged through it.
+  const githubAppNeeded = anyAgentNeedsGithubApp(agents as { github_app?: unknown }[]);
+  if (!githubAppNeeded) {
+    header("Step 5 / 12 — GitHub Apps");
+    log.ok("  No agent declares a github_app in fleet.yaml — skipping.");
+    log.dim("  Add a github_app block to an agent (and re-run) if a bot needs repo access.");
+  } else {
   header("Step 5 / 12 — GitHub Apps");
   console.log("  Each bot needs its own GitHub App for repo access (PRs, issues, etc.)");
   if (legacyGithubApps) {
@@ -454,6 +579,7 @@ export async function runOnboard(
     }
   }
   console.log();
+  } // end GitHub Apps (step 5) when githubAppNeeded
 
   // ── Step 6: GitHub Packages PAT ─────────────────────────────────────────────
   header("Step 6 / 12 — GitHub Packages PAT");

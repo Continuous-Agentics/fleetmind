@@ -6,6 +6,25 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **`fleetmind onboard` pre-flight now detects real completion of the
+  AWS-touching steps.** Steps 6 (GitHub Packages PAT), 8 (Terraform apply), and
+  9 (Populate secrets) were previously hardcoded to show `→` ("next") in the
+  pre-flight summary regardless of actual state, so a re-run of a mostly-finished
+  fleet looked like nothing was done. The summary now probes SSM + Secrets
+  Manager: step 6 checks the shared PAT parameter, step 8 resolves every agent's
+  EC2 instance via the `fleetmind:*` SSM tags, and step 9 confirms each agent has
+  a non-placeholder Slack secret plus a real key for every declared provider.
+  Any AWS error (offline, no creds) degrades to "next" (never a false "done").
+- **GitHub Apps (steps 5 + 10) are now skipped when no agent declares a
+  `github_app` block.** Fleets that don't need per-bot GitHub access are no
+  longer prompted for a GitHub owner or per-agent app setup; the pre-flight shows
+  these steps as `○` (n/a).
+- **Step 7 render detection accepts `default.derived.tfvars`.** Single-fleet
+  repos render to the `default` Terraform workspace; the pre-flight previously
+  only looked for `<fleet>.derived.tfvars` and showed a false "next".
+
 ## [0.8.0] — 2026-06-20
 
 First stable cut of the 0.8.0 line. Consolidates `0.8.0-beta.0` through

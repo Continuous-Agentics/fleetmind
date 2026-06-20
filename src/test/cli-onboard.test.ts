@@ -222,9 +222,13 @@ function makeFleetYaml(opts: {
     providers?: string[];
     noProviders?: boolean;
   }>;
+  /** Emit a github_app block on each agent (drives step 5). Default true so
+   *  existing step-5 coverage is preserved; set false to exercise the skip path. */
+  githubApp?: boolean;
 } = {}): string {
   const fleetName = opts.fleetName ?? "test-fleet";
   const delegationEnabled = opts.delegationEnabled ?? false;
+  const githubApp = opts.githubApp ?? true;
   const agents = opts.agents ?? [
     { id: "pm-bot", name: "PM Bot", emoji: "🤖", role: "pm", providers: ["anthropic"] },
     { id: "worker-bot", name: "Worker Bot", emoji: "🔧", role: "worker", providers: ["anthropic"] },
@@ -252,11 +256,15 @@ delegation:
       const userId = `U${id.replace(/-/g, "").toUpperCase().padEnd(9, "0")}`.slice(0, 10);
       const channelId = `C${id.replace(/-/g, "").toUpperCase().padEnd(9, "0")}`.slice(0, 10);
       const providersYaml = a.noProviders ? "" : `      providers: [${(a.providers ?? ["anthropic"]).join(", ")}]`;
+      const githubAppYaml = githubApp ? `
+      github_app:
+        permissions: {}
+        events: []` : "";
       return `    - id: ${id}
       name: "${displayName}"
       emoji: "${a.emoji ?? "🤖"}"
       role: ${a.role ?? "worker"}
-${providersYaml}
+${providersYaml}${githubAppYaml}
       channels:
         - provider: slack
           account_id: ${id}
@@ -1069,6 +1077,63 @@ describe("fallback", () => {
 });
 
 // ── createDefaultDeps smoke test ──────────────────────────────────────────────
+
+describe("GitHub Apps skip path (no github_app declared)", () => {
+  test("step 5 + 10 skip without prompting for a GitHub owner", async () => {
+    const fleetName = "nogh-fleet";
+    const setup = makeTempFleet(
+      makeFleetYaml({
+        fleetName,
+        githubApp: false, // no agent declares github_app
+        agents: [
+          { id: "pm-bot", name: "PM Bot", emoji: "🤖", role: "pm", providers: ["anthropic"] },
+          { id: "worker-bot", name: "Worker Bot", emoji: "🔧", role: "worker", providers: ["anthropic"] },
+        ],
+      }),
+    );
+
+    // PAT present; secrets present → only render/terraform/secrets/push confirms.
+    const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
+    const smMock = makeMockSM({
+      [`${fleetName}/agents/pm-bot/slack`]: JSON.stringify({ SLACK_BOT_TOKEN: "xoxb-pm" }),
+      [`${fleetName}/agents/pm-bot/providers/anthropic`]: JSON.stringify({ ANTHROPIC_API_KEY: "sk-ant-pm" }),
+      [`${fleetName}/agents/worker-bot/slack`]: JSON.stringify({ SLACK_BOT_TOKEN: "xoxb-worker" }),
+      [`${fleetName}/agents/worker-bot/providers/anthropic`]: JSON.stringify({ ANTHROPIC_API_KEY: "sk-ant-worker" }),
+    });
+
+    const mock = makeMockPrompter(
+      [
+        true,   // Start onboarding?
+        // Step 5: SKIPPED (no github_app) — no confirm consumed
+        // Step 6: skip (PAT in SSM)
+        true,   // Run fleetmind render?
+        false,  // Terraform apply complete?
+        true,   // Populate secrets now?
+        false,  // pm-bot slack override?
+        false,  // pm-bot anthropic override?
+        false,  // worker-bot slack override?
+        false,  // worker-bot anthropic override?
+        true,   // Run push fleet?
+      ],
+      [], // NO prompt answers — a GitHub owner prompt would throw "prompt queue exhausted"
+    );
+
+    const deps = makeDeps(mock.prompter, ssmMock.ssm, smMock.sm);
+    await runOnboard(setup.fleetFile, "us-west-2", {}, deps);
+
+    // The GitHub owner prompt must never have fired.
+    const ownerPrompts = mock.calls.filter(
+      c => c.type === "prompt" && c.question.includes("GitHub owner"),
+    );
+    assert.equal(ownerPrompts.length, 0, "no GitHub owner prompt when no agent declares github_app");
+
+    // No GitHub-App SSM app-id parameters should have been written.
+    const ghPuts = ssmMock.calls.filter(c => c.op === "put" && c.name.includes("github-app"));
+    assert.equal(ghPuts.length, 0, "no github-app SSM writes on the skip path");
+
+    cleanupTempDir(setup.tmpDir);
+  });
+});
 
 describe("createDefaultDeps", () => {
   test("factory returns an object satisfying the OnboardDeps interface shape", async () => {
