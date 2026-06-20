@@ -6,6 +6,52 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-06-20
+
+First stable cut of the 0.8.0 line. Consolidates `0.8.0-beta.0` through
+`0.8.0-beta.10` into a single supported release. Highlights below; see the
+per-beta sections that follow for full detail.
+
+### ⚠️ Breaking
+
+- **fleet.yaml is v2; v1 files no longer load.** Top-level `targets:` map
+  (hosts discriminated on `provider`: `aws-ssm | ssh | local`), per-agent
+  `target:`, and a `channels:` list replacing the old `slack:` block. Existing
+  v1 fleets must be migrated before upgrading. See `fleet.example.yaml` and the
+  `fleetmind-template` repo for the v2 shape.
+- **Per-provider Secrets Manager layout; combined `/model` secret removed.**
+  `fleetmind secrets populate` writes one secret per `(agent, provider)` at
+  `<fleet>/agents/<id>/providers/<provider>`. The earlier combined
+  `<fleet>/agents/<id>/model` secret is gone. Lockstep with
+  `terraform-aws-fleetmind` ≥ v1.0.0 via `src/core/secret-names.ts` (TS) and
+  `modules/agent/main.tf` locals (TF).
+- **`providers:` is now required on every agent in `fleet.yaml`.** Provider
+  inference from the `model:` string is removed; each agent must declare its
+  providers explicitly.
+
+### Added
+
+- **NATS delegation transport.** Inter-bot delegation runs over a NATS bus with
+  per-agent `fleetmind-nats-<agent>.service` subscribers (path-activated on
+  `fleet.yaml`). Auto-defaults `nats: {}` when `delegation.enabled` is true.
+  The EventBridge/SSM wake pipeline is retired in favor of NATS push +
+  `POST /hooks/wake`.
+- **`fleetmind up`** — bring a fleet up on the local machine with no cloud
+  (agents sharing a `local` target run in one OpenClaw gateway).
+- **`fleetmind secrets check`** — read-only present/absent report per
+  `(agent, provider)`, counterpart to `secrets populate`.
+- **`fleetmind onboard`** — interactive bring-up wizard with an `OnboardDeps`
+  injection seam and full integration-test coverage.
+- **Multi-provider models + `fallback_models`** — `model` is a
+  `provider/model` string; per-agent or fleet-wide failover chain.
+
+### Fixed
+
+- Timeouts added to clawhub `execSync` calls; `self-upgrade` and skill-resolver
+  hang fixes; clearer `ResourceNotFoundException` messaging in
+  `secrets populate`.
+
+
 ## [0.8.0-beta.10] — 2026-06-08
 
 ### Added
@@ -256,7 +302,7 @@ All notable changes to fleetmind are documented in this file. Format follows
   first" rule the LLM can check against before any work-side tool
   call.
 
-## [0.8.0] — 2026-05-27
+## [0.8.0-dev] — 2026-05-27 (superseded by 0.8.0)
 
 Provider-neutral release: AWS/Slack become **one backend among several**. The
 fleet config moves to a v2 schema and the deploy layer is abstracted behind
