@@ -6,6 +6,8 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.8.4] — 2026-06-20
+
 ### Added
 
 - **GitHub access is now required by default on every agent.** New per-agent
