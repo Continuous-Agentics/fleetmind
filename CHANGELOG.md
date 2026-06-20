@@ -20,6 +20,14 @@ All notable changes to fleetmind are documented in this file. Format follows
   parity contract covers it. Companion `terraform-aws-fleetmind` change adds a
   managed `aws_secretsmanager_secret.gateway` and guards bootstrap STAGE 7b so it
   no longer overwrites a populate-seeded token on every reboot.
+- **`fleetmind secrets populate` is now idempotent for auto-generated tokens.**
+  Re-running `populate` no longer rotates the hooks/gateway tokens: it reads the
+  existing secret and reuses a real (64-char hex) token, generating a fresh one
+  only when the secret is absent or still holds the `PENDING_BOOTSTRAP`
+  placeholder. This mirrors the terraform-aws-fleetmind bootstrap STAGE 7b guard,
+  so all writers share one "don't clobber a live token" contract and re-running
+  populate can't break a running gateway/TUI session. Use the new
+  `--rotate-tokens` flag to deliberately force-roll these tokens.
 
 ## [0.8.4] — 2026-06-20
 

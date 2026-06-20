@@ -28,6 +28,8 @@ import {
   materializeHostEnv,
   generateHooksToken,
   generateGatewayToken,
+  isRealToken,
+  resolveAutoToken,
   loadEnvFile,
   redact,
   populateSecrets,
@@ -279,6 +281,89 @@ describe("generateGatewayToken", () => {
     const a = generateGatewayToken();
     const b = generateGatewayToken();
     assert.notEqual(a, b, "tokens should be unique");
+  });
+});
+
+// ── isRealToken ───────────────────────────────────────────────────
+
+describe("isRealToken", () => {
+  test("accepts a 64-char hex token", () => {
+    assert.equal(isRealToken("a".repeat(64)), true);
+    assert.equal(isRealToken(generateGatewayToken()), true);
+  });
+
+  test("rejects the PENDING_BOOTSTRAP placeholder, empty, and non-hex", () => {
+    assert.equal(isRealToken("PENDING_BOOTSTRAP"), false);
+    assert.equal(isRealToken(""), false);
+    assert.equal(isRealToken("a".repeat(63)), false, "too short");
+    assert.equal(isRealToken("A".repeat(64)), false, "uppercase is not our format");
+    assert.equal(isRealToken("g".repeat(64)), false, "non-hex chars");
+    assert.equal(isRealToken(undefined), false);
+    assert.equal(isRealToken(123), false);
+  });
+});
+
+// ── resolveAutoToken (idempotent re-runs) ─────────────────────────
+
+describe("resolveAutoToken", () => {
+  const EXISTING = "b".repeat(64);
+
+  /** Minimal SecretsManagerClient stub: send() inspects the command name and
+   *  returns a canned GetSecretValue response (or throws). */
+  function makeClient(behavior: {
+    secretString?: string;
+    error?: { name: string };
+  }): { send: (cmd: unknown) => Promise<unknown>; calls: number } {
+    const stub = {
+      calls: 0,
+      async send(_cmd: unknown) {
+        stub.calls++;
+        if (behavior.error) throw behavior.error;
+        return { SecretString: behavior.secretString };
+      },
+    };
+    return stub;
+  }
+
+  test("reuses an existing real token (no rotation on re-run)", async () => {
+    const client = makeClient({ secretString: JSON.stringify({ GATEWAY_TOKEN: EXISTING }) });
+    const gen = () => "c".repeat(64);
+    const token = await resolveAutoToken(
+      client as never, "f/agents/a/gateway", "GATEWAY_TOKEN", gen, false);
+    assert.equal(token, EXISTING, "should preserve the live token");
+    assert.equal(client.calls, 1, "should read the secret once");
+  });
+
+  test("generates when the secret holds the PENDING_BOOTSTRAP placeholder", async () => {
+    const client = makeClient({ secretString: JSON.stringify({ GATEWAY_TOKEN: "PENDING_BOOTSTRAP" }) });
+    const fresh = "d".repeat(64);
+    const token = await resolveAutoToken(
+      client as never, "f/agents/a/gateway", "GATEWAY_TOKEN", () => fresh, false);
+    assert.equal(token, fresh, "placeholder should be replaced");
+  });
+
+  test("generates when the secret does not exist", async () => {
+    const client = makeClient({ error: { name: "ResourceNotFoundException" } });
+    const fresh = "e".repeat(64);
+    const token = await resolveAutoToken(
+      client as never, "f/agents/a/gateway", "GATEWAY_TOKEN", () => fresh, false);
+    assert.equal(token, fresh, "missing secret should yield a fresh token");
+  });
+
+  test("rotate=true forces a fresh token even when a real one exists", async () => {
+    const client = makeClient({ secretString: JSON.stringify({ GATEWAY_TOKEN: EXISTING }) });
+    const fresh = "f".repeat(64);
+    const token = await resolveAutoToken(
+      client as never, "f/agents/a/gateway", "GATEWAY_TOKEN", () => fresh, true);
+    assert.equal(token, fresh, "rotate should override the live token");
+    assert.equal(client.calls, 0, "rotate should not even read the secret");
+  });
+
+  test("dry-run (null client) generates without reading", async () => {
+    const fresh = "a".repeat(64);
+    const token = await resolveAutoToken(
+      null, "f/agents/a/gateway", "GATEWAY_TOKEN", () => fresh, false);
+    assert.equal(token, fresh);
   });
 });
 
