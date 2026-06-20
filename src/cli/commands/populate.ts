@@ -10,6 +10,7 @@
  *      and merges every blob into the gateway env. Multi-provider agents get
  *      multiple secrets.
  *   ${fleet_name}/agents/${agent_id}/hooks
+ *   ${fleet_name}/agents/${agent_id}/gateway
  *
  * Secret names come from src/core/secret-names.ts (shared with the Terraform
  * module — see terraform-aws-fleetmind/modules/agent/main.tf).
@@ -29,7 +30,11 @@ import path from "node:path";
 import readline from "node:readline";
 import yaml from "js-yaml";
 import chalk from "chalk";
-import { SecretsManagerClient, PutSecretValueCommand } from "@aws-sdk/client-secrets-manager";
+import {
+  SecretsManagerClient,
+  PutSecretValueCommand,
+  GetSecretValueCommand,
+} from "@aws-sdk/client-secrets-manager";
 import { STSClient, GetCallerIdentityCommand } from "@aws-sdk/client-sts";
 import { log } from "../../utils/log.js";
 import {
@@ -40,6 +45,7 @@ import {
 import {
   slackSecretName,
   hooksSecretName,
+  gatewaySecretName,
   providerSecretName,
 } from "../../core/secret-names.js";
 import { slackChannel } from "../../core/channels.js";
@@ -58,6 +64,13 @@ export interface PopulateOptions {
   promptFn?: (prompt: string) => Promise<string>;
   /** Injectable confirm function for y/N prompt — used in tests. */
   confirmFn?: (prompt: string) => Promise<boolean>;
+  /**
+   * Force a fresh value for auto-generated tokens (hooks/gateway) even when the
+   * secret already holds a valid one. Default false: re-running populate
+   * preserves a live token instead of rotating it out from under running
+   * services. Use this only when you deliberately want to roll a token.
+   */
+  rotateTokens?: boolean;
 }
 
 interface AgentSlack {
@@ -283,6 +296,58 @@ export function resolveSlack(
 /** Generate a random 32-byte hooks token. Always auto-generated; never read from env. */
 export function generateHooksToken(): string {
   return crypto.randomBytes(32).toString("hex");
+}
+
+/** Generate a random 32-byte gateway auth token. Always auto-generated; never read from env. */
+export function generateGatewayToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+/** A token value already present in Secrets Manager is considered "real" (worth
+ *  preserving) when it is a 64-char hex string — i.e. a previously generated
+ *  token, not the Terraform "PENDING_BOOTSTRAP" placeholder or empty. */
+export function isRealToken(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+/**
+ * Resolve an auto-generated token (hooks/gateway) idempotently. Reads the
+ * existing secret and reuses its current token when it is a real value, so
+ * re-running `populate` does NOT rotate a live token out from under running
+ * services. Generates a fresh token only when the secret is absent, holds the
+ * `PENDING_BOOTSTRAP` placeholder, or `rotate` is explicitly set.
+ *
+ * Mirrors the terraform-aws-fleetmind bootstrap STAGE 7b guard so all writers
+ * (populate, bootstrap, TF placeholder) share one "don't clobber a real token"
+ * contract. In dry-run (`client` is null) we skip the read and just generate.
+ */
+export async function resolveAutoToken(
+  client: SecretsManagerClient | null,
+  secretName: string,
+  key: string,
+  generate: () => string,
+  rotate: boolean
+): Promise<string> {
+  if (rotate || !client) return generate();
+  try {
+    const resp = await client.send(
+      new GetSecretValueCommand({ SecretId: secretName })
+    );
+    if (resp.SecretString) {
+      const parsed = JSON.parse(resp.SecretString) as Record<string, unknown>;
+      if (isRealToken(parsed[key])) return parsed[key] as string;
+    }
+  } catch (err) {
+    // ResourceNotFoundException (secret/version missing) → generate a new token.
+    // Any other error (access denied, throttling) is non-fatal here: fall back
+    // to generating so populate still produces a usable token; the subsequent
+    // PutSecretValue will surface a real permissions error if one exists.
+    const name = (err as { name?: string })?.name;
+    if (name !== "ResourceNotFoundException") {
+      // best-effort: leave a breadcrumb but don't abort populate
+    }
+  }
+  return generate();
 }
 
 /**
@@ -608,6 +673,11 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
       secretName: string;
       data: Record<string, string>;
       keyCount: number;
+      /** For auto-generated tokens: the payload key to resolve idempotently at
+       *  push time (reuse a live token unless --rotate-tokens). */
+      autoTokenKey?: string;
+      /** Generator used when no real token exists yet (or on rotate). */
+      generate?: () => string;
     }
     const ready: ReadySecret[] = [];
 
@@ -639,13 +709,28 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
         });
       }
 
-      // Hooks token — always auto-generated; never read from env
+      // Hooks token — auto-generated, but preserved across re-runs unless
+      // --rotate-tokens (resolved against AWS at push time below).
       ready.push({
         agentId,
         secretType: "hooks",
         secretName: hooksSecretName(fleetName, agentId),
         data: { HOOKS_TOKEN: generateHooksToken() },
         keyCount: 1,
+        autoTokenKey: "HOOKS_TOKEN",
+        generate: generateHooksToken,
+      });
+
+      // Gateway auth token — auto-generated, but preserved across re-runs unless
+      // --rotate-tokens (resolved against AWS at push time below).
+      ready.push({
+        agentId,
+        secretType: "gateway",
+        secretName: gatewaySecretName(fleetName, agentId),
+        data: { GATEWAY_TOKEN: generateGatewayToken() },
+        keyCount: 1,
+        autoTokenKey: "GATEWAY_TOKEN",
+        generate: generateGatewayToken,
       });
     }
 
@@ -683,10 +768,23 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
           keyCount: r.keyCount,
         });
       } else {
+        // For auto-generated tokens, reuse the live value unless --rotate-tokens
+        // so re-running populate doesn't rotate a token out from under services.
+        let data = r.data;
+        if (r.autoTokenKey && r.generate) {
+          const token = await resolveAutoToken(
+            interactiveClient,
+            r.secretName,
+            r.autoTokenKey,
+            r.generate,
+            options.rotateTokens ?? false
+          );
+          data = { [r.autoTokenKey]: token };
+        }
         try {
           await interactiveClient!.send(new PutSecretValueCommand({
             SecretId: r.secretName,
-            SecretString: JSON.stringify(r.data),
+            SecretString: JSON.stringify(data),
           }));
         } catch (err) {
           throw await annotateSecretError(err, r.secretName, interactiveClient!);
@@ -752,10 +850,23 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
       }
     }
 
-    // ── Hooks token — always auto-generated; never read from env ────────────────
+    // ── Hooks token — auto-generated, but preserved across re-runs unless
+    //    --rotate-tokens (idempotent: reuse the live token if one exists). ─────
+    const hooksName = hooksSecretName(fleetName, agentId);
+    const hooksToken = await resolveAutoToken(
+      client, hooksName, "HOOKS_TOKEN", generateHooksToken, options.rotateTokens ?? false);
     await emitSecret(results, client, options.dryRun,
-      { agentId, secretType: "hooks", secretName: hooksSecretName(fleetName, agentId) },
-      { HOOKS_TOKEN: generateHooksToken() });
+      { agentId, secretType: "hooks", secretName: hooksName },
+      { HOOKS_TOKEN: hooksToken });
+
+    // ── Gateway auth token — auto-generated, but preserved across re-runs unless
+    //    --rotate-tokens (idempotent: reuse the live token if one exists). ─────
+    const gatewayName = gatewaySecretName(fleetName, agentId);
+    const gatewayToken = await resolveAutoToken(
+      client, gatewayName, "GATEWAY_TOKEN", generateGatewayToken, options.rotateTokens ?? false);
+    await emitSecret(results, client, options.dryRun,
+      { agentId, secretType: "gateway", secretName: gatewayName },
+      { GATEWAY_TOKEN: gatewayToken });
   }
 
   return results;

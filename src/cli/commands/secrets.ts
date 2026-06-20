@@ -11,6 +11,7 @@ import { providersForAgent } from "../../core/model-provider.js";
 import {
   slackSecretName,
   hooksSecretName,
+  gatewaySecretName,
   providerSecretName,
 } from "../../core/secret-names.js";
 
@@ -89,6 +90,7 @@ Examples:
     .option("--agent <id>", "Populate only this agent (repeatable)", (val: string, prev: string[]) => [...prev, val], [] as string[])
     .option("--region <region>", "AWS region (default: delegation.aws_region from fleet.yaml or AWS env)")
     .option("-i, --interactive", "Prompt for each missing credential interactively (hidden input)", false)
+    .option("--rotate-tokens", "Force-roll auto-generated tokens (hooks/gateway) even if a live one exists (default: preserve existing tokens so re-runs don't break running services)", false)
     .addHelpText('after', `
 Examples:
   # Interactive mode — prompts for each missing token (hidden input, no echo)
@@ -119,6 +121,7 @@ Examples:
           agent: opts.agent as string[],
           region: opts.region,
           interactive: opts.interactive as boolean,
+          rotateTokens: opts.rotateTokens as boolean,
         });
         printResults(results, opts.dryRun, env);
       } catch (err: unknown) {
@@ -191,6 +194,7 @@ Examples:
           const expected: string[] = [
             slackSecretName(fleetName, agentId),
             hooksSecretName(fleetName, agentId),
+            gatewaySecretName(fleetName, agentId),
             ...providers.map((p) => providerSecretName(fleetName, agentId, p)),
           ];
           for (const name of expected) {

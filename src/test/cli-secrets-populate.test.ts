@@ -27,6 +27,9 @@ import {
   resolveProviderKey,
   materializeHostEnv,
   generateHooksToken,
+  generateGatewayToken,
+  isRealToken,
+  resolveAutoToken,
   loadEnvFile,
   redact,
   populateSecrets,
@@ -266,6 +269,104 @@ describe("generateHooksToken", () => {
   });
 });
 
+// ── generateGatewayToken ──────────────────────────────────────────
+
+describe("generateGatewayToken", () => {
+  test("returns a 64-character hex string", () => {
+    const token = generateGatewayToken();
+    assert.match(token, /^[0-9a-f]{64}$/);
+  });
+
+  test("returns a different value on each call", () => {
+    const a = generateGatewayToken();
+    const b = generateGatewayToken();
+    assert.notEqual(a, b, "tokens should be unique");
+  });
+});
+
+// ── isRealToken ───────────────────────────────────────────────────
+
+describe("isRealToken", () => {
+  test("accepts a 64-char hex token", () => {
+    assert.equal(isRealToken("a".repeat(64)), true);
+    assert.equal(isRealToken(generateGatewayToken()), true);
+  });
+
+  test("rejects the PENDING_BOOTSTRAP placeholder, empty, and non-hex", () => {
+    assert.equal(isRealToken("PENDING_BOOTSTRAP"), false);
+    assert.equal(isRealToken(""), false);
+    assert.equal(isRealToken("a".repeat(63)), false, "too short");
+    assert.equal(isRealToken("A".repeat(64)), false, "uppercase is not our format");
+    assert.equal(isRealToken("g".repeat(64)), false, "non-hex chars");
+    assert.equal(isRealToken(undefined), false);
+    assert.equal(isRealToken(123), false);
+  });
+});
+
+// ── resolveAutoToken (idempotent re-runs) ─────────────────────────
+
+describe("resolveAutoToken", () => {
+  const EXISTING = "b".repeat(64);
+
+  /** Minimal SecretsManagerClient stub: send() inspects the command name and
+   *  returns a canned GetSecretValue response (or throws). */
+  function makeClient(behavior: {
+    secretString?: string;
+    error?: { name: string };
+  }): { send: (cmd: unknown) => Promise<unknown>; calls: number } {
+    const stub = {
+      calls: 0,
+      async send(_cmd: unknown) {
+        stub.calls++;
+        if (behavior.error) throw behavior.error;
+        return { SecretString: behavior.secretString };
+      },
+    };
+    return stub;
+  }
+
+  test("reuses an existing real token (no rotation on re-run)", async () => {
+    const client = makeClient({ secretString: JSON.stringify({ GATEWAY_TOKEN: EXISTING }) });
+    const gen = () => "c".repeat(64);
+    const token = await resolveAutoToken(
+      client as never, "f/agents/a/gateway", "GATEWAY_TOKEN", gen, false);
+    assert.equal(token, EXISTING, "should preserve the live token");
+    assert.equal(client.calls, 1, "should read the secret once");
+  });
+
+  test("generates when the secret holds the PENDING_BOOTSTRAP placeholder", async () => {
+    const client = makeClient({ secretString: JSON.stringify({ GATEWAY_TOKEN: "PENDING_BOOTSTRAP" }) });
+    const fresh = "d".repeat(64);
+    const token = await resolveAutoToken(
+      client as never, "f/agents/a/gateway", "GATEWAY_TOKEN", () => fresh, false);
+    assert.equal(token, fresh, "placeholder should be replaced");
+  });
+
+  test("generates when the secret does not exist", async () => {
+    const client = makeClient({ error: { name: "ResourceNotFoundException" } });
+    const fresh = "e".repeat(64);
+    const token = await resolveAutoToken(
+      client as never, "f/agents/a/gateway", "GATEWAY_TOKEN", () => fresh, false);
+    assert.equal(token, fresh, "missing secret should yield a fresh token");
+  });
+
+  test("rotate=true forces a fresh token even when a real one exists", async () => {
+    const client = makeClient({ secretString: JSON.stringify({ GATEWAY_TOKEN: EXISTING }) });
+    const fresh = "f".repeat(64);
+    const token = await resolveAutoToken(
+      client as never, "f/agents/a/gateway", "GATEWAY_TOKEN", () => fresh, true);
+    assert.equal(token, fresh, "rotate should override the live token");
+    assert.equal(client.calls, 0, "rotate should not even read the secret");
+  });
+
+  test("dry-run (null client) generates without reading", async () => {
+    const fresh = "a".repeat(64);
+    const token = await resolveAutoToken(
+      null, "f/agents/a/gateway", "GATEWAY_TOKEN", () => fresh, false);
+    assert.equal(token, fresh);
+  });
+});
+
 
 // ── populateSecrets — dry-run ─────────────────────────────────────────────────
 
@@ -311,7 +412,7 @@ agents:
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("dry-run returns 6 results without calling AWS", async () => {
+  test("dry-run returns 8 results without calling AWS", async () => {
     const opts: PopulateOptions = {
       fleet: fleetFile,
       dryRun: true,
@@ -333,17 +434,25 @@ agents:
     try {
       const results = await populateSecrets(opts);
 
-      // 6 results: conductor/slack, conductor/providers/anthropic, conductor/hooks,
-      //            forge/slack, forge/providers/anthropic, forge/hooks
-      assert.equal(results.length, 6);
+      // 8 results: conductor/slack, conductor/providers/anthropic, conductor/hooks,
+      //            conductor/gateway, forge/slack, forge/providers/anthropic,
+      //            forge/hooks, forge/gateway
+      assert.equal(results.length, 8);
 
       const names = results.map((r) => r.secretName);
       assert.ok(names.includes("test-fleet/agents/conductor/slack"));
       assert.ok(names.includes("test-fleet/agents/conductor/providers/anthropic"));
       assert.ok(names.includes("test-fleet/agents/conductor/hooks"));
+      assert.ok(names.includes("test-fleet/agents/conductor/gateway"));
       assert.ok(names.includes("test-fleet/agents/forge/slack"));
       assert.ok(names.includes("test-fleet/agents/forge/providers/anthropic"));
       assert.ok(names.includes("test-fleet/agents/forge/hooks"));
+      assert.ok(names.includes("test-fleet/agents/forge/gateway"));
+
+      // Gateway secret carries a GATEWAY_TOKEN key
+      const gatewayResults = results.filter((r) => r.secretType === "gateway");
+      assert.equal(gatewayResults.length, 2, "one gateway secret per agent");
+      assert.ok(gatewayResults.every((r) => r.keyCount === 1));
 
       // All dry-run — pushed=false
       for (const r of results) {
@@ -373,10 +482,11 @@ agents:
         agent: ["conductor"],
       });
 
-      assert.equal(results.length, 3);
+      assert.equal(results.length, 4);
       assert.equal(results[0]!.secretName, "test-fleet/agents/conductor/slack");
       assert.equal(results[1]!.secretName, "test-fleet/agents/conductor/providers/anthropic");
       assert.equal(results[2]!.secretName, "test-fleet/agents/conductor/hooks");
+      assert.equal(results[3]!.secretName, "test-fleet/agents/conductor/gateway");
     } finally {
       for (const v of vars) {
         if (savedEnv[v] === undefined) delete process.env[v];
@@ -416,7 +526,7 @@ agents:
     try {
       // Should NOT throw — signing_secret is accepted but ignored
       const results = await populateSecrets({ fleet: legacyFleet, dryRun: true, agent: ["conductor"] });
-      assert.equal(results.length, 3, "conductor produces 3 results even with signing_secret present in yaml");
+      assert.equal(results.length, 4, "conductor produces 4 results even with signing_secret present in yaml");
       assert.ok(results.every((r) => r.ok));
     } finally {
       for (const v of vars) {
@@ -463,8 +573,11 @@ agents:
       });
 
       // Only conductor — no forge results
-      assert.equal(results.length, 3);
+      assert.equal(results.length, 4);
       assert.ok(results.every((r) => r.agentId === "conductor"));
+
+      const gatewayRes = results.find((r) => r.secretType === "gateway");
+      assert.ok(gatewayRes, "conductor should have a gateway secret");
     } finally {
       for (const v of vars) {
         if (savedEnv[v] === undefined) delete process.env[v];
@@ -659,7 +772,7 @@ agents:
 
       // No prompts should have been triggered — everything was in env
       assert.equal(promptCalls.length, 0, "promptFn should not have been called when all env vars are set");
-      assert.equal(results.length, 6, "should have 6 results");
+      assert.equal(results.length, 8, "should have 8 results");
       assert.ok(results.every((r) => r.ok));
     } finally {
       restoreVars(saved);
@@ -691,8 +804,10 @@ agents:
         confirmFn: makeConfirmStub(true),
       });
 
-      assert.equal(results.length, 3, "conductor should produce 3 results");
+      assert.equal(results.length, 4, "conductor should produce 4 results");
       assert.ok(results.every((r) => r.ok), "all results should be ok");
+      // Gateway secret is auto-generated (no prompt) and present
+      assert.ok(results.some((r) => r.secretType === "gateway"), "gateway secret present");
       // SLACK_SIGNING_SECRET must not appear in the pushed secret payload
       // (verified indirectly: only 3 prompts fired, none for signing_secret)
     } finally {
@@ -726,7 +841,7 @@ agents:
         confirmFn: makeConfirmStub(true),
       });
 
-      assert.equal(results.length, 3, "should produce 3 results after re-prompt");
+      assert.equal(results.length, 4, "should produce 4 results after re-prompt");
       assert.ok(results.every((r) => r.ok));
     } finally {
       restoreVars(saved);
@@ -765,10 +880,12 @@ agents:
     assert.ok(combined.includes("conductor/slack"), "summary should mention conductor/slack");
     assert.ok(combined.includes("conductor/provider:anthropic"), "summary should mention conductor/provider:anthropic");
     assert.ok(combined.includes("conductor/hooks"), "summary should mention conductor/hooks");
+    assert.ok(combined.includes("conductor/gateway"), "summary should mention conductor/gateway");
     assert.ok(combined.includes("forge/slack"), "summary should mention forge/slack");
     assert.ok(combined.includes("forge/provider:anthropic"), "summary should mention forge/provider:anthropic");
     assert.ok(combined.includes("forge/hooks"), "summary should mention forge/hooks");
-    assert.ok(combined.includes("6 secrets"), "summary should state total secret count");
+    assert.ok(combined.includes("forge/gateway"), "summary should mention forge/gateway");
+    assert.ok(combined.includes("8 secrets"), "summary should state total secret count");
   });
 
   // ── Test 5: --interactive + --dry-run runs prompts but skips AWS ──────────────
@@ -797,7 +914,7 @@ agents:
       });
 
       // Prompts ran
-      assert.equal(results.length, 3, "should have 3 dry-run results");
+      assert.equal(results.length, 4, "should have 4 dry-run results");
       assert.ok(results.every((r) => r.pushed === false), "dry-run: pushed should be false");
 
       // Confirm NOT called in dry-run (summary shown but no y/N)
@@ -834,7 +951,7 @@ agents:
       });
 
       // Only conductor results
-      assert.equal(results.length, 3, "only conductor results");
+      assert.equal(results.length, 4, "only conductor results");
       assert.ok(results.every((r) => r.agentId === "conductor"));
 
       // No forge prompts
@@ -863,7 +980,7 @@ agents:
         promptFn: makePromptStub([]),
         confirmFn: makeConfirmStub(true),
       });
-      assert.equal(yesResults.length, 3, "'y' should return results");
+      assert.equal(yesResults.length, 4, "'y' should return results");
 
       // "n" → empty results (aborted)
       // Note: dry-run skips confirmation, so test non-dry-run with mocked confirm
@@ -911,7 +1028,7 @@ agents:
       });
 
       assert.equal(promptCalls.length, 0, "no prompts should fire when --from provides all values");
-      assert.equal(results.length, 3, "should have 3 results");
+      assert.equal(results.length, 4, "should have 4 results");
       assert.ok(results.every((r) => r.ok));
     } finally {
       restoreVars(saved);
@@ -941,7 +1058,7 @@ agents:
         confirmFn: makeConfirmStub(true),
       });
 
-      assert.equal(results.length, 3, "should produce 3 results");
+      assert.equal(results.length, 4, "should produce 4 results");
       assert.ok(results.every((r) => r.ok));
 
       // Verify no prompt mentioned signing_secret or SLACK_SIGNING_SECRET
