@@ -530,7 +530,7 @@ export async function runOnboard(
     const alreadyInSsm = await ssmExistsViaClient(deps.ssm, ssmKey);
 
     if (alreadyInSsm) {
-      const override = await deps.prompter.confirm(`  ${agent.emoji} ${agent.name}: GitHub App already in SSM. Override?`, true);
+      const override = await deps.prompter.confirm(`  ${agent.emoji} ${agent.name}: GitHub App already populated in SSM. Override?`, false);
       if (!override) {
         log.ok(`  ${agent.name}: using existing GitHub App credentials`);
         continue;
@@ -653,8 +653,8 @@ export async function runOnboard(
 
       if (collected) {
         if (!slackIsPlaceholder) {
-          // Already has real values — offer override
-          writeSlack = await deps.prompter.confirm("    Slack tokens already in SM. Override with step-3 values?", true);
+          // Already has real values — ask before overwriting (default: keep)
+          writeSlack = await deps.prompter.confirm("    Slack tokens already populated. Override with step-3 values?", false);
         } else {
           writeSlack = true;
         }
@@ -667,7 +667,7 @@ export async function runOnboard(
         }
       } else {
         // No tokens from step 3 — prompt now
-        if (!slackIsPlaceholder && !await deps.prompter.confirm("    Slack tokens already in SM. Override?", true)) {
+        if (!slackIsPlaceholder && !await deps.prompter.confirm("    Slack tokens already populated. Override?", false)) {
           log.ok("    Slack tokens unchanged");
         } else {
           const botToken = await deps.prompter.hiddenPrompt("    Bot Token (xoxb-...):      ");
@@ -698,7 +698,7 @@ export async function runOnboard(
         const isPlaceholder = !existingRaw || existingRaw.includes("REPLACE_ME");
         let writeKey = isPlaceholder;
         if (!isPlaceholder) {
-          writeKey = await deps.prompter.confirm(`    ${provider} API key already in SM. Override?`, true);
+          writeKey = await deps.prompter.confirm(`    ${provider} API key already populated. Override?`, false);
         }
         if (writeKey) {
           const apiKey = await deps.prompter.hiddenPrompt(`    ${provider} API key (${keyVar}): `);

@@ -6,6 +6,20 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.8.3] — 2026-06-20
+
+### Changed
+
+- **`fleetmind onboard` secret steps: check first, then populate or ask.** Step 9
+  (Slack + provider keys) and step 5 (GitHub App) now follow a consistent rule:
+  if a secret is missing or a placeholder, it is populated automatically with no
+  override question; if it is already populated, the wizard asks whether to
+  update it and defaults to *no* (keep the existing value). This reverts the
+  0.8.2 behavior where the override prompts defaulted to yes and an Enter-through
+  re-run silently overwrote live secrets. Flow-advancement prompts ("Terraform
+  apply complete?", "Populate secrets now?", "Run push fleet?", etc.) still
+  default to yes; only the overwrite-existing-secret prompts default to no.
+
 ## [0.8.2] — 2026-06-20
 
 ### Changed
