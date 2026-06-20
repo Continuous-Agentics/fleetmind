@@ -13,9 +13,10 @@
  *   provider_secret_names = {
  *     for p in var.model_providers : p => "${local.agent_secret_prefix}/providers/${p}"
  *   }
- * and the slack/hooks resources:
+ * and the slack/hooks/gateway resources:
  *   name = "${var.fleet_name}/agents/${var.name}/slack"
  *   name = "${var.fleet_name}/agents/${var.name}/hooks"
+ *   name = "${var.fleet_name}/agents/${var.name}/gateway"
  */
 
 import { describe, it } from "node:test";
@@ -24,6 +25,7 @@ import {
   agentSecretPrefix,
   slackSecretName,
   hooksSecretName,
+  gatewaySecretName,
   providerSecretName,
 } from "../core/secret-names.js";
 
@@ -41,6 +43,10 @@ describe("secret-names parity (CLI ⇄ terraform-aws-fleetmind module)", () => {
 
   it("hooksSecretName matches TF aws_secretsmanager_secret.hooks.name", () => {
     assert.equal(hooksSecretName(FLEET, AGENT), `${FLEET}/agents/${AGENT}/hooks`);
+  });
+
+  it("gatewaySecretName matches TF aws_secretsmanager_secret.gateway.name", () => {
+    assert.equal(gatewaySecretName(FLEET, AGENT), `${FLEET}/agents/${AGENT}/gateway`);
   });
 
   it("providerSecretName(anthropic) matches TF provider_secret_names[anthropic]", () => {

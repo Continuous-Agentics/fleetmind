@@ -6,6 +6,21 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`fleetmind secrets populate` now generates the gateway auth token.** The
+  renderer emits `gateway.auth.token = ${<AGENT_UPPER>_GATEWAY_TOKEN}` and
+  `fetch-agent-secrets` reads `<fleet>/agents/<agent>/gateway`, but `populate`
+  never created that secret, so CLI-seeded or pre-bootstrap agents resolved the
+  SecretRef to an empty value and the gateway refused to start with "Missing
+  gateway auth token." `populate` now writes a per-agent `gateway` secret
+  (`{ GATEWAY_TOKEN }`) in both interactive and non-interactive modes, mirroring
+  the hooks-token path (single source of truth). New `gatewaySecretName` helper,
+  `fleetmind secrets check` verifies the gateway secret, and the secret-names
+  parity contract covers it. Companion `terraform-aws-fleetmind` change adds a
+  managed `aws_secretsmanager_secret.gateway` and guards bootstrap STAGE 7b so it
+  no longer overwrites a populate-seeded token on every reboot.
+
 ## [0.8.4] — 2026-06-20
 
 ### Added

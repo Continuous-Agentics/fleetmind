@@ -11,6 +11,7 @@ import { providersForAgent } from "../../core/model-provider.js";
 import {
   slackSecretName,
   hooksSecretName,
+  gatewaySecretName,
   providerSecretName,
 } from "../../core/secret-names.js";
 
@@ -191,6 +192,7 @@ Examples:
           const expected: string[] = [
             slackSecretName(fleetName, agentId),
             hooksSecretName(fleetName, agentId),
+            gatewaySecretName(fleetName, agentId),
             ...providers.map((p) => providerSecretName(fleetName, agentId, p)),
           ];
           for (const name of expected) {

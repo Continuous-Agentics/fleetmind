@@ -10,6 +10,7 @@
  * Canonical layout (per agent):
  *   <fleet_name>/agents/<agent_id>/slack
  *   <fleet_name>/agents/<agent_id>/hooks
+ *   <fleet_name>/agents/<agent_id>/gateway
  *   <fleet_name>/agents/<agent_id>/providers/<provider>     (one per provider)
  *
  * The per-provider JSON payload is uniformly:
@@ -29,6 +30,10 @@ export function slackSecretName(fleetName: string, agentId: string): string {
 
 export function hooksSecretName(fleetName: string, agentId: string): string {
   return `${agentSecretPrefix(fleetName, agentId)}/hooks`;
+}
+
+export function gatewaySecretName(fleetName: string, agentId: string): string {
+  return `${agentSecretPrefix(fleetName, agentId)}/gateway`;
 }
 
 export function providerSecretName(

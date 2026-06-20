@@ -10,6 +10,7 @@
  *      and merges every blob into the gateway env. Multi-provider agents get
  *      multiple secrets.
  *   ${fleet_name}/agents/${agent_id}/hooks
+ *   ${fleet_name}/agents/${agent_id}/gateway
  *
  * Secret names come from src/core/secret-names.ts (shared with the Terraform
  * module — see terraform-aws-fleetmind/modules/agent/main.tf).
@@ -40,6 +41,7 @@ import {
 import {
   slackSecretName,
   hooksSecretName,
+  gatewaySecretName,
   providerSecretName,
 } from "../../core/secret-names.js";
 import { slackChannel } from "../../core/channels.js";
@@ -282,6 +284,11 @@ export function resolveSlack(
 
 /** Generate a random 32-byte hooks token. Always auto-generated; never read from env. */
 export function generateHooksToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+/** Generate a random 32-byte gateway auth token. Always auto-generated; never read from env. */
+export function generateGatewayToken(): string {
   return crypto.randomBytes(32).toString("hex");
 }
 
@@ -647,6 +654,15 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
         data: { HOOKS_TOKEN: generateHooksToken() },
         keyCount: 1,
       });
+
+      // Gateway auth token — always auto-generated; never read from env
+      ready.push({
+        agentId,
+        secretType: "gateway",
+        secretName: gatewaySecretName(fleetName, agentId),
+        data: { GATEWAY_TOKEN: generateGatewayToken() },
+        keyCount: 1,
+      });
     }
 
     // Phase 2: show confirmation summary
@@ -756,6 +772,11 @@ export async function populateSecrets(options: PopulateOptions): Promise<Populat
     await emitSecret(results, client, options.dryRun,
       { agentId, secretType: "hooks", secretName: hooksSecretName(fleetName, agentId) },
       { HOOKS_TOKEN: generateHooksToken() });
+
+    // ── Gateway auth token — always auto-generated; never read from env ─────────
+    await emitSecret(results, client, options.dryRun,
+      { agentId, secretType: "gateway", secretName: gatewaySecretName(fleetName, agentId) },
+      { GATEWAY_TOKEN: generateGatewayToken() });
   }
 
   return results;
