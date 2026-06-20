@@ -222,8 +222,9 @@ function makeFleetYaml(opts: {
     providers?: string[];
     noProviders?: boolean;
   }>;
-  /** Emit a github_app block on each agent (drives step 5). Default true so
-   *  existing step-5 coverage is preserved; set false to exercise the skip path. */
+  /** Whether agents require GitHub access (drives step 5). Default true, which
+   *  matches the schema default (every agent gets a GitHub App). Set false to
+   *  emit `github_access: false` on every agent and exercise the skip path. */
   githubApp?: boolean;
 } = {}): string {
   const fleetName = opts.fleetName ?? "test-fleet";
@@ -256,10 +257,11 @@ delegation:
       const userId = `U${id.replace(/-/g, "").toUpperCase().padEnd(9, "0")}`.slice(0, 10);
       const channelId = `C${id.replace(/-/g, "").toUpperCase().padEnd(9, "0")}`.slice(0, 10);
       const providersYaml = a.noProviders ? "" : `      providers: [${(a.providers ?? ["anthropic"]).join(", ")}]`;
-      const githubAppYaml = githubApp ? `
-      github_app:
-        permissions: {}
-        events: []` : "";
+      // github_access defaults to true in the schema, so the step-5 path is
+      // exercised without emitting anything. The skip path is exercised by
+      // explicitly opting every agent out with github_access: false.
+      const githubAppYaml = githubApp ? "" : `
+      github_access: false`;
       return `    - id: ${id}
       name: "${displayName}"
       emoji: "${a.emoji ?? "🤖"}"
@@ -1079,13 +1081,13 @@ describe("fallback", () => {
 
 // ── createDefaultDeps smoke test ──────────────────────────────────────────────
 
-describe("GitHub Apps skip path (no github_app declared)", () => {
+describe("GitHub Apps skip path (every agent opted out with github_access: false)", () => {
   test("step 5 + 10 skip without prompting for a GitHub owner", async () => {
     const fleetName = "nogh-fleet";
     const setup = makeTempFleet(
       makeFleetYaml({
         fleetName,
-        githubApp: false, // no agent declares github_app
+        githubApp: false, // every agent sets github_access: false
         agents: [
           { id: "pm-bot", name: "PM Bot", emoji: "🤖", role: "pm", providers: ["anthropic"] },
           { id: "worker-bot", name: "Worker Bot", emoji: "🔧", role: "worker", providers: ["anthropic"] },
@@ -1105,7 +1107,7 @@ describe("GitHub Apps skip path (no github_app declared)", () => {
     const mock = makeMockPrompter(
       [
         true,   // Start onboarding?
-        // Step 5: SKIPPED (no github_app) — no confirm consumed
+        // Step 5: SKIPPED (all github_access: false) — no confirm consumed
         // Step 6: skip (PAT in SSM)
         true,   // Run fleetmind render?
         false,  // Terraform apply complete?

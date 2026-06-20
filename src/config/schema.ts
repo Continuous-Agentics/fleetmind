@@ -236,12 +236,20 @@ export const AgentSchema = z.object({
   agent_to_agent: AgentToAgentSchema.default({}),
   /** Optional per-agent delegation config. */
   delegation: DelegationAgentSchema.optional(),
+  /** Whether this agent requires its own GitHub App for repo access. Defaults
+   *  to true: every agent gets a GitHub App unless explicitly opted out with
+   *  `github_access: false`. Set false for agents that never touch code
+   *  (e.g. a pure-chat triage bot) to skip GitHub App creation for them. The
+   *  permission set still comes from the bot-type defaults (or the `github_app`
+   *  override below) when access is required. */
+  github_access: z.boolean().default(true),
   /** Optional per-agent GitHub App configuration. Permissions + events
    *  declared here override the bot-type defaults from
    *  openclaw/<bot-type>/github-app-permissions.yaml. Permissions are merged
    *  key-by-key: the per-agent entry wins where it sets a key, and the
    *  per-bot-type entry fills in the rest. Events are taken from per-agent
-   *  when present, else fall back to per-bot-type. */
+   *  when present, else fall back to per-bot-type. Only consulted when
+   *  `github_access` is true (the default). */
   github_app: GitHubAppConfigSchema.optional(),
 });
 

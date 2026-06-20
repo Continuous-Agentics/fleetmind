@@ -6,6 +6,18 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- **GitHub access is now required by default on every agent.** New per-agent
+  `github_access` boolean (defaults to `true`) in `fleet.yaml`. Previously a bot
+  only got a GitHub App if it declared a `github_app` block; now every agent is
+  expected to have its own GitHub App unless it explicitly opts out with
+  `github_access: false`. The `onboard` wizard's GitHub App steps (5 and 10) key
+  off this flag: an agent with `github_access: false` is skipped, and the whole
+  step is skipped only when every agent opts out. Permissions still resolve from
+  the bot-type defaults (overridable via the per-agent `github_app` block) when
+  access is required. Docs (`GITHUB-APPS.md`, `SETUP-A-FLEET.md`) updated.
+
 ## [0.8.3] — 2026-06-20
 
 ### Changed

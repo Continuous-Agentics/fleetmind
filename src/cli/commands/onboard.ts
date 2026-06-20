@@ -223,9 +223,15 @@ function secretIsReal(raw: string | null): boolean {
   return !!raw && !raw.includes("REPLACE_ME");
 }
 
-/** Does any agent declare a GitHub App? When none do, steps 5/10 are N/A. */
-function anyAgentNeedsGithubApp(agents: { github_app?: unknown }[]): boolean {
-  return agents.some(a => a.github_app != null);
+/** Does this agent require GitHub access? Every agent does by default; an
+ *  agent opts out with `github_access: false` in fleet.yaml. */
+function agentNeedsGithubApp(agent: { github_access?: boolean }): boolean {
+  return agent.github_access !== false;
+}
+
+/** Does any agent require GitHub access? When none do, steps 5/10 are N/A. */
+function anyAgentNeedsGithubApp(agents: { github_access?: boolean }[]): boolean {
+  return agents.some(agentNeedsGithubApp);
 }
 
 interface PreflightState {
@@ -302,11 +308,11 @@ async function detectRemoteState(args: {
   // Steps 5/10: GitHub Apps. Skip entirely when no agent declares one. When some
   // do, "done" once every such agent has an app-id parameter in SSM.
   let githubApps: "done" | "next" | "skip";
-  if (!anyAgentNeedsGithubApp(agents as { github_app?: unknown }[])) {
+  if (!anyAgentNeedsGithubApp(agents as { github_access?: boolean }[])) {
     githubApps = "skip";
   } else {
     try {
-      const needed = agents.filter(a => (a as { github_app?: unknown }).github_app != null);
+      const needed = agents.filter(a => agentNeedsGithubApp(a as { github_access?: boolean }));
       const stored = await Promise.all(needed.map(a =>
         ssmExistsViaClient(deps.ssm,
           `/fleetmind/${fleetName}/agents/${a.id}/github-app/app-id`).catch(() => false),
@@ -485,14 +491,15 @@ export async function runOnboard(
   }
 
   // ── Step 5: GitHub Apps ─────────────────────────────────────────────────────
-  // GitHub Apps are optional: only agents that declare a `github_app` block in
-  // fleet.yaml need one. When none do, skip the whole step (no owner prompt, no
-  // per-agent prompts) so fleets that don't touch GitHub aren't dragged through it.
-  const githubAppNeeded = anyAgentNeedsGithubApp(agents as { github_app?: unknown }[]);
+  // Every agent requires its own GitHub App by default. An agent opts out by
+  // setting `github_access: false` in fleet.yaml. When EVERY agent has opted
+  // out, skip the whole step (no owner prompt, no per-agent prompts) so fleets
+  // that genuinely don't touch GitHub aren't dragged through it.
+  const githubAppNeeded = anyAgentNeedsGithubApp(agents as { github_access?: boolean }[]);
   if (!githubAppNeeded) {
     header("Step 5 / 12 — GitHub Apps");
-    log.ok("  No agent declares a github_app in fleet.yaml — skipping.");
-    log.dim("  Add a github_app block to an agent (and re-run) if a bot needs repo access.");
+    log.ok("  Every agent has github_access: false in fleet.yaml — skipping.");
+    log.dim("  Remove github_access: false from an agent (and re-run) if a bot needs repo access.");
   } else {
   header("Step 5 / 12 — GitHub Apps");
   console.log("  Each bot needs its own GitHub App for repo access (PRs, issues, etc.)");
@@ -526,6 +533,11 @@ export async function runOnboard(
   }
 
   for (const agent of agents) {
+    // Honor per-agent opt-out: agents with github_access: false never get an App.
+    if (!agentNeedsGithubApp(agent as { github_access?: boolean })) {
+      log.dim(`  ${agent.emoji} ${agent.name}: github_access: false — skipping.`);
+      continue;
+    }
     const ssmKey = `/fleetmind/${fleetName}/agents/${agent.id}/github-app/app-id`;
     const alreadyInSsm = await ssmExistsViaClient(deps.ssm, ssmKey);
 
