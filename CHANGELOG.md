@@ -6,6 +6,8 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-06-20
+
 ### Changed
 
 - **`fleetmind onboard` pre-flight now detects real completion of the
