@@ -6,6 +6,16 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-07-09
+
+### Added
+
+- **Worker Self-Start Protocol (CON-91, [#238](https://github.com/Continuous-Agentics/fleetmind/pull/238)).** Workers can now self-start on Linear-assigned issues without a PM delegation event. Introduces the `worker-self-start` skill; updates `bot-reception` and `bot-delegation` skills for the new entry point; enforces SF-2 create-before-notice ordering so the task record exists before any inbox notification is delivered.
+
+### Fixed
+
+- **`mergeTask` now gates on lifecycle to prevent requires-human-signoff bypass (MF-1, [#236](https://github.com/Continuous-Agentics/fleetmind/pull/236)).** A task with the `requires-human-signoff` lifecycle could previously be merged from the `shipped` state without passing through `signed_off`. `mergeTask` now validates the lifecycle before allowing the transition.
+
 ## [0.8.5] — 2026-06-20
 
 ### Fixed
