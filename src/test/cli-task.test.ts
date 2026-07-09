@@ -207,7 +207,11 @@ function makeMockLedger(initial?: TaskRecord[]): { ledger: TaskLedgerLike; state
     async mergeTask(taskId, project) {
       state.calls.push({ method: "mergeTask", args: [taskId, project] });
       const record = state.records.get(taskId);
-      if (!record || !["shipped", "signed_off"].includes(record.status)) {
+      // Mirror the lifecycle-gated DDB condition:
+      // (status = shipped AND lifecycle = shipped-is-done) OR status = signed_off
+      const shippedIsDone = record?.status === "shipped" && record?.lifecycle === "shipped-is-done";
+      const signedOff = record?.status === "signed_off";
+      if (!record || (!shippedIsDone && !signedOff)) {
         throw new TaskConditionError(`merge condition failed for ${taskId}`);
       }
       state.records.set(taskId, {
@@ -598,8 +602,9 @@ describe("abandonTask", () => {
 // ── Tests: merge ──────────────────────────────────────────────────────────────
 
 describe("mergeTask", () => {
-  test("success — shipped→merged", async () => {
-    const rec = makeRecord({ status: "shipped" });
+  // MF-1 fix: shipped-is-done tasks may merge from shipped directly
+  test("success — shipped→merged (lifecycle: shipped-is-done)", async () => {
+    const rec = makeRecord({ status: "shipped", lifecycle: "shipped-is-done" });
     const { ledger, state } = makeMockLedger([rec]);
     await mergeTask({ taskId: "a1b2c3d4", fleet: "fleet.yaml" }, ledger);
     assert.equal(state.records.get("a1b2c3d4")?.status, "merged");
@@ -619,6 +624,34 @@ describe("mergeTask", () => {
       () => mergeTask({ taskId: "a1b2c3d4", fleet: "fleet.yaml" }, ledger),
       TaskConditionError
     );
+  });
+
+  // MF-1 regression tests — lifecycle gate on merge
+  test("MF-1 regression: shipped + requires-human-signoff → merge MUST fail (bypass blocked)", async () => {
+    // Before MF-1 fix, this would silently succeed, letting the human sign-off
+    // be skipped entirely. Now the lifecycle gate rejects it.
+    const rec = makeRecord({ status: "shipped", lifecycle: "requires-human-signoff" });
+    const { ledger } = makeMockLedger([rec]);
+    await assert.rejects(
+      () => mergeTask({ taskId: "a1b2c3d4", fleet: "fleet.yaml" }, ledger),
+      TaskConditionError
+    );
+  });
+
+  test("MF-1 regression: shipped + shipped-is-done → merge succeeds (no sign-off required)", async () => {
+    const rec = makeRecord({ status: "shipped", lifecycle: "shipped-is-done" });
+    const { ledger, state } = makeMockLedger([rec]);
+    await mergeTask({ taskId: "a1b2c3d4", fleet: "fleet.yaml" }, ledger);
+    assert.equal(state.records.get("a1b2c3d4")?.status, "merged");
+  });
+
+  test("MF-1 regression: signed_off (requires-human-signoff path) → merge succeeds", async () => {
+    // After a requires-human-signoff task passes through signoff, merging from
+    // signed_off is always permitted regardless of lifecycle.
+    const rec = makeRecord({ status: "signed_off", lifecycle: "requires-human-signoff" });
+    const { ledger, state } = makeMockLedger([rec]);
+    await mergeTask({ taskId: "a1b2c3d4", fleet: "fleet.yaml" }, ledger);
+    assert.equal(state.records.get("a1b2c3d4")?.status, "merged");
   });
 });
 
