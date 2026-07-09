@@ -1,16 +1,7 @@
 ---
 name: bot-reception
 version: 1.5.0
-description: >
-  Protocol for receiving task delegations from a PM bot over NATS transport.
-  Use when: (1) a NATS delegation event arrives, (2) you need to ship or block
-  a task, (3) a human asks you to do something directly. Covers NATS subscriber
-  startup, DDB write-health precheck, delegation event handling, opening a
-  Slack thread with the human requestor, DynamoDB lifecycle management
-  (ack/ship/block via `fleetmind task` CLI), S3 narrative writing via
-  `fleetmind narrative put`, progress events via `fleetmind nats progress`,
-  voice discipline, and ACP session heuristic. Slack is human-facing only —
-  no delegation envelopes are posted or received on Slack.
+description: "Worker protocol for NATS delegation receipt: session boot, DDB health precheck, task ack/ship/block via fleetmind task CLI, S3 narrative, and human-requestor Slack threading. Use when a NATS delegation arrives, a task needs to ship or block, or a human makes a direct request. Slack is human-facing only."
 ---
 
 # Bot Reception Protocol
@@ -375,36 +366,24 @@ If you can't write 2-5 non-obvious bullets, use `[]`.
 
 ## Handling Human Requests (Non-Delegation)
 
-Before acting, classify the request:
+Classify before acting:
 
 - **Discussion / one-liner:** just answer.
-- **New feature request, no Linear issue assigned to you:** push back — see
-  § Push-back below.
-- **Linear issue assigned to you, no NATS delegation:** follow the
-  `worker-self-start` skill.
-- **Real task without a tracker (bug fix, triage, informal request):** treat
-  like a delegation, skip task-id formality on the Slack surface, but **still
-  write a DDB row + S3 narrative with `--lifecycle shipped-is-done`** — see
-  § Informal-task ledger below.
+- **New feature request, no Linear issue assigned to you:** push back — see § Push-back.
+- **Linear issue assigned to you, no NATS delegation:** follow `worker-self-start`.
+- **Real task without a tracker (bug fix, triage, informal request):** still write a DDB row + S3 narrative with `--lifecycle shipped-is-done` — see § Informal-task ledger.
 
 ---
 
 ## Push-back (unlinked feature requests)
 
-When a human asks for new feature work but there is no Linear issue assigned
-to you:
+When asked for new feature work but no Linear issue is assigned to you:
 
-1. Reply once in the same channel/thread:
-   ```
-   This looks like new feature scope — can you create a Linear issue and assign
-   it to me? I'll kick off as soon as it's linked. (If there's already an issue,
-   share the link and I'll start now.)
-   ```
+1. Reply once: `This looks like new feature scope — can you create a Linear issue and assign it to me? I'll kick off as soon as it's linked. (If there's already an issue, share the link and I'll start now.)`
 2. Stop. Do not implement anything.
-3. When they share the Linear URL: verify it is assigned to you, then follow
-   the `worker-self-start` skill.
+3. When they share the Linear URL: verify assigned to you, then follow `worker-self-start`.
 
-One reply only, no repeats, no apologies, no workarounds.
+One reply only, no repeats, no workarounds.
 
 ---
 
