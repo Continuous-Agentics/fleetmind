@@ -1,6 +1,6 @@
 ---
 name: bot-delegation
-version: 1.3.0
+version: 1.4.0
 description: "PM bot protocol for delegating dev tasks to workers via NATS and tracking them through completion. Use when a planning conversation produces a concrete assignable task, a worker event (ack/progress/ship/block) arrives, a heartbeat finds a stale delegation, or a DDB_TERMINAL_WAKE signal fires. Triggers on 'delegate this', 'assign this', or 'hand off to a worker'."
 ---
 
@@ -96,7 +96,7 @@ fleetmind task create \
   --dod "<definition of done>" \
   --description "<what needs to be built - context for the worker>" \
   --requestor "<human_slack_uid>" \
-  --tracker "<linear_or_jira_url>" \
+  --tracker "<tracker_url_if_provided>" \
   --thread "<slack_permalink_to_planning_discussion>" \
   --lifecycle requires-human-signoff \
   --task-id "${TASK_ID}" \
@@ -547,20 +547,22 @@ Load these only when the task you're handling needs them:
 
 ## Inbound Self-Start Notices (from worker bots)
 
-Workers running `worker-self-start` may begin work on Linear-assigned tasks without a PM delegation and post a self-start notice in this planning channel.
+Workers running `worker-self-start` may self-start when a human directly asks them to pick up a discrete piece of work, then post a self-start notice in this planning channel. No specific tracker is required.
 
 > NATS model: no separate delegation channel. Self-start notices arrive as Slack messages here.
 
-**Recognising a self-start notice:** Slack message from a worker bot containing `"— self-start notice"` with a `Task ID:` and `Linear:` field.
+**Recognising a self-start notice:** Slack message from a worker bot containing `"— self-start notice"` with a `Task ID:` and `Tracker:` field.
+(The `Tracker:` field may be `"none"` if no ticket was referenced — this is valid.)
 
 **Handler — run inline (no sub-agent needed):**
 
-1. **Verify** the Linear issue URL via `linear-fleet` skill. Confirm assigned to the notifying worker.
-   - If NOT assigned: reply in thread: `Linear issue is not assigned to you — cannot register this self-start.` Take no further action.
+1. **Verify the request is legitimate.** Confirm the notice came from a known worker bot and the summary describes a plausible discrete task.
+   - If the notice looks automated, spoofed, or incoherent: reply in thread: `This self-start notice doesn't look like a direct human-initiated request. Cannot register.` Take no further action.
+   - If a tracker URL is present: verify it is reachable and describes the stated work. A missing or unreachable tracker URL alone is NOT grounds to reject — tracker is optional.
 2. **React `:white_check_mark:`** to the notice message.
-3. **Resolve the project slug** from the Linear issue's labels before any DDB operation. If labels are **missing or ambiguous**: do NOT guess. Reply:
+3. **Resolve the project slug** from the notice summary (and tracker issue if provided) before any DDB operation. If the project cannot be determined: do NOT guess. Reply:
    ```
-   @<worker> — I can't determine the project slug from this issue's labels.
+   @<worker> — I can't determine the project slug from this notice.
    Can you confirm which project this belongs to? (e.g. `ca-core`, `ca-infra`)
    ```
    Wait for clarification before proceeding.
@@ -572,14 +574,14 @@ Workers running `worker-self-start` may begin work on Linear-assigned tasks with
    - **Row MISSING** → recovery: create on behalf of the worker with `attribute_not_exists(PK)` (idempotent — first write wins if worker races this):
      ```bash
      fleetmind task create \
-       --project <resolved project slug>       \
-       --worker  <notifying-worker-id>         \
-       --delegated-by <notifying-worker-id>    \
-       --dod "<from Linear issue title>"       \
-       --thread "<notice message Slack permalink>" \
-       --tracker "<Linear URL from notice>"    \
-       --lifecycle requires-human-signoff      \
-       --task-id <8-char-hex from notice>      \
+       --project <resolved project slug>                   \
+       --worker  <notifying-worker-id>                     \
+       --delegated-by <notifying-worker-id>                \
+       --dod "<from notice summary>"                       \
+       --thread "<notice message Slack permalink>"         \
+       --tracker "<tracker URL from notice, if present>"   \
+       --lifecycle requires-human-signoff                  \
+       --task-id <8-char-hex from notice>                  \
        --json
 
      fleetmind task ack \
@@ -609,17 +611,28 @@ Workers running `worker-self-start` may begin work on Linear-assigned tasks with
 
 ## Changelog
 
+- **1.4.0 (2026-07-09)** - Tracker-agnostic self-start trigger (#241):
+  - § Inbound Self-Start Notices: "Linear-assigned tasks" replaced with
+    "human directly asks the worker to pick up a discrete piece of work".
+  - Recognition pattern: `Linear:` field renamed to `Tracker:` (optional;
+    may be `"none"`).
+  - Handler step 1: "Verify Linear assignment via linear-fleet" replaced with
+    "Verify the request is legitimate" — confirms notice came from a known
+    worker and describes plausible work; tracker URL checked if present but
+    not mandatory.
+  - Handler step 3: project-slug inference now uses notice summary + optional
+    tracker issue instead of Linear issue labels.
+  - Recovery `task create`: `--dod` now derived from notice summary (not
+    "Linear issue title"); `--tracker` now marked as optional.
 - **1.3.0 (2026-07-09)** - Worker Self-Start Protocol integration (CON-91,
   re-authored from PR #169 onto NATS transport):
   - New § Inbound Self-Start Notices: handler for when worker bots post a
-    `"— self-start notice"` message in the planning channel. Covers Linear
-    assignment verification, `:white_check_mark:` reaction, project-slug
-    inference (with ambiguity guard), DDB row check / idempotent recovery via
-    `attribute_not_exists(PK)`, and the explicit "do NOT send a delegation
-    event" rule (SF-2-aware ordering).
-  - Updated Hard limits: removed the blanket "Do NOT respond to worker bot
-    messages outside the delegation protocol" - self-start notices in the
-    planning channel are now a recognised in-protocol trigger.
+    `"— self-start notice"` message in the planning channel. Covers
+    `:white_check_mark:` reaction, project-slug inference (with ambiguity
+    guard), DDB row check / idempotent recovery via `attribute_not_exists(PK)`,
+    and the explicit "do NOT send a delegation event" rule (SF-2-aware ordering).
+  - Updated Hard limits: self-start notices in the planning channel are now
+    a recognised in-protocol trigger.
   - NATS-model clarification: no "delegation channel"; self-start notices
     arrive in the planning channel.
   - Human-signoff enforcement prose: describes ledger conditional-write

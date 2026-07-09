@@ -1,6 +1,6 @@
 ---
 name: bot-reception
-version: 1.5.0
+version: 1.6.0
 description: "Worker protocol for NATS delegation receipt: session boot, DDB health precheck, task ack/ship/block via fleetmind task CLI, S3 narrative, and human-requestor Slack threading. Use when a NATS delegation arrives, a task needs to ship or block, or a human makes a direct request. Slack is human-facing only."
 ---
 
@@ -81,7 +81,7 @@ The subscriber emits one JSON line per delegation event:
   "definition_of_done": "All tests pass and PR merged.",
   "description": "Refactor the auth module to use JWT instead of sessions.",
   "requestor": "U0ASYLGHU9E",
-  "tracker_link": "https://linear.app/acme/issue/ENG-42"
+  "tracker_link": "https://github.com/acme/repo/issues/42"
 }
 ```
 
@@ -369,19 +369,19 @@ If you can't write 2-5 non-obvious bullets, use `[]`.
 Classify before acting:
 
 - **Discussion / one-liner:** just answer.
-- **New feature request, no Linear issue assigned to you:** push back — see § Push-back.
-- **Linear issue assigned to you, no NATS delegation:** follow `worker-self-start`.
+- **New feature request (vague scope or indirect request):** push back — see § Push-back.
+- **Human directly asks you to pick up a discrete piece of work (non-delegation):** follow `worker-self-start`.
 - **Real task without a tracker (bug fix, triage, informal request):** still write a DDB row + S3 narrative with `--lifecycle shipped-is-done` — see § Informal-task ledger.
 
 ---
 
 ## Push-back (unlinked feature requests)
 
-When asked for new feature work but no Linear issue is assigned to you:
+When asked for new feature work but the request is vague, indirect, or scope is unclear:
 
-1. Reply once: `This looks like new feature scope — can you create a Linear issue and assign it to me? I'll kick off as soon as it's linked. (If there's already an issue, share the link and I'll start now.)`
+1. Reply once: `This looks like new feature scope — can you describe exactly what needs doing and confirm you'd like me to start? If there's a ticket or issue URL, share it and I'll begin now.`
 2. Stop. Do not implement anything.
-3. When they share the Linear URL: verify assigned to you, then follow `worker-self-start`.
+3. When they confirm (and optionally share a tracker URL): follow `worker-self-start`.
 
 One reply only, no repeats, no workarounds.
 
@@ -484,13 +484,18 @@ On completion/blocked: move to `## Recently Shipped` or `## Blocked` with outcom
 
 ## Changelog
 
+- **1.6.0 (2026-07-09)** — Tracker-agnostic self-start trigger (#241):
+  - § Handling Human Requests (Non-Delegation): removed Linear-specific bullets;
+    "Linear issue assigned to you" replaced with "human directly asks you to pick
+    up a discrete piece of work (non-delegation) → worker-self-start".
+  - § Push-back: rewritten tracker-agnostic; no longer asks human to create a
+    Linear issue; asks for task description + optional tracker URL.
 - **1.5.0 (2026-07-09)** — Worker Self-Start Protocol integration (CON-91,
   re-authored from PR #169 onto NATS transport):
-  - § Handling Human Requests renamed to "Non-Delegation" (NATS model has no
-    envelopes) and now classifies requests before acting: discussion, push-back
-    for unlinked feature requests, self-start for Linear-assigned tasks.
-  - New § Push-back: exact reply text for unlinked feature requests; routes
-    Linear-assigned tasks to `worker-self-start` skill.
+  - § Handling Human Requests renamed to "Non-Delegation"; classifies requests:
+    discussion, push-back for unlinked feature requests, self-start for
+    Linear-assigned tasks.
+  - New § Push-back: exact reply text for unlinked feature requests.
   - § Informal-task ledger CLI corrected: `--lifecycle informal` and
     `--status accepted` are not valid CLI options (bug in v1.4.0 / main);
     replaced with `--lifecycle shipped-is-done` and explicit `task ack` step.
