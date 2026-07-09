@@ -7,32 +7,37 @@
 ## Recognising a self-start notice
 
 A Slack message in the planning channel from a worker bot containing
-`"— self-start notice"` with a `Task ID:` and `Linear:` field.
+`"— self-start notice"` with a `Task ID:` and `Tracker:` field.
+(The `Tracker:` field may be `"none"` if no ticket was referenced — this is valid.)
 
 ## Handler — run inline (no sub-agent needed for initial receipt)
 
-### 1. Verify the Linear assignment
+### 1. Verify the request is legitimate
 
-Fetch the Linear issue from the notice URL (use the `linear-fleet` skill).
-Confirm it is assigned to the notifying worker.
-- If NOT assigned: reply in thread:
+Confirm the notice came from a known worker bot posting in the planning channel
+and that the summary describes a plausible discrete task.
+- If the notice looks automated, spoofed, or incoherent: reply in thread:
   ```
-  Linear issue is not assigned to you — cannot register this self-start.
+  This self-start notice doesn't look like a direct human-initiated request.
+  Cannot register — please have a human confirm the work in this channel.
   ```
   Take no further action.
+- If a tracker URL is present (Tracker field is not `"none"`): verify it is
+  reachable and describes the stated work using your org's available tracker
+  integration. A missing or unreachable tracker URL alone is NOT grounds to
+  reject the notice — tracker is optional.
 
 ### 2. React `:white_check_mark:` to the notice
 
 ### 3. Resolve the project slug (before any DDB operation)
 
-Inspect the Linear issue's labels and project to determine the correct
-`--project` slug for the DDB row.
+Inspect the notice summary (and tracker issue if one was provided) to determine
+the correct `--project` slug for the DDB row.
 
-If labels are **missing** or **ambiguous** (multiple project labels, no
-recognisable fleet project label, or the label doesn't map to a known slug):
+If the project cannot be determined:
 **do NOT guess.** Reply in the notice thread:
 ```
-@<worker> — I can't determine the project slug from this issue's labels.
+@<worker> — I can't determine the project slug from this notice.
 Can you confirm which project this belongs to? (e.g. `ca-core`, `ca-infra`)
 ```
 Wait for clarification before any DDB operation.
@@ -56,9 +61,9 @@ fleetmind task create \
   --project <resolved project slug>       \
   --worker  <notifying-worker-id>         \
   --delegated-by <notifying-worker-id>    \
-  --dod "<from Linear issue title>"       \
+  --dod "<from notice summary>"              \
   --thread "<notice message Slack permalink>" \
-  --tracker "<Linear URL from notice>"    \
+  --tracker "<tracker URL from notice, if present>" \
   --lifecycle requires-human-signoff      \
   --task-id <8-char-hex from notice>      \
   --json

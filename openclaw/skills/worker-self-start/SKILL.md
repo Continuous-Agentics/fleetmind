@@ -1,7 +1,7 @@
 ---
 name: worker-self-start
-version: 1.0.0
-description: "Linear assignment is approval to self-start without a PM bot delegation. Use when a Linear issue is assigned to you but no delegation has arrived, or when pushing back on unlinked feature requests. PM bots receiving a worker self-start notice: see bot-delegation § Inbound Self-Start Notices."
+version: 1.1.0
+description: "Tracker-agnostic worker self-start. Use when a human directly asks you (not via PM delegation) to pick up a discrete piece of work. The human MAY supply a ticket URL (Linear, Jira, GitHub Issues, etc.) recorded as --tracker; no tracker is required and no automated tracker trigger exists. PM bots receiving a worker self-start notice: see bot-delegation § Inbound Self-Start Notices."
 ---
 
 # Worker Self-Start Protocol
@@ -10,7 +10,7 @@ description: "Linear assignment is approval to self-start without a PM bot deleg
 
 ## The core rule
 
-**Linear assignment = approval.** When a Linear issue is assigned to you, begin work without waiting for a PM bot delegation. Everything else: push back.
+**A human directly asking you (NOT via PM delegation) to pick up a discrete piece of work = approval to self-start.** The human MAY supply a ticket or issue URL (Linear, Jira, GitHub Issues, or any other tracker) which you record as the `--tracker` reference. No specific tracker is assumed, and there is no automated tracker trigger — self-start is always initiated by a human speaking to you directly. For vague or untracked requests, push back first.
 
 ---
 
@@ -19,19 +19,19 @@ description: "Linear assignment is approval to self-start without a PM bot deleg
 | Check | Action |
 |-------|--------|
 | NATS delegation event arrived (from PM bot) | → `bot-reception`. This skill doesn't apply. |
-| Linear issue assigned to me | → § Self-start flow |
-| No Linear issue, or issue not assigned to me | → § Push-back |
-| Spike / design question (< 1 day, no issue) | → § Informal start |
+| Human directly asks you to pick up a discrete piece of work (non-delegation) | → § Self-start flow |
+| Request is vague, indirect, or scope is unclear | → § Push-back |
+| Spike / design question (< 1 day, no tracker issue) | → § Informal start |
 
 ---
 
 ## Push-back
 
-When asked for new feature work without a linked, me-assigned Linear issue:
+When asked for new feature work but the request is vague, indirect, or scope is unclear:
 
-1. Reply once: `This looks like new feature scope — can you create a Linear issue and assign it to me? I'll kick off as soon as it's linked. (If there's already an issue, share the link and I'll start now.)`
+1. Reply once: `This looks like new feature scope — can you describe exactly what needs doing and confirm you'd like me to start? If there's a ticket or issue URL, share it and I'll begin now.`
 2. Stop. Do not implement anything.
-3. When they share the Linear URL: verify assigned to you → § Self-start flow.
+3. When they confirm (and optionally share a tracker URL): record it as `--tracker` if provided → § Self-start flow.
 
 One reply, no repeats, no caveats.
 
@@ -51,7 +51,7 @@ TASK_ID=$(openssl rand -hex 4)
 
 Add to `## In Progress`:
 ```
-- **<TASK_ID>** — <summary> | self-start | Linear: <url>
+- **<TASK_ID>** — <summary> | self-start | tracker: <url-or-none>
 ```
 
 ### Step 3. Create the DDB row (before any notice)
@@ -62,7 +62,7 @@ fleetmind task create \
   --worker  <your-agent-id>                 \
   --delegated-by <your-agent-id>            \
   --dod "<definition of done — one line>"   \
-  --tracker "<Linear issue URL>"            \
+  --tracker "<tracker URL if provided>"     \
   --lifecycle requires-human-signoff        \
   --task-id  "${TASK_ID}"                   \
   --json
@@ -70,7 +70,7 @@ fleetmind task create \
 
 - `--lifecycle requires-human-signoff` — sign-off enforced by the ledger conditional-write (`ConditionExpression` in `TaskLedger`, PR #236). Not enforced at IAM level; raw-SDK bypass is the known gap tracked in #237.
 - `--delegated-by <your-agent-id>` — self-delegation; PM bot did not create this row.
-- `--tracker` — mandatory for Linear-assigned self-starts.
+- `--tracker` — optional. Include when the human provides a tracker URL (Linear, Jira, GitHub Issues, or any other system). Omit if no ticket was referenced.
 - `--thread` — omit here (notice not yet posted). PM bot falls back to `:main` session for ship/block wakes. SF-2 takes precedence over this limitation.
 
 `fleetmind task create` uses `attribute_not_exists(PK)` — a duplicate create from a racing PM recovery write is a safe no-op returning `ConditionalCheckFailedException`.
@@ -98,14 +98,14 @@ Post a **top-level message** (not a reply) within 60 seconds of beginning work. 
 <@PM_BOT_SLACK_ID> — self-start notice
 
 Worker: <your name and emoji>
-Linear: <full Linear issue URL>
+Tracker: <issue URL if provided, otherwise "none">
 Task ID: <TASK_ID>
 Summary: <one sentence — what you're starting and why>
 ```
 
 Also in your home channel:
 ```
-🏃 Self-starting on <Linear issue title> (TASK#<TASK_ID>). Linear: <url>
+🏃 Self-starting on <task summary> (TASK#<TASK_ID>).<if tracker: " Tracker: <url>">
 ```
 
 ### Step 6. Do the work silently
@@ -137,16 +137,19 @@ PM bot receiving a worker self-start notice in the planning channel → see
 ## Hard limits
 
 - ❌ Never self-start infrastructure changes (Terraform, AWS API writes) without a PR.
-- ❌ Never pick up a Linear issue assigned to another worker.
+- ❌ Never pick up work assigned to a different worker bot.
 - ❌ Never widen scope without human or PM bot sign-off.
 - ❌ Never post the self-start notice before the DDB row exists (SF-2).
 - ❌ Never claim IAM-level enforcement of `requires-human-signoff` (#237 tracks the gap).
-- ✅ Create a DDB row for every self-started Linear task.
-- ✅ Push back on unlinked feature requests — every time.
+- ❌ Never self-start based on an automated tracker event alone — a human must directly ask you. Tracker URLs are reference data, not triggers.
+- ✅ Create a DDB row for every self-started task.
+- ✅ Push back on vague or unconfirmed requests — every time.
 - ✅ Use `attribute_not_exists(PK)` on DDB row create.
+- ✅ Record the tracker URL in `--tracker` if the human provided one; omit if no ticket was referenced.
 
 ---
 
 ## Changelog
 
+- **1.1.0 (2026-07-09)** — Tracker-agnostic self-start trigger (#241): removed Linear coupling; trigger is now "a human directly asks you" (not a Linear assignment); `Linear:` notice field renamed to `Tracker:` (optional); push-back copy rewritten; `--tracker` is now optional; hard limits updated; frontmatter rewritten.
 - **1.0.0 (2026-07-09)** — Initial release (CON-91, re-authored from PR #169 onto NATS transport): no "delegation channel"; SF-2 ordering (DDB before notice); `attribute_not_exists(PK)` idempotency; `--lifecycle shipped-is-done` (not `informal`); IAM gap (#237); PM inbound handler moved to references/.
