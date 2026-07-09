@@ -1,16 +1,7 @@
 ---
 name: bot-reception
-version: 1.4.0
-description: >
-  Protocol for receiving task delegations from a PM bot over NATS transport.
-  Use when: (1) a NATS delegation event arrives, (2) you need to ship or block
-  a task, (3) a human asks you to do something directly. Covers NATS subscriber
-  startup, DDB write-health precheck, delegation event handling, opening a
-  Slack thread with the human requestor, DynamoDB lifecycle management
-  (ack/ship/block via `fleetmind task` CLI), S3 narrative writing via
-  `fleetmind narrative put`, progress events via `fleetmind nats progress`,
-  voice discipline, and ACP session heuristic. Slack is human-facing only —
-  no delegation envelopes are posted or received on Slack.
+version: 1.5.0
+description: "Worker protocol for NATS delegation receipt: session boot, DDB health precheck, task ack/ship/block via fleetmind task CLI, S3 narrative, and human-requestor Slack threading. Use when a NATS delegation arrives, a task needs to ship or block, or a human makes a direct request. Slack is human-facing only."
 ---
 
 # Bot Reception Protocol
@@ -373,12 +364,26 @@ If you can't write 2-5 non-obvious bullets, use `[]`.
 
 ---
 
-## Handling Human Requests (Non-Envelope)
+## Handling Human Requests (Non-Delegation)
 
-- **Discussion:** just answer.
-- **Real task:** treat like a delegation, skip task-id formality on the Slack surface,
-  but **still write a DDB row + S3 narrative under `lifecycle: informal`** — see
-  § Informal-task ledger below.
+Classify before acting:
+
+- **Discussion / one-liner:** just answer.
+- **New feature request, no Linear issue assigned to you:** push back — see § Push-back.
+- **Linear issue assigned to you, no NATS delegation:** follow `worker-self-start`.
+- **Real task without a tracker (bug fix, triage, informal request):** still write a DDB row + S3 narrative with `--lifecycle shipped-is-done` — see § Informal-task ledger.
+
+---
+
+## Push-back (unlinked feature requests)
+
+When asked for new feature work but no Linear issue is assigned to you:
+
+1. Reply once: `This looks like new feature scope — can you create a Linear issue and assign it to me? I'll kick off as soon as it's linked. (If there's already an issue, share the link and I'll start now.)`
+2. Stop. Do not implement anything.
+3. When they share the Linear URL: verify assigned to you, then follow `worker-self-start`.
+
+One reply only, no repeats, no workarounds.
 
 ---
 
@@ -420,16 +425,27 @@ fleetmind task create \
   --delegated-by <your-agent-id> \
   --dod "<one-line summary, no PII>" \
   --thread "<slack permalink to the thread the work originated in>" \
-  --lifecycle informal \
+  --envelope-ts "<timestamp of the triggering Slack message>" \
+  --lifecycle shipped-is-done \
   --task-id "${TASK_ID}" \
-  --status accepted \
   --json
+
+# Advance from 'delegated' to 'accepted'
+fleetmind task ack \
+  --task-id "${TASK_ID}" \
+  --worker <your-agent-id> \
+  --project <best-fit-project-slug>
 ```
 
 Key differences from a standard delegation row:
-- `--lifecycle informal` (the PM bot's signoff watchdog ignores these).
+- `--lifecycle shipped-is-done` — no human sign-off required; task closes
+  automatically when shipped. (`--lifecycle informal` is not a valid CLI
+  option; `--status accepted` is not a valid flag on `task create`.)
 - `--delegated-by` = your own agent ID (self-delegation).
-- `--status accepted` from the start (no separate `delegated` step).
+- `task ack` after `task create` advances the row from `delegated` to
+  `accepted`. There is no `--status` flag on `task create`.
+- `--envelope-ts` — use the timestamp of the Slack message that triggered
+  the work (optional for NATS-only fleets).
 - No tracker link by default.
 
 Generate the task ID at the moment work becomes meaningful (first commit, first
@@ -468,6 +484,17 @@ On completion/blocked: move to `## Recently Shipped` or `## Blocked` with outcom
 
 ## Changelog
 
+- **1.5.0 (2026-07-09)** — Worker Self-Start Protocol integration (CON-91,
+  re-authored from PR #169 onto NATS transport):
+  - § Handling Human Requests renamed to "Non-Delegation" (NATS model has no
+    envelopes) and now classifies requests before acting: discussion, push-back
+    for unlinked feature requests, self-start for Linear-assigned tasks.
+  - New § Push-back: exact reply text for unlinked feature requests; routes
+    Linear-assigned tasks to `worker-self-start` skill.
+  - § Informal-task ledger CLI corrected: `--lifecycle informal` and
+    `--status accepted` are not valid CLI options (bug in v1.4.0 / main);
+    replaced with `--lifecycle shipped-is-done` and explicit `task ack` step.
+  - `--envelope-ts` documented as optional for NATS-only fleets.
 - **1.2.0 (2026-05-21)** — Rewrite for NATS-only transport (CON-115):
   - Removed Slack envelope recognition entirely. Delegation arrives via NATS
     subscriber, not a Slack message with `Task ID:` / `React :eyes:`.

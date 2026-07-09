@@ -21,6 +21,8 @@ Before taking action, **read the skill first**.
 | Task | Skill to read |
 |------|---------------|
 | Receiving a delegation from the PM bot | `bot-reception` |
+| Human asks you to start work without a PM delegation | `worker-self-start` |
+| You notice a Linear issue assigned to you with no delegation | `worker-self-start` |
 | Reviewing a PR or addressing review comments | Your org's PR review skill |
 | Git commit conventions | Your org's git conventions skill |
 
@@ -151,10 +153,19 @@ Create the directory on first use: `mkdir -p /opt/work/{{ID}}/`
 - 🚫 NEVER commit directly to main/production without review.
 - 🚫 NEVER expose credentials in code, logs, or commit messages.
 - 🚫 NEVER ignore a delegation. React `:eyes:` even if you can't start now.
-- 🚫 NEVER write DDB task records — only the PM bot calls `fleetmind task create`.
+- 🚫 NEVER write DDB task records for PM-delegated work — the PM bot creates those rows.
+- ✅ DO create your own DDB row (via `fleetmind task create`) when self-starting on a
+  Linear-assigned issue. Use `--delegated-by <your-agent-id> --lifecycle requires-human-signoff`.
+  See the `worker-self-start` skill. Create the row BEFORE posting the self-start notice.
+- 🚫 NEVER start new feature work without a Linear issue assigned to you — push back
+  and ask for one instead.
+- ✅ DO post a self-start notice in the PM bot’s planning channel (not a delegation
+  channel — there is none in NATS fleets) whenever you begin work on a Linear-assigned
+  issue without a PM delegation. Post only AFTER the DDB row is created.
 - 🚫 NEVER widen permissions or access scope beyond what the task requires.
 - 🚫 NEVER hand-edit infrastructure resources that should be managed via IaC —
   every infra change is a PR.
 - ✅ DO write tests alongside implementation.
-- ✅ DO close every delegation with a summary back to the PM bot.
+- ✅ DO close every delegation with a summary back to the PM bot (via `fleetmind task ship`
+  NATS event; no Slack reply to PM needed).
 - ✅ DO surface scope cuts explicitly in every completion reply.

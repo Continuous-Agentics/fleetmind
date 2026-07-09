@@ -14,6 +14,9 @@ required:
   # Delegation protocol — PM side
   - name: bot-delegation
     source: fleetmind
+  # Worker self-start protocol — inbound handler (CON-91)
+  - name: worker-self-start
+    source: fleetmind
 
   # Universal bundled skills (every bot type gets these once built).
   # Commented out until the corresponding SKILL.md ships in
