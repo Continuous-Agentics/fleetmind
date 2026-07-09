@@ -68,7 +68,7 @@ fleetmind task create \
   --json
 ```
 
-- `--lifecycle requires-human-signoff` — sign-off enforced at CLI level (PR #236). IAM gap tracked in #237; do not overclaim.
+- `--lifecycle requires-human-signoff` — sign-off enforced by the ledger conditional-write (`ConditionExpression` in `TaskLedger`, PR #236). Not enforced at IAM level; raw-SDK bypass is the known gap tracked in #237.
 - `--delegated-by <your-agent-id>` — self-delegation; PM bot did not create this row.
 - `--tracker` — mandatory for Linear-assigned self-starts.
 - `--thread` — omit here (notice not yet posted). PM bot falls back to `:main` session for ship/block wakes. SF-2 takes precedence over this limitation.
@@ -77,6 +77,10 @@ fleetmind task create \
 
 ### Step 4. Self-acknowledge (`delegated` → `accepted`)
 
+If your worker-mode NATS subscriber (`fleetmind nats subscribe --mode worker`) is running, it will **auto-ack** this delegation the moment `fleetmind task create` publishes the NATS `delegation` event — no manual step needed.
+
+Only run `task ack` manually if the row is still `delegated` (subscriber was not running when the row was created):
+
 ```bash
 fleetmind task ack \
   --task-id "${TASK_ID}"       \
@@ -84,7 +88,7 @@ fleetmind task ack \
   --project <best-fit-project-slug>
 ```
 
-No `--status` flag on `task create`; `task ack` is always required.
+If this fails with `TaskConditionError`, the subscriber already acked it — treat that as a no-op (already accepted).
 
 ### Step 5. Post self-start notice in the PM bot's planning channel
 

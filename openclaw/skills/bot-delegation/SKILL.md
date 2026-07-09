@@ -612,7 +612,7 @@ Workers running `worker-self-start` may begin work on Linear-assigned tasks with
 - **1.3.0 (2026-07-09)** - Worker Self-Start Protocol integration (CON-91,
   re-authored from PR #169 onto NATS transport):
   - New § Inbound Self-Start Notices: handler for when worker bots post a
-    `"- self-start notice"` message in the planning channel. Covers Linear
+    `"— self-start notice"` message in the planning channel. Covers Linear
     assignment verification, `:white_check_mark:` reaction, project-slug
     inference (with ambiguity guard), DDB row check / idempotent recovery via
     `attribute_not_exists(PK)`, and the explicit "do NOT send a delegation
