@@ -113,7 +113,7 @@ Side transitions: any non-terminal state → `blocked` or `abandoned`
 | `accepted` | Worker only | `status = delegated AND worker = :worker` |
 | `shipped` | Worker only | `status = accepted AND worker = :worker` |
 | `signed_off` | Sign-off role | `status = shipped AND lifecycle = requires-human-signoff` |
-| `merged` | PM or worker | `status IN (shipped, signed_off)` |
+| `merged` | PM or worker | `(status = shipped AND lifecycle = shipped-is-done) OR status = signed_off` |
 | `blocked` | Worker only | `status IN (delegated, accepted) AND worker = :worker` |
 | `abandoned` | PM bot only | `status NOT IN (merged, abandoned)` |
 

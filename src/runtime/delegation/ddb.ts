@@ -8,7 +8,7 @@
  *   accepted:             status = delegated AND worker = :worker
  *   shipped:              status = accepted  AND worker = :worker
  *   signed_off:           status = shipped   AND lifecycle = requires-human-signoff
- *   merged:               status IN (shipped, signed_off)
+ *   merged:               (status = shipped AND lifecycle = shipped-is-done) OR status = signed_off
  *   blocked:              status IN (delegated, accepted) AND worker = :worker
  *   abandoned:            status NOT IN (merged, abandoned)
  *
@@ -318,7 +318,11 @@ export class TaskLedger {
 
   /**
    * Mark a task merged.
-   * Condition: status IN (shipped, signed_off)
+   * Condition: (status = shipped AND lifecycle = shipped-is-done) OR status = signed_off
+   *
+   * Requires-human-signoff tasks CANNOT merge directly from shipped — they must
+   * pass through signed_off first. Only shipped-is-done tasks may merge straight
+   * from the shipped state.
    *
    * `project` is optional — if omitted, fetched via GetItem first.
    */
@@ -328,12 +332,13 @@ export class TaskLedger {
     await this._updateStatus(taskId, {
       updateExpression:
         "SET #st = :merged, merged_at = :now, GSI1PK = :gsi1pk, GSI2PK = :gsi2pk",
-      conditionExpression: "#st = :shipped OR #st = :signed_off",
+      conditionExpression: "(#st = :shipped AND lifecycle = :shipped_is_done) OR #st = :signed_off",
       expressionAttributeNames: { "#st": "status" },
       expressionAttributeValues: {
         ":merged": "merged",
         ":shipped": "shipped",
         ":signed_off": "signed_off",
+        ":shipped_is_done": "shipped-is-done",
         ":now": now,
         ":gsi1pk": gsi1pk(proj, "merged"),
         ":gsi2pk": gsi2pk("merged"),
