@@ -1,6 +1,6 @@
 ---
 name: bot-delegation
-version: 1.2.1
+version: 1.3.0
 description: >
   Delegate concrete dev work from a project-manager bot to worker bots via
   NATS transport, track through completion, and report back to the human.
@@ -557,13 +557,91 @@ Load these only when the task you're handling needs them:
   sub-agent (close-the-loop, In-Review, signoff, blocked). Each template embeds
   the § 7a hard rule verbatim. **Always copy from here; never compose ad-hoc.**
 
+## Inbound Self-Start Notices (from worker bots)
+
+Workers running the `worker-self-start` skill may begin work on Linear-assigned
+tasks without a PM bot delegation and post a self-start notice in this planning
+channel.
+
+> **Channel note (NATS model):** In NATS fleets there is no separate delegation
+> channel — delegation is NATS-only. Worker self-start notices arrive as Slack
+> messages in the PM bot’s planning channel, where the PM bot is already active.
+
+**Recognising a self-start notice:** a Slack message in the planning channel
+from a worker bot containing `"— self-start notice"` with a `Task ID:` and
+`Linear:` field.
+
+**Handler — run inline (no sub-agent needed for initial receipt):**
+
+1. **Verify** the Linear issue URL in the notice using the `linear-fleet` skill.
+   Confirm the issue is assigned to the notifying worker.
+   - If NOT assigned: reply in thread:
+     ```
+     Linear issue is not assigned to you — cannot register this self-start.
+     ```
+     Take no further action.
+2. **React `:white_check_mark:`** to the notice message.
+3. **Resolve the project slug** before any DDB operation. Inspect the Linear
+   issue’s labels and project to determine the correct `--project` slug.
+   - If labels are **missing or ambiguous** (multiple project labels, no
+     recognisable fleet project label, or the label doesn’t map to a known slug):
+     **do NOT guess.** Reply in the notice thread:
+     ```
+     @<worker> — I can’t determine the project slug from this issue’s labels.
+     Can you confirm which project this belongs to? (e.g. `ca-core`, `ca-infra`)
+     ```
+     Wait for clarification before any DDB operation.
+4. **Check DDB** for the task ID in the notice:
+   ```bash
+   fleetmind task get --task-id <8-char-hex> --json
+   ```
+   - **Row exists** → no DDB action needed; the worker created it correctly
+     (the normal, SF-2-compliant path — worker created row before posting
+     the notice). Skip to step 5.
+   - **Row MISSING** → recovery path (worker crashed before creating the row).
+     Create on behalf of the worker using `attribute_not_exists(PK)` so the
+     create is idempotent — if the worker’s own `task create` races this call,
+     the first write wins and the second is a safe no-op:
+     ```bash
+     fleetmind task create \
+       --project <resolved project slug>       \
+       --worker  <notifying-worker-id>         \
+       --delegated-by <notifying-worker-id>    \
+       --dod "<from Linear issue title>"       \
+       --thread "<notice message Slack permalink>" \
+       --tracker "<Linear URL from notice>"    \
+       --lifecycle requires-human-signoff      \
+       --task-id <8-char-hex from notice>      \
+       --json
+
+     fleetmind task ack \
+       --task-id <8-char-hex from notice>      \
+       --worker  <notifying-worker-id>         \
+       --project <resolved project slug>
+     ```
+     If `task create` returns a `ConditionalCheckFailedException`, the worker’s
+     row already exists — treat as "Row exists" above.
+5. **Do NOT** post a NATS delegation event or a delegation envelope. The worker
+   is already running; a delegation event would trigger a duplicate ack and a
+   duplicate DDB lifecycle transition.
+6. **Add to `memory/active-delegations.md`** under `## Active` — same format
+   as a PM-delegated task, but mark it `[self-start]` in the notes column.
+   The task enters the normal signoff-watchdog lifecycle.
+   Human sign-off is required before the row can move to `signed_off`
+   (enforced by the `mergeTask` conditional write per PR #236; note: IAM-level
+   gap remains, tracked in #237).
+
+---
+
 ## Hard limits
 
 - 🚫 Do NOT delegate ambiguous work. Push back first.
 - 🚫 Do NOT post in worker channels. Delegation is NATS-only; Slack is human-facing only.
 - 🚫 Do NOT write code, run deploys, or modify infrastructure. Orchestrate.
 - 🚫 Do NOT rely on `active-delegations.md` for live state — query DDB instead.
-- 🚫 Do NOT respond to worker bot messages outside the delegation protocol.
+- 🚫 Do NOT respond to worker bot messages outside the delegation protocol
+  (exception: self-start notices from workers in the planning channel — see
+  § Inbound Self-Start Notices).
 - 🚫 Do NOT post close-the-loop summaries inline on a wake turn — spawn a sub-agent.
 - ✅ Always close the loop in the planning thread on every delegation.
 - ✅ Always query DDB on heartbeat for live task state.
@@ -571,6 +649,21 @@ Load these only when the task you're handling needs them:
 
 ## Changelog
 
+- **1.3.0 (2026-07-09)** — Worker Self-Start Protocol integration (CON-91,
+  re-authored from PR #169 onto NATS transport):
+  - New § Inbound Self-Start Notices: handler for when worker bots post a
+    `"— self-start notice"` message in the planning channel. Covers Linear
+    assignment verification, `:white_check_mark:` reaction, project-slug
+    inference (with ambiguity guard), DDB row check / idempotent recovery via
+    `attribute_not_exists(PK)`, and the explicit "do NOT send a delegation
+    event" rule (SF-2-aware ordering).
+  - Updated Hard limits: removed the blanket "Do NOT respond to worker bot
+    messages outside the delegation protocol" — self-start notices in the
+    planning channel are now a recognised in-protocol trigger.
+  - NATS-model clarification: no "delegation channel"; self-start notices
+    arrive in the planning channel.
+  - Human-signoff enforcement prose: describes ledger conditional-write
+    (PR #236); notes IAM gap tracked in #237; does not close #237.
 - **1.2.1 (2026-05-27)** — Documentation fix: Step 4 minimum fields now
   correctly reference `Source planning channel` + `Source planning thread`
   instead of removed `thread` field. Aligns with active-delegations-format
