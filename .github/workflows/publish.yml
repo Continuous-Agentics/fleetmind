@@ -67,6 +67,17 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Smoke test installable tarball
+        run: |
+          set -euo pipefail
+          TMPDIR="$(mktemp -d)"
+          npm pack --pack-destination "$TMPDIR"
+          mkdir -p "$TMPDIR/install"
+          cd "$TMPDIR/install"
+          npm init -y >/dev/null
+          npm install "$TMPDIR"/*.tgz
+          ./node_modules/.bin/fleetmind --version
+
       # Route prerelease tags (v1.2.3-beta.0) to the `beta` dist-tag and stable
       # tags to `latest`. On manual workflow_dispatch (ref is a branch, not a
       # tag) default to `latest` — preserves the prior manual-rerun behavior.

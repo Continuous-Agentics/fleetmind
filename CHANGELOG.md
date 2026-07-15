@@ -6,6 +6,16 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-07-15
+
+### Fixed
+
+- **Fix installed-package startup failure.** Bundle `@aws-sdk/client-sts` with the other AWS SDK clients so global installs do not pull an incompatible newer STS package against the bundled Smithy runtime. This fixes `TypeError: makeBuilder is not a function` when running `fleetmind --version` from the published package.
+
+### Changed
+
+- **Add installable tarball smoke gate.** CI and publish workflows now install the packed tarball in a clean temp project and run `fleetmind --version` before accepting/releasing a build.
+
 ## [0.9.1] — 2026-07-15
 
 ### Changed

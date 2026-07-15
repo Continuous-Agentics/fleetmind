@@ -97,6 +97,17 @@ jobs:
           done
           if [ "$FAIL" -eq 1 ]; then exit 1; fi
 
+      - name: Smoke test installable tarball
+        run: |
+          set -euo pipefail
+          TMPDIR="$(mktemp -d)"
+          npm pack --pack-destination "$TMPDIR"
+          mkdir -p "$TMPDIR/install"
+          cd "$TMPDIR/install"
+          npm init -y >/dev/null
+          npm install "$TMPDIR"/*.tgz
+          ./node_modules/.bin/fleetmind --version
+
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
