@@ -28,7 +28,7 @@ Placeholders are uppercase angle-bracketed tokens. Fill in every one before spaw
 | `<TASK_ID>` | 8-char hex task id |
 | `<PROJECT_SLUG>` | Project slug from DDB `project` attribute |
 | `<PLANNING_CHANNEL_ID>` | Channel id for the planning/coordination channel |
-| `<PLANNING_THREAD_TS>` | `ts` of the original planning-channel thread root |
+| `<PLANNING_THREAD_TS>` | `ts` of the original planning-channel thread root; **empty string `""` for follow-on operational tasks** (no planning thread) |
 | `<PLANNING_PERMALINK>` | Permalink to the planning thread root |
 | `<REQUESTOR_THREAD_PERMALINK>` | Permalink to the human requestor's planning thread |
 | `<WORKER_NAME>` | Worker bot display name |
@@ -64,13 +64,23 @@ Hard rule (verbatim from bot-delegation SKILL.md § 7a):
 
 Concretely for THIS sub-agent:
 
-- Your ONLY permitted Slack write is exactly ONE threaded reply in the planning
-  thread:
+- Your ONLY permitted Slack write is exactly ONE summary post. Route it based
+  on `<PLANNING_THREAD_TS>`:
+
+  **Thread-originated task** (`<PLANNING_THREAD_TS>` is non-empty) — reply
+  threaded to the planning thread:
     message(action=send, target="<PLANNING_CHANNEL_ID>",
             replyTo="<PLANNING_THREAD_TS>",
             message=<the close-the-loop summary specified below>)
-- ZERO top-level posts in any channel. ZERO posts in the worker channel.
-  ZERO DMs. ZERO additional planning-thread posts beyond the one above.
+
+  **Follow-on operational task** (`<PLANNING_THREAD_TS>` is empty) — post
+  top-level in the planning channel:
+    message(action=send, target="<PLANNING_CHANNEL_ID>",
+            message=<the close-the-loop summary specified below>)
+
+- ZERO additional posts beyond the one above (no top-level posts for
+  thread-originated tasks; no threaded replies for operational tasks).
+  ZERO posts in the worker channel. ZERO DMs.
 - Report-back to the parent (PM bot) is the plain-text return value of this
   task — i.e. the natural-language string you emit on the assistant turn
   IMMEDIATELY BEFORE your final `NO_REPLY` turn. The parent reads that
@@ -107,9 +117,13 @@ Steps:
    `memory/active-delegations.md` (audit log only — DDB is truth).
    Set `closed_at: <UTC ISO>` and `last-handled-terminal-at: <DDB terminal ts>`.
    These two updates must be the last write before you move the block.
-6. Post EXACTLY ONE threaded reply in the planning thread:
+6. Post EXACTLY ONE summary — route based on `<PLANNING_THREAD_TS>`:
+   - Non-empty (`<PLANNING_THREAD_TS>` set) → threaded reply:
        message(action=send, target="<PLANNING_CHANNEL_ID>",
                replyTo="<PLANNING_THREAD_TS>",
+               message=<summary below>)
+   - Empty → top-level post:
+       message(action=send, target="<PLANNING_CHANNEL_ID>",
                message=<summary below>)
    Summary contents (≤6 lines):
    - Task ID + worker + outcome
@@ -192,7 +206,7 @@ Steps:
    - "Ready for your review" (NOT "Done")
    - Task ID, worker, what shipped (one line)
    - Artifact link: <ARTIFACT_LINK>
-   - "Reply with approval (or changes) here when you've had a chance to look."
+   - "Work with Developer directly on the PR. Reply here only when you're ready to approve the merge."
 7. Return a short plain-text summary to the parent: artifact URL, tracker
    transition done? yes/no, audit-log status flipped? yes/no.
 8. Final assistant turn: exactly `NO_REPLY`.

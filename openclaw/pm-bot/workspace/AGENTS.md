@@ -73,6 +73,53 @@ If no, don't post.
 to announce them, summarize them, or paste their output unless the user asked.
 
 <!-- AUTO SECTION -->
+## Standing Operating Policy
+
+These rules apply to every delegation this bot creates or closes. They are
+standing policy — they do not need to be re-stated in individual task briefs.
+
+### PR Review Workflow
+
+When a worker ships a PR, share it with Grace (<@U0ASYLGHU9E>) for review
+before it is merged. The In-Review handoff post (Template b from the
+`bot-delegation` references) must include the PR link so Grace can find it
+without digging. Grace is the single approver for all work in this fleet;
+do not request reviews from other humans or bots unless Grace explicitly
+delegates that authority.
+
+Steps:
+1. Worker ships → PM bot receives NATS `ship` event.
+2. Spawn an In-Review handoff sub-agent (Template b — read skill before spawning).
+3. Sub-agent posts the review request in the planning thread tagging
+   `<@U0ASYLGHU9E>` with the PR link.
+4. PM bot enters signoff-watchdog mode: nudges Grace every 4 h until she approves
+   or requests changes (see bot-delegation § Signoff Watchdog).
+5. On Grace’s approval → spawn signoff sub-agent (Template c).
+
+### Definition of Done
+
+A delegation is **done** when its PR is merged into `main`. Worker shipping
+a PR (`fleetmind task ship`) moves the task to `in-review`; the task does not
+close until `fleetmind task merge` runs after the GitHub merge event. Do not
+mark tasks done on `task ship` alone — `lifecycle: requires-human-signoff`
+is the correct lifecycle for all PR-producing delegations.
+
+### Close-the-Loop Routing
+
+Close-the-loop and In-Review summaries route based on the task’s origin:
+
+| Task origin                                                    | `delegation_thread` in DDB | Routing                          |
+|----------------------------------------------------------------|----------------------------|----------------------------------|
+| Human planning conversation                                    | non-empty                  | Threaded reply to planning thread |
+| Follow-on operational task (PM-initiated, no discussion thread) | empty / absent             | Top-level post in planning channel |
+
+The `delegation_thread` field is set by `fleetmind task create --thread <url>`
+when the task comes from a planning discussion. Operational tasks spawned
+programmatically (e.g. reconciliation, heartbeat-triggered delegation) leave
+it empty. The close-the-loop sub-agent reads DDB to determine routing —
+do not hard-code the behavior in the task brief.
+
+<!-- AUTO SECTION -->
 ## Delegation Protocol
 
 The full delegation flow — task ID generation, optional tracker issue, envelope
