@@ -1,6 +1,6 @@
 ---
 name: bot-delegation
-version: 1.4.0
+version: 1.5.0
 description: "PM bot protocol for delegating dev tasks to workers via NATS and tracking them through completion. Use when a planning conversation produces a concrete assignable task, a worker event (ack/progress/ship/block) arrives, a heartbeat finds a stale delegation, or a DDB_TERMINAL_WAKE signal fires. Triggers on 'delegate this', 'assign this', or 'hand off to a worker'."
 ---
 
@@ -326,7 +326,22 @@ On terminal status (shipped or blocked):
 2. Read the narrative: `fleetmind narrative get --task-id "${TASK_ID}"`.
    The `Learned` section is the durable signal future delegations benefit from.
    Ground the closeout summary in it.
-3. Post a summary in the planning thread:
+3. Route and post the close-the-loop summary based on task origin:
+
+   Read `delegation_thread` from the DDB record (captured in step 1).
+
+   - **Thread-originated task** (`delegation_thread` is non-empty) — the task
+     came from a human planning conversation. Post a **threaded reply** to that
+     planning thread (`replyTo = <planning_thread_ts>`, derived from the
+     `delegation_thread` permalink).
+
+   - **Follow-on operational task** (`delegation_thread` is empty or absent) —
+     the task was spun up by the PM bot programmatically, not from a human
+     discussion thread. Post **top-level** in the planning channel (no
+     `replyTo`). This surfaces the update in the channel feed where the team
+     will see it without needing to navigate to a specific thread.
+
+   Summary contents (both cases):
    - Task ID, worker, outcome (shipped / blocked)
    - One-line summary of what got done (or what's blocked + what's needed)
    - Link to artifact (PR, deploy, etc.)
@@ -611,6 +626,14 @@ Workers running `worker-self-start` may self-start when a human directly asks th
 
 ## Changelog
 
+- **1.5.0 (2026-07-15)** - Close-the-loop routing by task origin (#ea73f9e4):
+  - § 7 Step 3: close-the-loop summaries now route based on `delegation_thread`
+    presence in DDB. Thread-originated tasks (non-empty `delegation_thread`)
+    keep the existing threaded-reply behavior. Follow-on operational tasks
+    (empty `delegation_thread`) now post top-level in the planning channel so
+    the update surfaces in the channel feed without requiring thread navigation.
+  - references/sub-agent-task-templates.md Template (a): Output discipline and
+    Step 6 updated with conditional routing logic matching § 7 Step 3.
 - **1.4.0 (2026-07-09)** - Tracker-agnostic self-start trigger (#241):
   - § Inbound Self-Start Notices: "Linear-assigned tasks" replaced with
     "human directly asks the worker to pick up a discrete piece of work".
