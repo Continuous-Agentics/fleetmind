@@ -6,6 +6,16 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-07-15
+
+### Changed
+
+- **Tracker-agnostic worker self-start triggers ([#242](https://github.com/Continuous-Agentics/fleetmind/pull/242)).** Removes the Linear-specific coupling from the self-start trigger path so integrations can supply tracker context without hard-wiring Fleetmind to Linear.
+
+### Fixed
+
+- **Fresh-fleet onboarding preflight failures are now actionable ([#246](https://github.com/Continuous-Agentics/fleetmind/pull/246)).** `fleetmind onboard` now fails fast when an agent omits `providers:`, catches missing Terraform-created placeholder secrets with Step 8 guidance instead of a raw `ResourceNotFoundException`, and clarifies Secrets Manager vs SSM path namespaces in the dogfood runbook.
+
 ## [0.9.0] — 2026-07-09
 
 ### Added
