@@ -169,7 +169,17 @@ interface MockSM {
   getStored: (id: string) => string | null | undefined;
 }
 
-function makeMockSM(secrets: Record<string, string | null> = {}): MockSM {
+function makeMockSM(
+  secrets: Record<string, string | null> = {},
+  opts: {
+    /**
+     * When true, PutSecretValueCommand throws ResourceNotFoundException for any
+     * secret ID not already in the store — matching real AWS behaviour (Terraform
+     * must create the placeholder before the wizard can populate it).
+     */
+    strictPut?: boolean;
+  } = {},
+): MockSM {
   const store = new Map<string, string | null>(Object.entries(secrets));
   const calls: SmCall[] = [];
 
@@ -189,6 +199,12 @@ function makeMockSM(secrets: Record<string, string | null> = {}): MockSM {
       if (cmd instanceof PutSecretValueCommand) {
         const secretId = cmd.input.SecretId as string;
         const value = cmd.input.SecretString as string;
+        if (opts.strictPut && !store.has(secretId)) {
+          // Real AWS: PutSecretValue requires the secret to already exist.
+          const err = new Error("ResourceNotFoundException") as Error & { name: string };
+          err.name = "ResourceNotFoundException";
+          throw err;
+        }
         store.set(secretId, value);
         calls.push({ op: "put", secretId, value });
         return {};
@@ -722,7 +738,9 @@ describe("step 9 — provider-prompt matrix", () => {
     assert.equal(puts.length, 0, "no secrets should be written when all overrides are declined");
   });
 
-  test("agent missing providers field — wizard errors with descriptive message", async () => {
+  test("agent missing providers field — wizard exits before any interaction with descriptive message", async () => {
+    // Since #245: early config validation exits(1) BEFORE any prompts fire.
+    // This test verifies the exit happens with a descriptive error message.
     const fleetName = "s9-fleet";
     const yaml = makeFleetYaml({
       fleetName,
@@ -731,38 +749,32 @@ describe("step 9 — provider-prompt matrix", () => {
     const setup = makeTempFleet(yaml);
     tmpDir = setup.tmpDir;
 
-    const ssmMock = makeMockSSM([
-      `/fleetmind/${fleetName}/agents/no-prov-agent/github-app/app-id`,
-      "/fleetmind/shared/github-packages-token",
-    ]);
+    let capturedCode: number | undefined;
+    const exit = ((code?: string | number | null | undefined): never => {
+      capturedCode = Number(code ?? 0);
+      throw new Error(`process.exit:${capturedCode}`);
+    });
+
+    // Queue is intentionally empty: early-exit fires before any prompt.
+    const mock = makeMockPrompter([], [], []);
+    const ssmMock = makeMockSSM([]);
     const smMock = makeMockSM({});
-
-    // Slack secret is missing → wizard will prompt for slack tokens first, then hit providers → throw
-    const mock = makeMockPrompter(
-      [
-        true,   // Start?
-        false,  // step 5 override → no
-        false,  // Render? → no
-        false,  // Terraform ack
-        true,   // Populate? → yes
-        // (slack override prompt NOT shown because secret is missing → goes straight to hidden prompts)
-      ],
-      ["test-org"],
-      ["xoxb-test", "signing-sec", "xapp-test"], // slack prompts before the throw
-    );
-
-    const deps = makeDeps(mock.prompter, ssmMock.ssm, smMock.sm);
+    const deps = { ...makeDeps(mock.prompter, ssmMock.ssm, smMock.sm), exit };
 
     await assert.rejects(
       async () => runOnboard(setup.fleetFile, "us-west-2", {}, deps),
       (err: Error) => {
         assert.ok(
-          err.message.includes("providers") || err.message.includes("no-prov-agent"),
-          `Error should mention 'providers' or agent id, got: ${err.message}`,
+          err.message.startsWith("process.exit:1"),
+          `Expected process.exit(1), got: ${err.message}`,
         );
         return true;
       },
+      "wizard must exit(1) before any interaction when agent has no providers:",
     );
+
+    assert.equal(capturedCode, 1, "exit code must be 1");
+    assert.equal(mock.calls.length, 0, "no prompts should fire before early exit");
   });
 });
 
@@ -1156,5 +1168,223 @@ describe("createDefaultDeps", () => {
     assert.ok(typeof deps.pushFleet === "function");
     assert.ok(typeof deps.provisionFleet === "function");
     assert.ok(typeof deps.writeOutputs === "function");
+  });
+});
+
+// ── Fix #243: ResourceNotFoundException on putSecretViaClient ─────────────────
+// When the secret placeholder doesn't exist yet (Terraform not applied),
+// PutSecretValueCommand throws ResourceNotFoundException. The wizard should
+// rethrow a friendly, actionable error rather than an opaque AWS error.
+
+describe("fix #243 — ResourceNotFoundException yields friendly error", () => {
+  let tmpDir: string | undefined;
+  afterEach(() => {
+    if (tmpDir) {
+      cleanupTempDir(tmpDir);
+      tmpDir = undefined;
+    }
+  });
+
+  test("step 9 slack put throws ResourceNotFoundException → friendly error", async () => {
+    const fleetName = "rne-fleet";
+    const yaml = makeFleetYaml({
+      fleetName,
+      agents: [{ id: "rne-bot", name: "RNE Bot", providers: ["anthropic"] }],
+    });
+    const setup = makeTempFleet(yaml);
+    tmpDir = setup.tmpDir;
+
+    // SSM: app-id for rne-bot (skips GitHub App creation) + PAT (skips step 6).
+    const ssmMock = makeMockSSM([
+      `/fleetmind/${fleetName}/agents/rne-bot/github-app/app-id`,
+      "/fleetmind/shared/github-packages-token",
+    ]);
+
+    // strictPut: true simulates Terraform not applied — secrets don't exist yet.
+    // Every PutSecretValueCommand will throw ResourceNotFoundException.
+    const smMock = makeMockSM({}, { strictPut: true });
+
+    // Confirm sequence for this fleet (1 agent, all manifests/user-ids already set):
+    //  1. true  — Start onboarding?
+    //  2. false — GitHub App already in SSM. Override? (rne-bot)
+    //  3. false — Run fleetmind render?
+    //  4. false — Terraform apply complete?
+    //  5. true  — Populate secrets now?
+    // Step 9: slack secret missing → slackIsPlaceholder=true → 3 hidden prompts
+    //          → putSecretViaClient → throws ResourceNotFoundException
+    const mock = makeMockPrompter(
+      [true, false, false, false, true],
+      ["test-org"],                         // Step 5 GitHub owner
+      ["xoxb-test", "sig-test", "xapp-test"], // Step 9 slack hidden prompts
+    );
+
+    const deps = makeDeps(mock.prompter, ssmMock.ssm, smMock.sm);
+
+    await assert.rejects(
+      () => runOnboard(setup.fleetFile, "us-west-2", {}, deps),
+      (err: Error) => {
+        assert.ok(
+          err.message.includes("does not exist in Secrets Manager"),
+          `Expected friendly 'does not exist' message, got: ${err.message}`,
+        );
+        assert.ok(
+          err.message.includes("terraform apply") || err.message.includes("Terraform"),
+          `Expected Terraform hint in message, got: ${err.message}`,
+        );
+        return true;
+      },
+      "ResourceNotFoundException should surface as a friendly error",
+    );
+  });
+
+  test("step 9 provider put throws ResourceNotFoundException → friendly error", async () => {
+    const fleetName = "rne-prov-fleet";
+    const yaml = makeFleetYaml({
+      fleetName,
+      agents: [{ id: "prov-bot", name: "Prov Bot", providers: ["anthropic"] }],
+    });
+    const setup = makeTempFleet(yaml);
+    tmpDir = setup.tmpDir;
+
+    // SSM: app-id + PAT (both steps already satisfied).
+    const ssmMock = makeMockSSM([
+      `/fleetmind/${fleetName}/agents/prov-bot/github-app/app-id`,
+      "/fleetmind/shared/github-packages-token",
+    ]);
+
+    // Slack secret exists (real), but provider secret doesn't.
+    // strictPut: true → PutSecretValueCommand for the missing provider secret throws.
+    const smMock = makeMockSM(
+      { [`${fleetName}/agents/prov-bot/slack`]: JSON.stringify({ SLACK_BOT_TOKEN: "xoxb-real", SLACK_APP_TOKEN: "xapp-real" }) },
+      { strictPut: true },
+    );
+
+    // Confirm sequence:
+    //  1. true  — Start onboarding?
+    //  2. false — GitHub App Override? (prov-bot)
+    //  3. false — Run fleetmind render?
+    //  4. false — Terraform apply complete?
+    //  5. true  — Populate secrets now?
+    //  6. false — Slack tokens already populated. Override? (prov-bot)
+    // Step 9: provider missing → hidden prompt → putSecretViaClient throws
+    const mock = makeMockPrompter(
+      [true, false, false, false, true, false],
+      ["test-org"],       // Step 5 GitHub owner
+      ["sk-ant-test"],    // Step 9 provider API key
+    );
+
+    const deps = makeDeps(mock.prompter, ssmMock.ssm, smMock.sm);
+
+    await assert.rejects(
+      () => runOnboard(setup.fleetFile, "us-west-2", {}, deps),
+      (err: Error) => {
+        assert.ok(
+          err.message.includes("does not exist in Secrets Manager"),
+          `Expected friendly message, got: ${err.message}`,
+        );
+        assert.ok(
+          err.message.includes("providers/anthropic"),
+          `Expected secret ID in message, got: ${err.message}`,
+        );
+        return true;
+      },
+    );
+  });
+});
+
+// ── Fix #245: Early providers validation ─────────────────────────────────────
+// When an agent in fleet.yaml is missing `providers: [...]`, onboard must fail
+// fast with a clear error BEFORE prompting for anything — not later inside the
+// preflight AWS checks where the config error is swallowed.
+
+describe("fix #245 — missing providers exits before any interactive work", () => {
+  let tmpDir: string | undefined;
+  let capturedExitCode: number | undefined;
+  let exit: OnboardDeps["exit"];
+
+  beforeEach(() => {
+    capturedExitCode = undefined;
+    exit = ((code?: string | number | null | undefined): never => {
+      capturedExitCode = Number(code ?? 0);
+      throw new Error(`process.exit:${capturedExitCode}`);
+    });
+  });
+
+  afterEach(() => {
+    if (tmpDir) {
+      cleanupTempDir(tmpDir);
+      tmpDir = undefined;
+    }
+  });
+
+  test("agent without providers: exits 1 before Start? confirm", async () => {
+    const fleetName = "noprov-fleet";
+    const yaml = makeFleetYaml({
+      fleetName,
+      agents: [
+        { id: "good-bot", name: "Good Bot", providers: ["anthropic"] },
+        { id: "bad-bot",  name: "Bad Bot",  noProviders: true },
+      ],
+    });
+    const setup = makeTempFleet(yaml);
+    tmpDir = setup.tmpDir;
+
+    // The mock prompter queue is intentionally EMPTY — any confirm/prompt call
+    // would throw "queue exhausted", proving early exit ran before interaction.
+    // (runOnboard runs the early validation loop before loading the preflight or
+    //  printing the step list, so zero prompts should fire.)
+    const mock = makeMockPrompter([], [], []);
+    const ssmMock = makeMockSSM([]);
+    const smMock = makeMockSM({});
+    const deps = { ...makeDeps(mock.prompter, ssmMock.ssm, smMock.sm), exit };
+
+    await assert.rejects(
+      () => runOnboard(setup.fleetFile, "us-west-2", {}, deps),
+      (err: Error) => {
+        assert.ok(
+          err.message.startsWith("process.exit:1"),
+          `Expected process.exit(1), got: ${err.message}`,
+        );
+        return true;
+      },
+      "runOnboard must exit(1) when an agent is missing providers:",
+    );
+
+    assert.equal(capturedExitCode, 1, "exit code must be 1");
+
+    // No interactive prompt should have fired before the exit.
+    assert.equal(
+      mock.calls.length,
+      0,
+      `No prompts should fire before early exit; got: ${JSON.stringify(mock.calls.map(c => c.question))}`,
+    );
+  });
+
+  test("all agents with providers: no early exit", async () => {
+    // Sanity-check: a valid fleet with providers proceeds normally (no exit 1).
+    const fleetName = "allprov-fleet";
+    const yaml = makeFleetYaml({
+      fleetName,
+      agents: [{ id: "valid-bot", name: "Valid Bot", providers: ["anthropic"] }],
+    });
+    const setup = makeTempFleet(yaml);
+    tmpDir = setup.tmpDir;
+
+    // Abort at the first confirm (Start onboarding? → no) so we don't need a
+    // full happy-path queue. The early validation should have passed silently.
+    const mock = makeMockPrompter([false]);
+    const ssmMock = makeMockSSM([]);
+    const smMock = makeMockSM({});
+    const deps = { ...makeDeps(mock.prompter, ssmMock.ssm, smMock.sm), exit };
+
+    // Should NOT throw / exit — just return after the user aborts.
+    await runOnboard(setup.fleetFile, "us-west-2", {}, deps);
+
+    assert.equal(capturedExitCode, undefined, "exit must NOT be called for a valid fleet");
+    assert.equal(mock.calls.length, 1, "Exactly one confirm (Start onboarding?) should fire");
+    assert.ok(
+      mock.calls[0]!.question.toLowerCase().includes("start"),
+      "First prompt should be Start onboarding?",
+    );
   });
 });

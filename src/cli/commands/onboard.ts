@@ -35,6 +35,7 @@ import {
   SecretsManagerClient,
   GetSecretValueCommand,
   PutSecretValueCommand,
+  ResourceNotFoundException,
 } from "@aws-sdk/client-secrets-manager";
 import {
   SSMClient,
@@ -168,6 +169,8 @@ export interface OnboardDeps {
   provisionFleet?: typeof provisionFleet;
   /** Write rendered tfvars + openclaw.json outputs. */
   writeOutputs?: typeof writeOutputs;
+  /** Exit hook for tests; production callers use process.exit. */
+  exit?: (code?: string | number | null | undefined) => never;
 }
 
 /**
@@ -212,10 +215,28 @@ async function putSecretViaClient(
   secretId: string,
   value: Record<string, string>,
 ): Promise<void> {
-  await smClient.send(new PutSecretValueCommand({
-    SecretId: secretId,
-    SecretString: JSON.stringify(value),
-  }));
+  try {
+    await smClient.send(new PutSecretValueCommand({
+      SecretId: secretId,
+      SecretString: JSON.stringify(value),
+    }));
+  } catch (err) {
+    // ResourceNotFoundException means Terraform hasn't created the secret yet.
+    // Use a name-check so both the real SDK class and the test-mock plain Error work.
+    if (
+      err instanceof ResourceNotFoundException ||
+      (err as { name?: string }).name === "ResourceNotFoundException"
+    ) {
+      // Terraform creates the secret placeholder during `apply`; if it doesn't
+      // exist yet the operator must run Step 8 first.
+      throw new Error(
+        `Secret '${secretId}' does not exist in Secrets Manager.\n` +
+          `This usually means Terraform has not been applied yet (Step 8).\n` +
+          `Run \`terraform apply\` to create the secret placeholders, then re-run onboard.`,
+      );
+    }
+    throw err;
+  }
 }
 
 /** A secret value is "real" if it exists and isn't a render placeholder. */
@@ -291,7 +312,7 @@ async function detectRemoteState(args: {
       if (!slackOk) return false;
       const providers = providersForAgent({
         agentId: agent.id,
-        providers: (agent as { providers?: string[] }).providers,
+        providers: agent.providers,
         model: agent.model,
         apiKeys: agent.api_keys,
         defaultModel: fleet.agents.defaults.model,
@@ -332,19 +353,39 @@ export async function runOnboard(
   opts: { legacyGithubApps?: boolean } = {},
   deps: OnboardDeps = createDefaultDeps(region),
 ): Promise<void> {
+  const exit = deps.exit ?? ((code?: string | number | null | undefined): never => process.exit(code));
   let legacyGithubApps = opts.legacyGithubApps ?? false;
   console.log("\n\x1b[1mfleetmind onboard\x1b[0m — guided fleet setup wizard\n");
 
   // ── Load fleet ──────────────────────────────────────────────────────────────
   if (!deps.fs.existsSync(fleetFile)) {
     log.error(`fleet.yaml not found at ${fleetFile}. Run from your fleet repo root.`);
-    process.exit(1);
+    exit(1);
   }
 
   const fleet = loadFleet(fleetFile);
   const fleetName = fleet.fleet.name;
   const agents = fleet.agents.list;
   const TOTAL = 12;
+
+  // ── Early config validation: providers ─────────────────────────────────────
+  // Fail fast before any interactive work if agents are missing the required
+  // `providers: [...]` field. This surfaces a clear, actionable error instead
+  // of propagating a late throw inside the preflight AWS checks.
+  for (const agent of agents) {
+    try {
+      providersForAgent({
+        agentId: agent.id,
+        providers: agent.providers,
+        model: agent.model,
+        apiKeys: agent.api_keys,
+        defaultModel: fleet.agents.defaults.model,
+      });
+    } catch (err) {
+      log.error(err instanceof Error ? err.message : String(err));
+      exit(1);
+    }
+  }
 
   console.log(`  Fleet: \x1b[1m${fleetName}\x1b[0m  (${agents.length} agent${agents.length !== 1 ? "s" : ""}: ${agents.map(a => a.name).join(", ")})`);
 
@@ -698,7 +739,7 @@ export async function runOnboard(
       // ── Model-provider API keys — one secret per (agent, provider). ────────────
       const providers = providersForAgent({
         agentId: agent.id,
-        providers: (agent as { providers?: string[] }).providers,
+        providers: agent.providers,
         model: agent.model,
         apiKeys: agent.api_keys,
         defaultModel: fleet.agents.defaults.model,

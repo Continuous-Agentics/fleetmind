@@ -171,7 +171,7 @@ Resources created (~25 total):
 - VPC endpoints: S3 (gateway), DynamoDB (gateway), SSM, ssmmessages, ec2messages, SecretsManager (interface)
 - 2 EC2 instances (conductor + forge) in private subnets — **no public IPs**
 - Per-agent IAM roles + instance profiles
-- Per-agent Secrets Manager placeholders (6 total: 2 slack + 2 anthropic... wait — 1 slack + 1 anthropic per agent = 4 total)
+- Per-agent Secrets Manager placeholders (4 total: 1 `slack` + 1 `providers/anthropic` per agent × 2 agents)
 - DynamoDB context-store table (`dogfood-context-store`)
 - Module: task-ledger DynamoDB table, S3 narratives bucket, EventBridge Pipe, SQS DLQ, CloudWatch alarm
 
@@ -258,6 +258,15 @@ cd ../../   # back to infra/terraform root
 ---
 
 ## Step 4: Populate Secrets
+
+> **Path naming reference — two separate namespaces:**
+> - **Secrets Manager secret IDs** use the canonical FleetMind scheme:
+>   `<fleet_name>/agents/<agent_id>/slack` and `<fleet_name>/agents/<agent_id>/providers/<provider>`.
+>   Example: `dogfood/agents/conductor/slack`, `dogfood/agents/conductor/providers/anthropic`.
+>   These are the paths Terraform creates and the paths `fleetmind secrets populate` / `fleetmind onboard` write to.
+> - **SSM Parameter Store paths** (used for GitHub App credentials only) follow a different scheme:
+>   `/fleetmind/<fleet_name>/agents/<agent_id>/github-app/app-id`.
+>   The `/fleetmind/` prefix and SSM-style hierarchy are *only* for SSM; Secrets Manager paths never carry it.
 
 **Ensure your shell has all six token env vars set** (from the Prerequisites section) before running these commands.
 
