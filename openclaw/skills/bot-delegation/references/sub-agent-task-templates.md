@@ -206,7 +206,7 @@ Steps:
    - "Ready for your review" (NOT "Done")
    - Task ID, worker, what shipped (one line)
    - Artifact link: <ARTIFACT_LINK>
-   - "Reply with approval (or changes) here when you've had a chance to look."
+   - "Work with Developer directly on the PR. Reply here only when you're ready to approve the merge."
 7. Return a short plain-text summary to the parent: artifact URL, tracker
    transition done? yes/no, audit-log status flipped? yes/no.
 8. Final assistant turn: exactly `NO_REPLY`.

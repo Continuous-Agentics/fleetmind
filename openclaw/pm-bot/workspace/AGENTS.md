@@ -108,10 +108,10 @@ is the correct lifecycle for all PR-producing delegations.
 
 Close-the-loop and In-Review summaries route based on the task’s origin:
 
-| Task origin | `delegation_thread` in DDB | Routing |
-|---|---|---|
-| Human planning conversation | non-empty | Threaded reply to planning thread |
-| Follow-on operational task (PM-initiated, no discussion thread) | empty / absent | Top-level post in planning channel |
+| Task origin                                                    | `delegation_thread` in DDB | Routing                          |
+|----------------------------------------------------------------|----------------------------|----------------------------------|
+| Human planning conversation                                    | non-empty                  | Threaded reply to planning thread |
+| Follow-on operational task (PM-initiated, no discussion thread) | empty / absent             | Top-level post in planning channel |
 
 The `delegation_thread` field is set by `fleetmind task create --thread <url>`
 when the task comes from a planning discussion. Operational tasks spawned
