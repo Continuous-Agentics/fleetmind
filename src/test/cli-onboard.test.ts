@@ -364,6 +364,50 @@ function makeDeps(
   };
 }
 
+interface MockTerraform {
+  runs: string[][];
+  createdBuckets: string[];
+  createdTables: string[];
+  deps: NonNullable<OnboardDeps["terraform"]>;
+}
+
+function makeMockTerraform(opts: {
+  bucketExists?: boolean;
+  tableExists?: boolean;
+  selectFails?: boolean;
+  terraformError?: Error;
+  awsIdentityError?: Error;
+} = {}): MockTerraform {
+  const runs: string[][] = [];
+  const createdBuckets: string[] = [];
+  const createdTables: string[] = [];
+  return {
+    runs,
+    createdBuckets,
+    createdTables,
+    deps: {
+      terraformVersion: async () => {
+        if (opts.terraformError) throw opts.terraformError;
+        return "Terraform v1.8.0";
+      },
+      awsIdentity: async () => {
+        if (opts.awsIdentityError) throw opts.awsIdentityError;
+        return "arn:aws:iam::123456789012:user/test";
+      },
+      bucketExists: async () => opts.bucketExists ?? true,
+      createBucket: async (bucket) => { createdBuckets.push(bucket); },
+      tableExists: async () => opts.tableExists ?? true,
+      createTable: async (table) => { createdTables.push(table); },
+      run: async (args) => {
+        runs.push(args);
+        if (opts.selectFails && args[0] === "workspace" && args[1] === "select") {
+          throw new Error("workspace missing");
+        }
+      },
+    },
+  };
+}
+
 // ── Happy-path tests ──────────────────────────────────────────────────────────
 
 describe("happy path — delegation: false", () => {
@@ -506,6 +550,138 @@ describe("happy path — delegation: true", () => {
 
     await runOnboard(setup.fleetFile, "us-west-2", {}, deps);
     assert.ok(provisionCalled, "provisionFleet should be called even when delegation is enabled");
+  });
+});
+
+// ── Step 8 — Terraform backend/bootstrap/apply ───────────────────────────────
+
+describe("step 8 — Terraform workflow", () => {
+  let setup: TestSetup;
+
+  afterEach(() => cleanupTempDir(setup.tmpDir));
+
+  test("creates missing backend resources, initializes Terraform, plans, and applies after approval", async () => {
+    const fleetName = "tf-fleet";
+    setup = makeTempFleet(makeFleetYaml({ fleetName, githubApp: false }));
+    const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
+    const smMock = makeMockSM();
+    const tf = makeMockTerraform({ bucketExists: false, tableExists: false, selectFails: true });
+    const mock = makeMockPrompter(
+      [
+        true,  // Start onboarding?
+        false, // Run render?
+        true,  // Run Terraform workflow?
+        true,  // Write backend.hcl?
+        true,  // Create S3 bucket?
+        true,  // Create DynamoDB table?
+        true,  // Create Terraform workspace?
+        true,  // Apply plan?
+        false, // Populate secrets?
+        false, // Push fleet?
+      ],
+      ["", "", ""], // accept backend bucket/table/key defaults
+    );
+
+    await runOnboard(setup.fleetFile, "us-west-2", {}, {
+      ...makeDeps(mock.prompter, ssmMock.ssm, smMock.sm),
+      terraform: tf.deps,
+    });
+
+    assert.deepEqual(tf.createdBuckets, ["tf-fleet-fleetmind-tfstate-us-west-2"]);
+    assert.deepEqual(tf.createdTables, ["tf-fleet-fleetmind-tf-lock"]);
+    assert.ok(fs.existsSync(path.join(setup.tmpDir, "backend.hcl")), "backend.hcl should be written");
+    assert.deepEqual(tf.runs, [
+      ["init", "-backend-config=backend.hcl"],
+      ["workspace", "select", fleetName],
+      ["workspace", "new", fleetName],
+      ["validate"],
+      ["plan", "-var-file=workspaces/tf-fleet.tfvars", "-var-file=workspaces/tf-fleet.derived.tfvars", "-out=.fleetmind-tf-fleet.tfplan"],
+      ["apply", ".fleetmind-tf-fleet.tfplan"],
+    ]);
+  });
+
+  test("uses existing backend resources and stops after plan when apply is declined", async () => {
+    const fleetName = "tf-existing";
+    setup = makeTempFleet(makeFleetYaml({ fleetName, githubApp: false }));
+    fs.writeFileSync(
+      path.join(setup.tmpDir, "backend.hcl"),
+      [
+        'bucket         = "existing-bucket"',
+        'region         = "us-west-2"',
+        'key            = "terraform.tfstate"',
+        'dynamodb_table = "existing-lock"',
+        "",
+      ].join("\n"),
+    );
+    const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
+    const smMock = makeMockSM();
+    const tf = makeMockTerraform({ bucketExists: true, tableExists: true, selectFails: false });
+    const mock = makeMockPrompter(
+      [
+        true,  // Start onboarding?
+        false, // Run render?
+        true,  // Run Terraform workflow?
+        false, // Apply plan?
+        false, // Populate secrets?
+        false, // Push fleet?
+      ],
+    );
+
+    await runOnboard(setup.fleetFile, "us-west-2", {}, {
+      ...makeDeps(mock.prompter, ssmMock.ssm, smMock.sm),
+      terraform: tf.deps,
+    });
+
+    assert.deepEqual(tf.createdBuckets, []);
+    assert.deepEqual(tf.createdTables, []);
+    assert.deepEqual(tf.runs, [
+      ["init", "-backend-config=backend.hcl"],
+      ["workspace", "select", fleetName],
+      ["validate"],
+      ["plan", "-var-file=workspaces/tf-existing.tfvars", "-var-file=workspaces/tf-existing.derived.tfvars", "-out=.fleetmind-tf-existing.tfplan"],
+    ]);
+  });
+
+  test("fails before backend mutation when Terraform is not installed", async () => {
+    const fleetName = "tf-no-bin";
+    setup = makeTempFleet(makeFleetYaml({ fleetName, githubApp: false }));
+    const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
+    const smMock = makeMockSM();
+    const tf = makeMockTerraform({ terraformError: new Error("Terraform CLI not found. Install Terraform >= 1.6.") });
+    const mock = makeMockPrompter([true, false, true]);
+
+    await assert.rejects(
+      () => runOnboard(setup.fleetFile, "us-west-2", {}, {
+        ...makeDeps(mock.prompter, ssmMock.ssm, smMock.sm),
+        terraform: tf.deps,
+      }),
+      /Terraform CLI not found/,
+    );
+
+    assert.deepEqual(tf.createdBuckets, []);
+    assert.deepEqual(tf.createdTables, []);
+    assert.deepEqual(tf.runs, []);
+  });
+
+  test("fails before backend mutation when AWS credentials are unusable", async () => {
+    const fleetName = "tf-no-aws";
+    setup = makeTempFleet(makeFleetYaml({ fleetName, githubApp: false }));
+    const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
+    const smMock = makeMockSM();
+    const tf = makeMockTerraform({ awsIdentityError: new Error("AWS credentials are not usable") });
+    const mock = makeMockPrompter([true, false, true]);
+
+    await assert.rejects(
+      () => runOnboard(setup.fleetFile, "us-west-2", {}, {
+        ...makeDeps(mock.prompter, ssmMock.ssm, smMock.sm),
+        terraform: tf.deps,
+      }),
+      /AWS credentials are not usable/,
+    );
+
+    assert.deepEqual(tf.createdBuckets, []);
+    assert.deepEqual(tf.createdTables, []);
+    assert.deepEqual(tf.runs, []);
   });
 });
 

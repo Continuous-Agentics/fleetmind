@@ -9,7 +9,7 @@
  *   5. Collect GitHub App credentials (app_id, installation_id, pem)
  *   6. Check/set GitHub Packages PAT
  *   7. Render tfvars
- *   8. Terraform init + workspace + apply (guided, operator runs manually)
+ *   8. Terraform backend bootstrap + init + validate + plan + apply
  *   9. Populate secrets in Secrets Manager
  *  10. Store GitHub App credentials in SSM
  *  11. Push fleet
@@ -21,6 +21,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
 import type { Command } from "commander";
@@ -37,6 +38,24 @@ import {
   PutSecretValueCommand,
   ResourceNotFoundException,
 } from "@aws-sdk/client-secrets-manager";
+import {
+  S3Client,
+  HeadBucketCommand,
+  CreateBucketCommand,
+  PutBucketVersioningCommand,
+  PutPublicAccessBlockCommand,
+  PutBucketEncryptionCommand,
+} from "@aws-sdk/client-s3";
+import {
+  DynamoDBClient,
+  DescribeTableCommand,
+  CreateTableCommand,
+  waitUntilTableExists,
+} from "@aws-sdk/client-dynamodb";
+import {
+  STSClient,
+  GetCallerIdentityCommand,
+} from "@aws-sdk/client-sts";
 import {
   SSMClient,
   GetParameterCommand as SsmGetCommand,
@@ -165,12 +184,24 @@ export interface OnboardDeps {
   fs: OnboardFsDeps;
   /** Push fleet to S3 + trigger pull-self on instances. */
   pushFleet?: typeof runPushFleet;
+  /** Terraform backend checks/creates + command runner. */
+  terraform?: TerraformDeps;
   /** Provision fleet workspaces (render step). */
   provisionFleet?: typeof provisionFleet;
   /** Write rendered tfvars + openclaw.json outputs. */
   writeOutputs?: typeof writeOutputs;
   /** Exit hook for tests; production callers use process.exit. */
   exit?: (code?: string | number | null | undefined) => never;
+}
+
+export interface TerraformDeps {
+  terraformVersion(): Promise<string>;
+  awsIdentity(): Promise<string>;
+  bucketExists(bucket: string, region: string): Promise<boolean>;
+  createBucket(bucket: string, region: string): Promise<void>;
+  tableExists(table: string, region: string): Promise<boolean>;
+  createTable(table: string, region: string): Promise<void>;
+  run(args: string[], cwd: string): Promise<void>;
 }
 
 /**
@@ -182,6 +213,9 @@ export interface OnboardDeps {
  */
 export function createDefaultDeps(region?: string): OnboardDeps {
   const clientCfg = region ? { region } : {};
+  const s3 = new S3Client(clientCfg);
+  const dynamodb = new DynamoDBClient(clientCfg);
+  const sts = new STSClient(clientCfg);
   return {
     prompter: { prompt, hiddenPrompt, confirm },
     secretsManager: new SecretsManagerClient(clientCfg),
@@ -191,6 +225,7 @@ export function createDefaultDeps(region?: string): OnboardDeps {
       writeFileSync: (p, data, enc) => fs.writeFileSync(p, data, enc),
       readdirSync: (p) => fs.readdirSync(p) as string[],
     },
+    terraform: createTerraformDeps(s3, dynamodb, sts),
     pushFleet: runPushFleet,
     provisionFleet,
     writeOutputs,
@@ -253,6 +288,223 @@ function agentNeedsGithubApp(agent: { github_access?: boolean }): boolean {
 /** Does any agent require GitHub access? When none do, steps 5/10 are N/A. */
 function anyAgentNeedsGithubApp(agents: { github_access?: boolean }[]): boolean {
   return agents.some(agentNeedsGithubApp);
+}
+
+function createTerraformDeps(s3: S3Client, dynamodb: DynamoDBClient, sts: STSClient): TerraformDeps {
+  return {
+    async terraformVersion(): Promise<string> {
+      const result = spawnSync("terraform", ["version"], {
+        encoding: "utf8",
+      });
+      if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(
+          "Terraform CLI not found. Install Terraform >= 1.6 and ensure `terraform` is on PATH, then re-run `fleetmind onboard`.",
+        );
+      }
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        throw new Error(`terraform version failed with exit code ${result.status}: ${result.stderr}`);
+      }
+      return (result.stdout.split("\n")[0] ?? "terraform version unknown").trim();
+    },
+    async awsIdentity(): Promise<string> {
+      try {
+        const identity = await sts.send(new GetCallerIdentityCommand({}));
+        return identity.Arn ?? identity.Account ?? "unknown AWS identity";
+      } catch (err) {
+        throw new Error(
+          `AWS credentials are not usable for Terraform onboarding (${String(err)}).\n` +
+          "Configure AWS credentials for the target account/region, then re-run `fleetmind onboard`.",
+        );
+      }
+    },
+    async bucketExists(bucket: string): Promise<boolean> {
+      try {
+        await s3.send(new HeadBucketCommand({ Bucket: bucket }));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async createBucket(bucket: string, region: string): Promise<void> {
+      await s3.send(new CreateBucketCommand({
+        Bucket: bucket,
+        ...(region === "us-east-1" ? {} : { CreateBucketConfiguration: { LocationConstraint: region as never } }),
+      }));
+      await s3.send(new PutPublicAccessBlockCommand({
+        Bucket: bucket,
+        PublicAccessBlockConfiguration: {
+          BlockPublicAcls: true,
+          IgnorePublicAcls: true,
+          BlockPublicPolicy: true,
+          RestrictPublicBuckets: true,
+        },
+      }));
+      await s3.send(new PutBucketVersioningCommand({
+        Bucket: bucket,
+        VersioningConfiguration: { Status: "Enabled" },
+      }));
+      await s3.send(new PutBucketEncryptionCommand({
+        Bucket: bucket,
+        ServerSideEncryptionConfiguration: {
+          Rules: [{
+            ApplyServerSideEncryptionByDefault: { SSEAlgorithm: "AES256" },
+          }],
+        },
+      }));
+    },
+    async tableExists(table: string): Promise<boolean> {
+      try {
+        await dynamodb.send(new DescribeTableCommand({ TableName: table }));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async createTable(table: string, region: string): Promise<void> {
+      await dynamodb.send(new CreateTableCommand({
+        TableName: table,
+        BillingMode: "PAY_PER_REQUEST",
+        AttributeDefinitions: [{ AttributeName: "LockID", AttributeType: "S" }],
+        KeySchema: [{ AttributeName: "LockID", KeyType: "HASH" }],
+        SSESpecification: { Enabled: true },
+      }));
+      await waitUntilTableExists(
+        { client: dynamodb, maxWaitTime: 120 },
+        { TableName: table },
+      );
+    },
+    async run(args: string[], cwd: string): Promise<void> {
+      const result = spawnSync("terraform", args, {
+        cwd,
+        stdio: "inherit",
+        env: process.env,
+      });
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        throw new Error(`terraform ${args.join(" ")} failed with exit code ${result.status}`);
+      }
+    },
+  };
+}
+
+interface TerraformBackendConfig {
+  bucket: string;
+  region: string;
+  key: string;
+  dynamodbTable: string;
+}
+
+function readBackendConfig(filePath: string): Partial<TerraformBackendConfig> | null {
+  if (!fs.existsSync(filePath)) return null;
+  const body = fs.readFileSync(filePath, "utf8");
+  const value = (name: string): string | undefined => {
+    const match = new RegExp(`^\\s*${name}\\s*=\\s*"([^"]+)"\\s*$`, "m").exec(body);
+    return match?.[1];
+  };
+  return {
+    bucket: value("bucket"),
+    region: value("region"),
+    key: value("key"),
+    dynamodbTable: value("dynamodb_table"),
+  };
+}
+
+function renderBackendConfig(config: TerraformBackendConfig): string {
+  return [
+    `bucket         = "${config.bucket}"`,
+    `region         = "${config.region}"`,
+    `key            = "${config.key}"`,
+    `dynamodb_table = "${config.dynamodbTable}"`,
+    "",
+  ].join("\n");
+}
+
+function accountIdFromFleetName(fleetName: string): string | undefined {
+  return /(\d{12})/.exec(fleetName)?.[1];
+}
+
+function defaultBackendConfig(fleetName: string, region: string): TerraformBackendConfig {
+  const accountId = accountIdFromFleetName(fleetName);
+  const prefix = accountId ? fleetName.replace(new RegExp(`-${accountId}$`), "") : fleetName;
+  const suffix = accountId ? `${accountId}-${region}` : region;
+  return {
+    bucket: `${prefix}-fleetmind-tfstate-${suffix}`.toLowerCase(),
+    region,
+    key: "terraform.tfstate",
+    dynamodbTable: `${prefix}-fleetmind-tf-lock`.toLowerCase(),
+  };
+}
+
+async function promptBackendConfig(
+  fleetName: string,
+  region: string,
+  backendFile: string,
+  deps: OnboardDeps,
+): Promise<TerraformBackendConfig> {
+  const defaults = defaultBackendConfig(fleetName, region);
+  const existing = readBackendConfig(backendFile);
+  const current: TerraformBackendConfig = {
+    bucket: existing?.bucket ?? defaults.bucket,
+    region: existing?.region ?? defaults.region,
+    key: existing?.key ?? defaults.key,
+    dynamodbTable: existing?.dynamodbTable ?? defaults.dynamodbTable,
+  };
+
+  if (existing?.bucket && existing.region && existing.key && existing.dynamodbTable) {
+    log.ok(`  backend.hcl found (bucket: ${current.bucket}, table: ${current.dynamodbTable})`);
+    return current;
+  }
+
+  console.log("  backend.hcl is missing or incomplete. Choose backend settings:");
+  const bucket = (await deps.prompter.prompt(`    S3 bucket [${current.bucket}]: `)).trim() || current.bucket;
+  const table = (await deps.prompter.prompt(`    DynamoDB lock table [${current.dynamodbTable}]: `)).trim() || current.dynamodbTable;
+  const key = (await deps.prompter.prompt(`    Terraform state key [${current.key}]: `)).trim() || current.key;
+  const backend = { bucket, region: current.region, key, dynamodbTable: table };
+
+  if (await deps.prompter.confirm(`  Write ${path.basename(backendFile)} with these backend settings?`, true)) {
+    deps.fs.writeFileSync(backendFile, renderBackendConfig(backend), "utf8");
+    log.ok("  backend.hcl written");
+  } else {
+    log.warn("  backend.hcl not written; terraform init may fail if backend config is missing.");
+  }
+  return backend;
+}
+
+async function ensureTerraformBackend(
+  backend: TerraformBackendConfig,
+  deps: OnboardDeps,
+): Promise<void> {
+  const terraform = deps.terraform ?? createTerraformDeps(
+    new S3Client({ region: backend.region }),
+    new DynamoDBClient({ region: backend.region }),
+    new STSClient({ region: backend.region }),
+  );
+
+  if (await terraform.bucketExists(backend.bucket, backend.region)) {
+    log.ok(`  S3 backend bucket exists: ${backend.bucket}`);
+  } else if (await deps.prompter.confirm(`  Create S3 backend bucket ${backend.bucket}?`, true)) {
+    await terraform.createBucket(backend.bucket, backend.region);
+    log.ok(`  S3 backend bucket created: ${backend.bucket}`);
+  } else {
+    throw new Error(`Terraform backend bucket does not exist: ${backend.bucket}`);
+  }
+
+  if (await terraform.tableExists(backend.dynamodbTable, backend.region)) {
+    log.ok(`  DynamoDB lock table exists: ${backend.dynamodbTable}`);
+  } else if (await deps.prompter.confirm(`  Create DynamoDB lock table ${backend.dynamodbTable}?`, true)) {
+    await terraform.createTable(backend.dynamodbTable, backend.region);
+    log.ok(`  DynamoDB lock table created: ${backend.dynamodbTable}`);
+  } else {
+    throw new Error(`Terraform lock table does not exist: ${backend.dynamodbTable}`);
+  }
+}
+
+async function verifyTerraformPrerequisites(terraform: TerraformDeps): Promise<void> {
+  const version = await terraform.terraformVersion();
+  log.ok(`  Terraform available: ${version}`);
+  const identity = await terraform.awsIdentity();
+  log.ok(`  AWS credentials active: ${identity}`);
 }
 
 interface PreflightState {
@@ -423,7 +675,7 @@ export async function runOnboard(
   step(5, TOTAL, "GitHub Apps", preflight.githubApps);
   step(6, TOTAL, "GitHub Packages PAT", preflight.packagesPat ? "done" : "next");
   step(7, TOTAL, "Render tfvars", tfvarsExist ? "done" : "next");
-  step(8, TOTAL, "Terraform apply", preflight.terraformApplied ? "done" : "next");
+  step(8, TOTAL, "Terraform", preflight.terraformApplied ? "done" : "next");
   step(9, TOTAL, "Populate secrets", preflight.secretsPopulated ? "done" : "next");
   step(10, TOTAL, "Store GitHub App credentials", preflight.githubApps);
   step(11, TOTAL, "Push fleet", "next");
@@ -668,23 +920,68 @@ export async function runOnboard(
 
   // ── Step 8: Terraform ───────────────────────────────────────────────────────
   header("Step 8 / 12 — Terraform");
-  // Detect tfvars filenames from what render actually produced
   const fleetDir = path.dirname(fleetFile);
+  const terraform = deps.terraform ?? createTerraformDeps(
+    new S3Client({ region }),
+    new DynamoDBClient({ region }),
+    new STSClient({ region }),
+  );
+  const backendFile = path.join(fleetDir, "backend.hcl");
   const infraTfvarsPath = (() => {
     // Look for <fleet>.tfvars, default.tfvars, or any .tfvars that isn't derived
     const candidates = [`workspaces/${fleetName}.tfvars`, "workspaces/default.tfvars"];
     return candidates.find(f => deps.fs.existsSync(path.join(fleetDir, f))) ?? `workspaces/${fleetName}.tfvars`;
   })();
-  const tfvarsFile = `workspaces/${fleetName}.derived.tfvars`;
+  const derivedTfvarsPath = (() => {
+    const candidates = [`workspaces/${fleetName}.derived.tfvars`, "workspaces/default.derived.tfvars"];
+    return candidates.find(f => deps.fs.existsSync(path.join(fleetDir, f))) ?? `workspaces/${fleetName}.derived.tfvars`;
+  })();
+  const planFile = `.fleetmind-${fleetName}.tfplan`;
 
-  console.log("  Run these commands in your fleet repo (run from the repo root):\n");
-  console.log(`  \x1b[36mterraform init -backend-config=backend.hcl\x1b[0m`);
-  console.log(`  \x1b[36mterraform workspace new ${fleetName}\x1b[0m`);
-  console.log(`  \x1b[36mterraform apply \\`);
-  console.log(`    -var-file=${infraTfvarsPath} \\`);
-  console.log(`    -var-file=${tfvarsFile}\x1b[0m\n`);
-  console.log("  Instances will boot but agents crash-loop until secrets are populated.\n");
-  await deps.prompter.confirm("  Terraform apply complete?", true);
+  console.log("  This can create the remote state backend and run Terraform from the fleet repo root.");
+  console.log(`  tfvars: ${infraTfvarsPath} + ${derivedTfvarsPath}`);
+  if (await deps.prompter.confirm("  Run Terraform backend/bootstrap + init/validate/plan/apply now?", false)) {
+    await verifyTerraformPrerequisites(terraform);
+    const backend = await promptBackendConfig(fleetName, region, backendFile, deps);
+    await ensureTerraformBackend(backend, deps);
+
+    log.info("  terraform init");
+    await terraform.run(["init", "-backend-config=backend.hcl"], fleetDir);
+
+    try {
+      log.info(`  terraform workspace select ${fleetName}`);
+      await terraform.run(["workspace", "select", fleetName], fleetDir);
+    } catch (err) {
+      if (!await deps.prompter.confirm(`  Terraform workspace ${fleetName} not selected. Create it?`, true)) {
+        throw err;
+      }
+      log.info(`  terraform workspace new ${fleetName}`);
+      await terraform.run(["workspace", "new", fleetName], fleetDir);
+    }
+
+    log.info("  terraform validate");
+    await terraform.run(["validate"], fleetDir);
+
+    log.info("  terraform plan");
+    await terraform.run([
+      "plan",
+      `-var-file=${infraTfvarsPath}`,
+      `-var-file=${derivedTfvarsPath}`,
+      `-out=${planFile}`,
+    ], fleetDir);
+
+    if (await deps.prompter.confirm("  Apply this Terraform plan now?", false)) {
+      log.info("  terraform apply");
+      await terraform.run(["apply", planFile], fleetDir);
+      log.ok("  Terraform apply complete");
+    } else {
+      log.warn(`  Terraform apply skipped. Plan saved at ${planFile}`);
+      console.log(`  Run later from the fleet repo root: \x1b[36mterraform apply ${planFile}\x1b[0m`);
+    }
+  } else {
+    console.log("  Terraform skipped. Run this step later before populating Secrets Manager:");
+    console.log(`  \x1b[36mfleetmind onboard --fleet ${fleetFile}\x1b[0m`);
+  }
 
   // ── Step 9: Populate Secrets Manager ────────────────────────────────────────
   header("Step 9 / 12 — Populate Secrets Manager");
@@ -842,7 +1139,7 @@ Steps guided by this wizard:
   5.  Collect GitHub App credentials (app_id, installation_id, pem)
   6.  Check/set GitHub Packages PAT in SSM
   7.  Run fleetmind render
-  8.  Guided Terraform init + workspace + apply
+  8.  Bootstrap Terraform backend, then init + validate + plan + apply
   9.  Populate Secrets Manager (Slack + Anthropic keys)
   10. Store GitHub App credentials in SSM
   11. Run fleetmind push fleet --restart --upgrade-cli
