@@ -838,6 +838,60 @@ describe("role-template rendering", () => {
     assert.ok(identityContent.includes("a test agent"), "IDENTITY.md must include the description");
   });
 
+  test("specialist worker AGENTS.md routes human direct asks through worker-self-start", async () => {
+    const cases: Array<{ agent: AgentConfig; id: string }> = [
+      {
+        id: "backend",
+        agent: {
+          id: "backend",
+          name: "Backend",
+          emoji: "⚙️",
+          description: "backend specialist",
+          orchestrator: false,
+          role: "backend-worker",
+          persona: { soul: "backend soul" },
+          slack: { account_id: "backend", bot_token: "xoxb-backend", app_token: "xapp-backend" },
+          skills: [],
+          plugins: ["anthropic"],
+          agent_to_agent: { can_send_to: [] },
+        } as unknown as AgentConfig,
+      },
+      {
+        id: "frontend",
+        agent: {
+          id: "frontend",
+          name: "Frontend",
+          emoji: "🎨",
+          description: "frontend specialist",
+          orchestrator: false,
+          role: "frontend-worker",
+          persona: { soul: "frontend soul" },
+          slack: { account_id: "frontend", bot_token: "xoxb-frontend", app_token: "xapp-frontend" },
+          skills: [],
+          plugins: ["anthropic"],
+          agent_to_agent: { can_send_to: [] },
+        } as unknown as AgentConfig,
+      },
+    ];
+
+    for (const { agent, id } of cases) {
+      await provisionAgent(makeFleet(), agent, false, tmpDir);
+      const content = fs.readFileSync(
+        path.join(tmpDir, "rendered", "workspaces", id, "AGENTS.md"),
+        "utf8"
+      );
+
+      assert.ok(
+        content.includes("Human asks you to start work without a PM delegation | `worker-self-start`"),
+        `${id} AGENTS.md must point human direct work at worker-self-start`
+      );
+      assert.ok(
+        content.includes("Create the row BEFORE posting the self-start notice"),
+        `${id} AGENTS.md must preserve SF-2 ordering`
+      );
+    }
+  });
+
   test("provisionAgent falls back to inline stub when role-template file is missing", async () => {
     // worker-bot/workspace/ has no IDENTITY.md — verifies the fallback path
     const fleet = makeFleet();
