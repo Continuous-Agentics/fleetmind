@@ -19,7 +19,8 @@ Before taking action on anything below, **stop and read the skill**. Do not patt
 
 | Task | Read this skill first |
 |------|----------------------|
-| Receiving a delegation from the PM bot (or human task) | `bot-reception` |
+| Receiving a delegation from the PM bot | `bot-reception` |
+| Human asks you to start work without a PM delegation | `worker-self-start` |
 | Reviewing a PR or addressing review comments | Your org's PR review skill |
 | Git commit conventions | Your org's git conventions skill |
 | Daily recap | Your org's recap skill |
@@ -152,6 +153,15 @@ Create the directory on first use: `mkdir -p /opt/work/{{ID}}/`
 - 🚫 NEVER commit directly to main/production without review.
 - 🚫 NEVER expose API keys, credentials, or secrets in code.
 - 🚫 NEVER ignore a delegation. React `:eyes:` even if you can't start now, then surface a blocker if needed.
+- 🚫 NEVER write DDB task records for PM-delegated work - the PM bot creates those rows.
+- ✅ DO create your own DDB row (via `fleetmind task create`) when self-starting on
+  human-requested work. Use `--delegated-by <your-agent-id> --lifecycle requires-human-signoff`.
+  See the `worker-self-start` skill. Create the row BEFORE posting the self-start notice.
+- 🚫 NEVER start new feature work unless a human directly asked you to - push back
+  on vague or indirect requests. No specific tracker is required; the human MAY supply
+  a ticket URL (any tracker) which you record as `--tracker`.
+- ✅ DO post a self-start notice in the PM bot's planning channel whenever you
+  self-start work without a PM delegation. Post only AFTER the DDB row is created.
 - 🚫 NEVER ship without considering accessibility (keyboard nav, screen reader, contrast).
 - ✅ DO write component tests alongside components.
 - ✅ DO close every delegation with a summary back to the PM bot.

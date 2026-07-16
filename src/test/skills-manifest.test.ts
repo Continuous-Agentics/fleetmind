@@ -334,3 +334,16 @@ delegation: { enabled: true, table_name: x-tasks, s3_bucket: x-ledger, aws_regio
     assert.equal(gaps2[0].missing.length, 0, "second pass should find nothing missing");
   });
 });
+
+describe("bundled worker role manifests", () => {
+  it("requires worker-self-start for every worker role that accepts human direct work", () => {
+    for (const role of ["worker", "backend-worker", "frontend-worker"] as const) {
+      const manifest = loadManifestForRole(role, process.cwd());
+      assert.ok(manifest, `${role} must have a bundled skills.yaml`);
+      assert.ok(
+        manifest.required.some((skill) => skill.name === "worker-self-start" && skill.source === "fleetmind"),
+        `${role} must require fleetmind worker-self-start`
+      );
+    }
+  });
+});
