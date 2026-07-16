@@ -22,8 +22,7 @@
   },
   "homepage": "https://github.com/Continuous-Agentics/fleetmind#readme",
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com",
-    "access": "restricted",
+    "access": "public",
     "tag": "latest"
   },
   "files": [

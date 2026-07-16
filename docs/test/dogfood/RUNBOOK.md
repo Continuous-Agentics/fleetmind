@@ -57,27 +57,16 @@ Five bootstrap/renderer bugs surfaced during the first live deploy attempt. All 
 - `terraform` ≥ 1.6 (or use `tfenv` — `.terraform-version` is committed)
 - `aws` CLI v2 configured with access to dogfood (`624905204775`)
 - `node` ≥ 20, `npm` ≥ 10
-- `fleetmind` CLI: `npm install -g @continuous-agentics/fleetmind` (see npm auth setup below)
+- `fleetmind` CLI: `npm install -g @continuous-agentics/fleetmind`
 - SSH key with access to EC2 (if using SCP transport — see Step 5)
 
-### Configure npm for GitHub Packages (one-time)
-
-fleetmind is now published as a **private scoped package** on GitHub Packages, not public npm.
-You need a GitHub PAT with `read:packages` scope to install it:
+### Install fleetmind
 
 ```bash
-# 1. Generate a classic PAT at https://github.com/settings/tokens
-#    Required scopes: read:packages (write:packages if you'll publish)
-
-# 2. Add to your ~/.npmrc:
-echo "@continuous-agentics:registry=https://npm.pkg.github.com" >> ~/.npmrc
-echo "//npm.pkg.github.com/:_authToken=<YOUR_PAT>" >> ~/.npmrc
-
-# 3. Now install:
 npm install -g @continuous-agentics/fleetmind
 ```
 
-See `RELEASING.md` for the full release process and SSM token setup for EC2 instances.
+See `RELEASING.md` for the full release process.
 
 ### AWS identity
 Use `AdministratorAccess` on the deploying identity for a test run. Enumerate least-privilege post-validation. The principal needs EC2, VPC, IAM, Secrets Manager, DynamoDB, S3, EventBridge, SQS, SNS, SSM, and CloudWatch permissions. See the Pre-Flight Assessment for the full permission list.
@@ -112,9 +101,9 @@ export ANTHROPIC_API_KEY="sk-ant-..."   # used for both agents in this test flee
 ## Step 1: Clone & Install
 
 > **Reminder:** Before `terraform apply`, `@continuous-agentics/fleetmind` must be
-> published to GitHub Packages at the version pinned in `terraform-extras.tfvars`
+> published to npm at the version pinned in `terraform-extras.tfvars`
 > (`fleetmind_version`). If the package isn't published yet, STAGE 6b of the bootstrap
-> will fail on every instance. See `RELEASING.md` → "Post-merge order for PR #59".
+> will fail on every instance. See `RELEASING.md`.
 
 ```bash
 git clone -b test/gg-sandbox https://github.com/Continuous-Agentics/fleetmind.git
@@ -412,8 +401,7 @@ The renderer uses `bot_user_id` from `fleet.yaml` to derive per-channel `users` 
 ```bash
 cd /path/to/fleetmind
 
-# Sanity check: confirm fleetmind is installed and authenticated against GitHub Packages
-# (requires the npm auth setup from Prerequisites above)
+# Sanity check: confirm fleetmind is installed.
 fleetmind --version
 
 # Ensure all token env vars are set in your shell (see Prerequisites)

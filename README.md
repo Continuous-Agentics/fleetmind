@@ -61,14 +61,9 @@ Bot EC2 hosts are provisioned by the [`terraform-aws-fleetmind`](https://github.
 
 ## Installation
 
-fleetmind is published to [GitHub Packages](https://github.com/features/packages) as a private scoped package.
-You need a GitHub classic PAT with `read:packages` scope:
+fleetmind is published to public npm:
 
 ```bash
-# One-time local setup
-echo "@continuous-agentics:registry=https://npm.pkg.github.com" >> ~/.npmrc
-echo "//npm.pkg.github.com/:_authToken=<YOUR_PAT>" >> ~/.npmrc
-
 npm install -g @continuous-agentics/fleetmind
 ```
 

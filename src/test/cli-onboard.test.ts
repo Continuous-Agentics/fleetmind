@@ -444,11 +444,10 @@ describe("happy path — delegation: false", () => {
   test("wizard completes all 12 steps; mocked AWS and prompter drive the run", async () => {
     const fleetName = "hp-fleet";
 
-    // SSM: agent app-ids + PAT already set → step 5 and step 6 skip
+    // SSM: agent app-ids already set → step 5 skip
     const ssmMock = makeMockSSM([
       `/fleetmind/${fleetName}/agents/pm-bot/github-app/app-id`,
       `/fleetmind/${fleetName}/agents/worker-bot/github-app/app-id`,
-      "/fleetmind/shared/github-packages-token",
     ]);
 
     // SM: real (non-placeholder) slack + anthropic secrets for both agents
@@ -469,7 +468,6 @@ describe("happy path — delegation: false", () => {
         // Step 5: manifest flow
         false,  // pm-bot: "GitHub App already in SSM. Override?" → no
         false,  // worker-bot: "GitHub App already in SSM. Override?" → no
-        // Step 6: skip (PAT already in SSM)
         true,   // "Run fleetmind render?"
         false,  // "Terraform apply complete?" (default false, no-op)
         true,   // "Populate secrets now?"
@@ -539,7 +537,6 @@ describe("happy path — delegation: true", () => {
     const ssmMock = makeMockSSM([
       `/fleetmind/${fleetName}/agents/pm-bot/github-app/app-id`,
       `/fleetmind/${fleetName}/agents/worker-bot/github-app/app-id`,
-      "/fleetmind/shared/github-packages-token",
     ]);
     const smMock = makeMockSM({
       [`${fleetName}/agents/pm-bot/slack`]: JSON.stringify({ SLACK_BOT_TOKEN: "xoxb-pm" }),
@@ -796,7 +793,6 @@ describe("step 9 — provider-prompt matrix", () => {
    *
    * Steps 2-4 are skipped automatically (manifests exist, all user IDs set).
    * Step 5: all agents → ssmExists=true → override=false → skip.
-   * Step 6: PAT exists → skip.
    * Step 7: confirm("render?") → false → skip.
    * Step 8: terraform ack (no-op).
    * Step 11: confirm("push?") → false → skip.
@@ -824,7 +820,6 @@ describe("step 9 — provider-prompt matrix", () => {
     const agentIds = opts.agents.map(a => a.id);
     const ssmMock = makeMockSSM([
       ...agentIds.map(id => `/fleetmind/${fleetName}/agents/${id}/github-app/app-id`),
-      "/fleetmind/shared/github-packages-token",
     ]);
     const smMock = makeMockSM(opts.smSecrets ?? {});
 
@@ -961,7 +956,6 @@ describe("step 9 — provider-prompt matrix", () => {
     const existingAnt = JSON.stringify({ ANTHROPIC_API_KEY: "sk-existing" });
     const ssmMock = makeMockSSM([
       `/fleetmind/${fleetName}/agents/override-agent/github-app/app-id`,
-      "/fleetmind/shared/github-packages-token",
     ]);
     const smMock = makeMockSM({
       [`${fleetName}/agents/override-agent/slack`]: existingSlack,
@@ -1073,7 +1067,6 @@ describe("idempotency", () => {
 
     const ssmMock = makeMockSSM([
       `/fleetmind/${fleetName}/agents/pm-bot/github-app/app-id`,
-      "/fleetmind/shared/github-packages-token",
     ]);
     const smMock = makeMockSM({
       [`${fleetName}/agents/pm-bot/slack`]: JSON.stringify({ SLACK_BOT_TOKEN: "xoxb-real" }),
@@ -1119,7 +1112,6 @@ describe("idempotency", () => {
     const ssmMock = makeMockSSM([
       `/fleetmind/${fleetName}/agents/pm-bot/github-app/app-id`,
       `/fleetmind/${fleetName}/agents/worker-bot/github-app/app-id`,
-      "/fleetmind/shared/github-packages-token",
     ]);
     const smMock = makeMockSM({
       [`${fleetName}/agents/pm-bot/slack`]: JSON.stringify({ SLACK_BOT_TOKEN: "xoxb-pm" }),
@@ -1181,7 +1173,6 @@ describe("idempotency", () => {
 
     const ssmMock = makeMockSSM([
       `/fleetmind/${fleetName}/agents/multi-bot/github-app/app-id`,
-      "/fleetmind/shared/github-packages-token",
     ]);
     const smMock = makeMockSM({
       // slack: missing → will prompt
@@ -1254,7 +1245,6 @@ describe("fallback", () => {
     tmpDir = setup.tmpDir;
 
     const ssmMock = makeMockSSM([
-      "/fleetmind/shared/github-packages-token",
       // Note: app-id NOT pre-set → step 5 will prompt
     ]);
     const smMock = makeMockSM({
@@ -1321,7 +1311,6 @@ describe("fallback", () => {
     tmpDir = setup.tmpDir;
 
     const ssmMock = makeMockSSM([
-      "/fleetmind/shared/github-packages-token",
       // app-id NOT pre-set
     ]);
     const smMock = makeMockSM({
@@ -1376,8 +1365,8 @@ describe("GitHub Apps skip path (every agent opted out with github_access: false
       }),
     );
 
-    // PAT present; secrets present → only render/terraform/secrets/push confirms.
-    const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
+    // secrets present → only render/terraform/secrets/push confirms.
+    const ssmMock = makeMockSSM([]);
     const smMock = makeMockSM({
       [`${fleetName}/agents/pm-bot/slack`]: JSON.stringify({ SLACK_BOT_TOKEN: "xoxb-pm" }),
       [`${fleetName}/agents/pm-bot/providers/anthropic`]: JSON.stringify({ ANTHROPIC_API_KEY: "sk-ant-pm" }),
@@ -1389,7 +1378,6 @@ describe("GitHub Apps skip path (every agent opted out with github_access: false
       [
         true,   // Start onboarding?
         // Step 5: SKIPPED (all github_access: false) — no confirm consumed
-        // Step 6: skip (PAT in SSM)
         true,   // Run fleetmind render?
         false,  // Terraform apply complete?
         true,   // Populate secrets now?
@@ -1463,10 +1451,9 @@ describe("fix #243 — ResourceNotFoundException yields friendly error", () => {
     const setup = makeTempFleet(yaml);
     tmpDir = setup.tmpDir;
 
-    // SSM: app-id for rne-bot (skips GitHub App creation) + PAT (skips step 6).
+    // SSM: app-id for rne-bot skips GitHub App creation.
     const ssmMock = makeMockSSM([
       `/fleetmind/${fleetName}/agents/rne-bot/github-app/app-id`,
-      "/fleetmind/shared/github-packages-token",
     ]);
 
     // strictPut: true simulates Terraform not applied — secrets don't exist yet.
@@ -1515,10 +1502,9 @@ describe("fix #243 — ResourceNotFoundException yields friendly error", () => {
     const setup = makeTempFleet(yaml);
     tmpDir = setup.tmpDir;
 
-    // SSM: app-id + PAT (both steps already satisfied).
+    // SSM: app-id already satisfied.
     const ssmMock = makeMockSSM([
       `/fleetmind/${fleetName}/agents/prov-bot/github-app/app-id`,
-      "/fleetmind/shared/github-packages-token",
     ]);
 
     // Slack secret exists (real), but provider secret doesn't.

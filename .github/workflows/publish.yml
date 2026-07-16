@@ -1,4 +1,4 @@
-# publish.yml — Release-on-tag publish to GitHub Packages.
+# publish.yml — Release-on-tag publish to npm.
 #
 # Triggers:
 #   - push of a STABLE tag `vMAJOR.MINOR.PATCH` → published to the `latest`
@@ -17,7 +17,7 @@
 # After a successful publish, the workflow also creates a GitHub Release for
 # the same tag with release notes extracted from CHANGELOG.md.
 
-name: Publish to GitHub Packages
+name: Publish to npm
 
 on:
   push:
@@ -32,7 +32,7 @@ on:
         default: ""
 
 jobs:
-  publish-to-github-packages:
+  publish-to-npm:
     name: Publish
     runs-on: ubuntu-latest
     # Auto-run on tag push. For manual workflow_dispatch reruns, require the
@@ -43,7 +43,7 @@ jobs:
 
     permissions:
       contents: write
-      packages: write
+      id-token: write
 
     steps:
       - name: Checkout (full history for tag context)
@@ -55,8 +55,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          registry-url: "https://npm.pkg.github.com"
-          scope: "@continuous-agentics"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: npm ci
@@ -96,9 +98,10 @@ jobs:
           fi
 
       - name: Publish
-        run: npm publish --tag "${{ steps.disttag.outputs.npm_tag }}"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          unset NODE_AUTH_TOKEN
+          unset NPM_TOKEN
+          npm publish --access public --tag "${{ steps.disttag.outputs.npm_tag }}" --provenance
 
       # ── Auto-create GitHub Release with CHANGELOG-extracted notes ────────
       # Skipped on workflow_dispatch reruns (the release usually already

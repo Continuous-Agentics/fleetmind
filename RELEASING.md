@@ -1,23 +1,14 @@
 # Releasing fleetmind
 
-fleetmind is published to GitHub Packages as `@continuous-agentics/fleetmind`.
+fleetmind is published to public npm as `@continuous-agentics/fleetmind`.
 
 ## Prerequisites
 
-### npm auth setup (one-time, per-machine)
+### npm trusted publishing setup
 
-Generate a classic PAT from https://github.com/settings/tokens with:
-- `read:packages` scope (for installing)
-- `write:packages` scope (for publishing)
-
-Then configure your local npm:
-
-```bash
-echo "@continuous-agentics:registry=https://npm.pkg.github.com" >> ~/.npmrc
-echo "//npm.pkg.github.com/:_authToken=<YOUR_PAT>" >> ~/.npmrc
-```
-
-After this, `npm install -g @continuous-agentics/fleetmind` works locally.
+The publish workflow uses npm trusted publishing via GitHub Actions OIDC. Configure
+the `@continuous-agentics/fleetmind` package on npm to trust this repository's
+`.github/workflows/publish.yml` workflow before cutting a release.
 
 ## Steps
 
@@ -34,7 +25,7 @@ After this, `npm install -g @continuous-agentics/fleetmind` works locally.
    ```
    The push of the `vMAJOR.MINOR.PATCH` tag fires `.github/workflows/publish.yml`, which:
    - Runs `npm ci` + build + tests
-   - Publishes to GitHub Packages (`@continuous-agentics/fleetmind`)
+   - Publishes to public npm (`@continuous-agentics/fleetmind`)
    - Creates a GitHub Release using the matching `[X.Y.Z]` section from CHANGELOG.md as notes
 
    Watch the workflow run at `https://github.com/Continuous-Agentics/fleetmind/actions`. If it fails after build/test, the tag is still there but no publish/release happens — fix the issue and re-trigger via the Actions UI (manual `workflow_dispatch` with `confirm=publish`).
@@ -48,47 +39,15 @@ After this, `npm install -g @continuous-agentics/fleetmind` works locally.
    ```bash
    terraform apply
    ```
-   EC2 instances are replaced; STAGE 6b of the bootstrap installs the new version from GitHub Packages.
-
-## Post-merge order for PR #59
-
-> **Important:** The bootstrap STAGE 6b will fail until fleetmind is published and the SSM token is in place. Do this in order after merging:
-
-1. **Merge PR #59** into `test/gg-sandbox`.
-2. **Put the GitHub PAT in SSM:**
-   ```bash
-   aws ssm put-parameter \
-     --name /fleetmind/shared/github-packages-token \
-     --type SecureString \
-     --value <PAT_WITH_READ_PACKAGES> \
-     --region us-west-2
-   ```
-   The PAT needs `read:packages` scope at minimum.
-3. **Publish the package** (one-time; run from a machine with `write:packages`):
-   ```bash
-   # Ensure ~/.npmrc is configured (see Prerequisites above)
-   npm version 0.4.1   # or skip if package.json already has 0.4.1
-   npm publish
-   ```
-4. **Apply Terraform** — instances are replaced; STAGE 6b fetches the PAT from SSM,
-   installs `@continuous-agentics/fleetmind@0.4.1`, verifies `fleetmind --version`,
-   and cleans up the `.npmrc`.
-
-## SSM parameter path
-
-```
-/fleetmind/shared/github-packages-token
-```
-
-Type: `SecureString` (encrypted with the default SSM KMS key `aws/ssm`).
-
-All fleets and all agent instances share this one parameter. Single point of revocation — rotate by overwriting the parameter.
+   EC2 instances are replaced; bootstrap installs the new version from public npm.
 
 ## Tag-trigger details
 
 The publish workflow's tag filter is strict semver: `v[0-9]+.[0-9]+.[0-9]+`. Typo'd tags (`v0.5.2.` or `v0.5-rc`) do **not** trigger a publish — they push to the repo as ordinary tags but no workflow fires.
 
-For pre-releases (e.g. `v0.6.0-rc.1`): the current filter does not include `-rc` suffixes. To publish a pre-release, run the workflow manually via `workflow_dispatch` with `confirm=publish` against the branch/tag of choice. We can broaden the regex if pre-releases become routine — file an issue.
+For pre-releases (e.g. `v0.6.0-rc.1`), the workflow publishes to the `beta`
+dist-tag. Install explicitly with `npm install -g @continuous-agentics/fleetmind@beta`
+or `fleetmind self-upgrade --to 0.6.0-rc.1 --apply`.
 
 ## Manual workflow_dispatch (debug / rerun)
 
