@@ -569,9 +569,14 @@ describe("happy path — delegation: true", () => {
 // ── Step 8 — Terraform backend/bootstrap/apply ───────────────────────────────
 
 describe("step 8 — Terraform workflow", () => {
-  let setup: TestSetup;
+  let setup: TestSetup | undefined;
 
-  afterEach(() => cleanupTempDir(setup.tmpDir));
+  afterEach(() => {
+    if (setup) {
+      cleanupTempDir(setup.tmpDir);
+      setup = undefined;
+    }
+  });
 
   test("creates missing backend resources, initializes Terraform, plans, and applies after approval", async () => {
     const fleetName = "tf-fleet";
@@ -638,6 +643,7 @@ describe("step 8 — Terraform workflow", () => {
         false, // Run render?
         true,  // Run Terraform workflow?
         true,  // Configure existing S3 backend bucket?
+        true,  // Configure existing DynamoDB lock table?
         false, // Apply plan?
         false, // Populate secrets?
         false, // Push fleet?
@@ -664,6 +670,7 @@ describe("step 8 — Terraform workflow", () => {
   test("fails before backend mutation when Terraform is not installed", async () => {
     const fleetName = "tf-no-bin";
     setup = makeTempFleet(makeFleetYaml({ fleetName, githubApp: false }));
+    const fleetFile = setup.fleetFile;
     writeTfvarsFixture(setup.tmpDir, fleetName);
     const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
     const smMock = makeMockSM();
@@ -671,7 +678,7 @@ describe("step 8 — Terraform workflow", () => {
     const mock = makeMockPrompter([true, false, true]);
 
     await assert.rejects(
-      () => runOnboard(setup.fleetFile, "us-west-2", {}, {
+      () => runOnboard(fleetFile, "us-west-2", {}, {
         ...makeDeps(mock.prompter, ssmMock.ssm, smMock.sm),
         terraform: tf.deps,
       }),
@@ -686,6 +693,7 @@ describe("step 8 — Terraform workflow", () => {
   test("fails before backend mutation when AWS credentials are unusable", async () => {
     const fleetName = "tf-no-aws";
     setup = makeTempFleet(makeFleetYaml({ fleetName, githubApp: false }));
+    const fleetFile = setup.fleetFile;
     writeTfvarsFixture(setup.tmpDir, fleetName);
     const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
     const smMock = makeMockSM();
@@ -693,7 +701,7 @@ describe("step 8 — Terraform workflow", () => {
     const mock = makeMockPrompter([true, false, true]);
 
     await assert.rejects(
-      () => runOnboard(setup.fleetFile, "us-west-2", {}, {
+      () => runOnboard(fleetFile, "us-west-2", {}, {
         ...makeDeps(mock.prompter, ssmMock.ssm, smMock.sm),
         terraform: tf.deps,
       }),
@@ -708,13 +716,14 @@ describe("step 8 — Terraform workflow", () => {
   test("fails clearly before Terraform when rendered tfvars are missing", async () => {
     const fleetName = "tf-missing-render";
     setup = makeTempFleet(makeFleetYaml({ fleetName, githubApp: false }));
+    const fleetFile = setup.fleetFile;
     const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
     const smMock = makeMockSM();
     const tf = makeMockTerraform();
     const mock = makeMockPrompter([true, false, true]);
 
     await assert.rejects(
-      () => runOnboard(setup.fleetFile, "us-west-2", {}, {
+      () => runOnboard(fleetFile, "us-west-2", {}, {
         ...makeDeps(mock.prompter, ssmMock.ssm, smMock.sm),
         terraform: tf.deps,
       }),
@@ -748,6 +757,7 @@ outputs:
       true,  // Run Terraform workflow?
       true,  // Write backend.hcl?
       true,  // Configure existing S3 backend bucket?
+      true,  // Configure existing DynamoDB lock table?
       false, // Apply plan?
       false, // Populate secrets?
       false, // Push fleet?

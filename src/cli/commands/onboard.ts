@@ -521,7 +521,7 @@ async function promptBackendConfig(
     dynamodbTable: existing?.dynamodbTable ?? defaults.dynamodbTable,
   };
 
-  if (existing?.bucket && existing.region && existing.key && existing.dynamodbTable) {
+  if (existing?.bucket && existing?.region && existing?.key && existing?.dynamodbTable) {
     log.ok(`  backend.hcl found (bucket: ${current.bucket}, table: ${current.dynamodbTable})`);
     return current;
   }
@@ -570,8 +570,12 @@ async function ensureTerraformBackend(
 
   if (await terraform.tableExists(backend.dynamodbTable, backend.region)) {
     log.ok(`  DynamoDB lock table exists: ${backend.dynamodbTable}`);
-    await terraform.configureTable(backend.dynamodbTable, backend.region, tags);
-    log.ok("  DynamoDB lock table schema/tags verified");
+    if (await deps.prompter.confirm("  Configure/verify DynamoDB lock table schema and tags?", true)) {
+      await terraform.configureTable(backend.dynamodbTable, backend.region, tags);
+      log.ok("  DynamoDB lock table schema/tags verified");
+    } else {
+      throw new Error("Cannot continue without verifying/configuring the Terraform lock table.");
+    }
   } else if (await deps.prompter.confirm(`  Create DynamoDB lock table ${backend.dynamodbTable}?`, true)) {
     await terraform.createTable(backend.dynamodbTable, backend.region, tags);
     log.ok(`  DynamoDB lock table created: ${backend.dynamodbTable}`);
