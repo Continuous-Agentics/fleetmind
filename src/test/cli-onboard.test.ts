@@ -337,6 +337,13 @@ function cleanupTempDir(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+function writeTfvarsFixture(tmpDir: string, fleetName: string): void {
+  const workspacesDir = path.join(tmpDir, "workspaces");
+  fs.mkdirSync(workspacesDir, { recursive: true });
+  fs.writeFileSync(path.join(workspacesDir, `${fleetName}.tfvars`), "# test tfvars\n", "utf-8");
+  fs.writeFileSync(path.join(workspacesDir, `${fleetName}.derived.tfvars`), "# test derived tfvars\n", "utf-8");
+}
+
 /**
  * Build a standard OnboardDeps suitable for most wizard tests.
  * - fs: real (temp dir with real files)
@@ -563,6 +570,7 @@ describe("step 8 — Terraform workflow", () => {
   test("creates missing backend resources, initializes Terraform, plans, and applies after approval", async () => {
     const fleetName = "tf-fleet";
     setup = makeTempFleet(makeFleetYaml({ fleetName, githubApp: false }));
+    writeTfvarsFixture(setup.tmpDir, fleetName);
     const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
     const smMock = makeMockSM();
     const tf = makeMockTerraform({ bucketExists: false, tableExists: false, selectFails: true });
@@ -603,6 +611,7 @@ describe("step 8 — Terraform workflow", () => {
   test("uses existing backend resources and stops after plan when apply is declined", async () => {
     const fleetName = "tf-existing";
     setup = makeTempFleet(makeFleetYaml({ fleetName, githubApp: false }));
+    writeTfvarsFixture(setup.tmpDir, fleetName);
     fs.writeFileSync(
       path.join(setup.tmpDir, "backend.hcl"),
       [
@@ -645,6 +654,7 @@ describe("step 8 — Terraform workflow", () => {
   test("fails before backend mutation when Terraform is not installed", async () => {
     const fleetName = "tf-no-bin";
     setup = makeTempFleet(makeFleetYaml({ fleetName, githubApp: false }));
+    writeTfvarsFixture(setup.tmpDir, fleetName);
     const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
     const smMock = makeMockSM();
     const tf = makeMockTerraform({ terraformError: new Error("Terraform CLI not found. Install Terraform >= 1.6.") });
@@ -666,6 +676,7 @@ describe("step 8 — Terraform workflow", () => {
   test("fails before backend mutation when AWS credentials are unusable", async () => {
     const fleetName = "tf-no-aws";
     setup = makeTempFleet(makeFleetYaml({ fleetName, githubApp: false }));
+    writeTfvarsFixture(setup.tmpDir, fleetName);
     const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
     const smMock = makeMockSM();
     const tf = makeMockTerraform({ awsIdentityError: new Error("AWS credentials are not usable") });
@@ -677,6 +688,27 @@ describe("step 8 — Terraform workflow", () => {
         terraform: tf.deps,
       }),
       /AWS credentials are not usable/,
+    );
+
+    assert.deepEqual(tf.createdBuckets, []);
+    assert.deepEqual(tf.createdTables, []);
+    assert.deepEqual(tf.runs, []);
+  });
+
+  test("fails clearly before Terraform when rendered tfvars are missing", async () => {
+    const fleetName = "tf-missing-render";
+    setup = makeTempFleet(makeFleetYaml({ fleetName, githubApp: false }));
+    const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
+    const smMock = makeMockSM();
+    const tf = makeMockTerraform();
+    const mock = makeMockPrompter([true, false, true]);
+
+    await assert.rejects(
+      () => runOnboard(setup.fleetFile, "us-west-2", {}, {
+        ...makeDeps(mock.prompter, ssmMock.ssm, smMock.sm),
+        terraform: tf.deps,
+      }),
+      /Run Step 7 \/ `fleetmind render` first/,
     );
 
     assert.deepEqual(tf.createdBuckets, []);

@@ -291,6 +291,14 @@ function anyAgentNeedsGithubApp(agents: { github_access?: boolean }[]): boolean 
 }
 
 function createTerraformDeps(s3: S3Client, dynamodb: DynamoDBClient, sts: STSClient): TerraformDeps {
+  const isNotFound = (err: unknown): boolean => {
+    const candidate = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+    return candidate.name === "NotFound"
+      || candidate.name === "NoSuchBucket"
+      || candidate.name === "ResourceNotFoundException"
+      || candidate.$metadata?.httpStatusCode === 404;
+  };
+
   return {
     async terraformVersion(): Promise<string> {
       const result = spawnSync("terraform", ["version"], {
@@ -322,8 +330,9 @@ function createTerraformDeps(s3: S3Client, dynamodb: DynamoDBClient, sts: STSCli
       try {
         await s3.send(new HeadBucketCommand({ Bucket: bucket }));
         return true;
-      } catch {
-        return false;
+      } catch (err) {
+        if (isNotFound(err)) return false;
+        throw new Error(`Unable to check Terraform state bucket ${bucket}: ${String(err)}`);
       }
     },
     async createBucket(bucket: string, region: string): Promise<void> {
@@ -357,11 +366,12 @@ function createTerraformDeps(s3: S3Client, dynamodb: DynamoDBClient, sts: STSCli
       try {
         await dynamodb.send(new DescribeTableCommand({ TableName: table }));
         return true;
-      } catch {
-        return false;
+      } catch (err) {
+        if (isNotFound(err)) return false;
+        throw new Error(`Unable to check Terraform lock table ${table}: ${String(err)}`);
       }
     },
-    async createTable(table: string, region: string): Promise<void> {
+    async createTable(table: string, _region: string): Promise<void> {
       await dynamodb.send(new CreateTableCommand({
         TableName: table,
         BillingMode: "PAY_PER_REQUEST",
@@ -505,6 +515,20 @@ async function verifyTerraformPrerequisites(terraform: TerraformDeps): Promise<v
   log.ok(`  Terraform available: ${version}`);
   const identity = await terraform.awsIdentity();
   log.ok(`  AWS credentials active: ${identity}`);
+}
+
+function requireExistingFleetFile(
+  fleetDir: string,
+  candidates: string[],
+  description: string,
+  deps: OnboardDeps,
+): string {
+  const match = candidates.find(f => deps.fs.existsSync(path.join(fleetDir, f)));
+  if (match) return match;
+  throw new Error(
+    `Missing ${description}: expected one of ${candidates.join(", ")}.\n` +
+      "Run Step 7 / `fleetmind render` first, then re-run Terraform onboarding.",
+  );
 }
 
 interface PreflightState {
@@ -927,20 +951,25 @@ export async function runOnboard(
     new STSClient({ region }),
   );
   const backendFile = path.join(fleetDir, "backend.hcl");
-  const infraTfvarsPath = (() => {
-    // Look for <fleet>.tfvars, default.tfvars, or any .tfvars that isn't derived
-    const candidates = [`workspaces/${fleetName}.tfvars`, "workspaces/default.tfvars"];
-    return candidates.find(f => deps.fs.existsSync(path.join(fleetDir, f))) ?? `workspaces/${fleetName}.tfvars`;
-  })();
-  const derivedTfvarsPath = (() => {
-    const candidates = [`workspaces/${fleetName}.derived.tfvars`, "workspaces/default.derived.tfvars"];
-    return candidates.find(f => deps.fs.existsSync(path.join(fleetDir, f))) ?? `workspaces/${fleetName}.derived.tfvars`;
-  })();
+  const infraTfvarsCandidates = [`workspaces/${fleetName}.tfvars`, "workspaces/default.tfvars"];
+  const terraformDerivedTfvarsCandidates = [`workspaces/${fleetName}.derived.tfvars`, "workspaces/default.derived.tfvars"];
   const planFile = `.fleetmind-${fleetName}.tfplan`;
 
   console.log("  This can create the remote state backend and run Terraform from the fleet repo root.");
-  console.log(`  tfvars: ${infraTfvarsPath} + ${derivedTfvarsPath}`);
+  console.log(`  tfvars: ${infraTfvarsCandidates[0]} + ${terraformDerivedTfvarsCandidates[0]}`);
   if (await deps.prompter.confirm("  Run Terraform backend/bootstrap + init/validate/plan/apply now?", false)) {
+    const infraTfvarsPath = requireExistingFleetFile(
+      fleetDir,
+      infraTfvarsCandidates,
+      "Terraform variable file",
+      deps,
+    );
+    const derivedTfvarsPath = requireExistingFleetFile(
+      fleetDir,
+      terraformDerivedTfvarsCandidates,
+      "derived Terraform variable file",
+      deps,
+    );
     await verifyTerraformPrerequisites(terraform);
     const backend = await promptBackendConfig(fleetName, region, backendFile, deps);
     await ensureTerraformBackend(backend, deps);
@@ -980,7 +1009,7 @@ export async function runOnboard(
     }
   } else {
     console.log("  Terraform skipped. Run this step later before populating Secrets Manager:");
-    console.log(`  \x1b[36mfleetmind onboard --fleet ${fleetFile}\x1b[0m`);
+    console.log(`  \x1b[36mfleetmind onboard --fleet ${fleetFile} --region ${region}\x1b[0m`);
   }
 
   // ── Step 9: Populate Secrets Manager ────────────────────────────────────────
@@ -1115,7 +1144,7 @@ export async function runOnboard(
   console.log("  Check that both bots are running:\n");
   console.log(`  \x1b[36mterraform output ssm_connect\x1b[0m`);
   console.log("  (then paste the SSM command for each agent and run:)");
-  console.log(`  \x1b[36mjournalctl -u openclaw-<agent> -n 50\x1b[0m\n`);
+  console.log(`  \x1b[36msudo journalctl -u openclaw-<agent> -n 50\x1b[0m\n`);
 
   console.log("\x1b[32m\x1b[1m🎉 Onboarding complete!\x1b[0m");
   console.log(`  Fleet \x1b[1m${fleetName}\x1b[0m is deployed. Your bots should be online in Slack shortly.\n`);
