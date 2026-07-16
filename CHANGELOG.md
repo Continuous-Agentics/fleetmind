@@ -6,6 +6,48 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-07-16
+
+### Added
+
+- **Guided Terraform bootstrap during onboarding.** `fleetmind onboard` now walks
+  operators through backend setup, preflights Terraform and AWS credentials,
+  detects or writes `backend.hcl`, creates missing S3 state buckets and DynamoDB
+  lock tables behind explicit approvals, and runs `terraform init`, workspace
+  selection/creation, `validate`, `plan`, and optional `apply` with approval
+  gates.
+- **Close-the-loop routing by task origin.** PM close-the-loop summaries now
+  route based on task origin: human-planning tasks reply in the planning thread,
+  while follow-on operational tasks post a top-level update in the planning
+  channel.
+- **Worker self-start protocol for specialist workers.** Backend and frontend
+  worker templates now include the `worker-self-start` skill and distinguish PM
+  delegations from direct human asks in rendered worker instructions.
+
+### Changed
+
+- **PM bot standing operating policy.** The PM bot template now documents review
+  workflow, definition of done, close-the-loop routing, task ownership, and
+  lifecycle discipline for PR-producing delegations.
+- **OpenClaw context defaults are more conservative.** Rendered host and
+  per-agent configs now cap retained tool-result text, shorten cache-TTL pruning,
+  reserve more compaction headroom, preserve fewer recent turns, and archive
+  subagents sooner to avoid oversized agent turns during dogfood runs.
+
+### Fixed
+
+- **Terraform var-file resolution is explicit and safer.** Onboarding now uses
+  rendered `outputs.terraform_vars` paths when present, supports custom Terraform
+  directories, fails fast when expected tfvars files are missing, and avoids
+  misreporting backend/auth/network failures as missing workspaces.
+- **AWS backend checks distinguish missing resources from real errors.** S3 and
+  DynamoDB probes only treat real not-found responses as missing; permission,
+  region, and network errors surface as actionable failures instead of prompting
+  unnecessary resource creation.
+- **Existing backend resources are not mutated without approval.** Existing
+  DynamoDB lock tables are schema-checked and tagged/configured only after an
+  explicit operator confirmation, matching the S3 bucket flow.
+
 ## [0.9.2] — 2026-07-15
 
 ### Fixed
