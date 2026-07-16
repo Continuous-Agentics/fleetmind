@@ -575,6 +575,18 @@ export function resolveOpenClawBaseDir(ocJsonPath: string, baseDir: string): str
   return resolved;
 }
 
+export function resolveTerraformVarsPath(fleet: Fleet, baseDir: string): string {
+  // Auto-derive tfvars path from fleet name when the operator hasn't set
+  // outputs.terraform_vars explicitly (i.e. it still has the schema default).
+  // Result: ./workspaces/<fleet-name>.derived.tfvars
+  const DEFAULT_TF_VARS = "./rendered/fleet.derived.tfvars";
+  const resolvedTfVars =
+    fleet.outputs.terraform_vars === DEFAULT_TF_VARS
+      ? `./workspaces/${fleet.fleet.name}.derived.tfvars`
+      : fleet.outputs.terraform_vars;
+  return path.resolve(baseDir, resolvedTfVars);
+}
+
 export function writeOutputs(
   fleet: Fleet,
   baseDir: string = "."
@@ -601,16 +613,7 @@ export function writeOutputs(
     written[`openclaw_json:${agent.id}`] = agentOcPath;
   }
 
-  // terraform vars
-  // Auto-derive tfvars path from fleet name when the operator hasn't set
-  // outputs.terraform_vars explicitly (i.e. it still has the schema default).
-  // Result: ./workspaces/<fleet-name>.derived.tfvars
-  const DEFAULT_TF_VARS = "./rendered/fleet.derived.tfvars";
-  const resolvedTfVars =
-    fleet.outputs.terraform_vars === DEFAULT_TF_VARS
-      ? `./workspaces/${fleet.fleet.name}.derived.tfvars`
-      : fleet.outputs.terraform_vars;
-  const tfPath = path.resolve(baseDir, resolvedTfVars);
+  const tfPath = resolveTerraformVarsPath(fleet, baseDir);
 
   // Guard against the multi-workspace cross-contamination footgun:
   // *.auto.tfvars at the Terraform working directory (infra/terraform/<file>.auto.tfvars)
