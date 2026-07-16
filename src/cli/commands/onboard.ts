@@ -45,11 +45,13 @@ import {
   PutBucketVersioningCommand,
   PutPublicAccessBlockCommand,
   PutBucketEncryptionCommand,
+  PutBucketTaggingCommand,
 } from "@aws-sdk/client-s3";
 import {
   DynamoDBClient,
   DescribeTableCommand,
   CreateTableCommand,
+  TagResourceCommand,
   waitUntilTableExists,
 } from "@aws-sdk/client-dynamodb";
 import {
@@ -63,7 +65,7 @@ import {
   DescribeInstanceInformationCommand,
 } from "@aws-sdk/client-ssm";
 import { runPushFleet } from "./push-fleet.js";
-import { writeOutputs } from "../../runtime/renderer.js";
+import { resolveTerraformVarsPath, writeOutputs } from "../../runtime/renderer.js";
 import { provisionFleet } from "../../runtime/provisioner.js";
 
 // ── Terminal helpers ──────────────────────────────────────────────────────────
@@ -198,9 +200,12 @@ export interface TerraformDeps {
   terraformVersion(): Promise<string>;
   awsIdentity(): Promise<string>;
   bucketExists(bucket: string, region: string): Promise<boolean>;
-  createBucket(bucket: string, region: string): Promise<void>;
+  configureBucket(bucket: string, region: string, tags: Record<string, string>): Promise<void>;
+  createBucket(bucket: string, region: string, tags: Record<string, string>): Promise<void>;
   tableExists(table: string, region: string): Promise<boolean>;
-  createTable(table: string, region: string): Promise<void>;
+  configureTable(table: string, region: string, tags: Record<string, string>): Promise<void>;
+  createTable(table: string, region: string, tags: Record<string, string>): Promise<void>;
+  workspaceExists(name: string, cwd: string): Promise<boolean>;
   run(args: string[], cwd: string): Promise<void>;
 }
 
@@ -335,11 +340,7 @@ function createTerraformDeps(s3: S3Client, dynamodb: DynamoDBClient, sts: STSCli
         throw new Error(`Unable to check Terraform state bucket ${bucket}: ${String(err)}`);
       }
     },
-    async createBucket(bucket: string, region: string): Promise<void> {
-      await s3.send(new CreateBucketCommand({
-        Bucket: bucket,
-        ...(region === "us-east-1" ? {} : { CreateBucketConfiguration: { LocationConstraint: region as never } }),
-      }));
+    async configureBucket(bucket: string, _region: string, tags: Record<string, string>): Promise<void> {
       await s3.send(new PutPublicAccessBlockCommand({
         Bucket: bucket,
         PublicAccessBlockConfiguration: {
@@ -361,6 +362,19 @@ function createTerraformDeps(s3: S3Client, dynamodb: DynamoDBClient, sts: STSCli
           }],
         },
       }));
+      await s3.send(new PutBucketTaggingCommand({
+        Bucket: bucket,
+        Tagging: {
+          TagSet: Object.entries(tags).map(([Key, Value]) => ({ Key, Value })),
+        },
+      }));
+    },
+    async createBucket(bucket: string, region: string, tags: Record<string, string>): Promise<void> {
+      await s3.send(new CreateBucketCommand({
+        Bucket: bucket,
+        ...(region === "us-east-1" ? {} : { CreateBucketConfiguration: { LocationConstraint: region as never } }),
+      }));
+      await this.configureBucket(bucket, region, tags);
     },
     async tableExists(table: string): Promise<boolean> {
       try {
@@ -371,7 +385,28 @@ function createTerraformDeps(s3: S3Client, dynamodb: DynamoDBClient, sts: STSCli
         throw new Error(`Unable to check Terraform lock table ${table}: ${String(err)}`);
       }
     },
-    async createTable(table: string, _region: string): Promise<void> {
+    async configureTable(table: string, _region: string, tags: Record<string, string>): Promise<void> {
+      const result = await dynamodb.send(new DescribeTableCommand({ TableName: table }));
+      const keySchema = result.Table?.KeySchema ?? [];
+      const attributes = result.Table?.AttributeDefinitions ?? [];
+      const hasLockIdKey = keySchema.length === 1
+        && keySchema[0]?.AttributeName === "LockID"
+        && keySchema[0]?.KeyType === "HASH"
+        && attributes.some(a => a.AttributeName === "LockID" && a.AttributeType === "S");
+      if (!hasLockIdKey) {
+        throw new Error(
+          `DynamoDB lock table ${table} has an incompatible key schema. ` +
+          "Expected a single string hash key named LockID.",
+        );
+      }
+      if (result.Table?.TableArn) {
+        await dynamodb.send(new TagResourceCommand({
+          ResourceArn: result.Table.TableArn,
+          Tags: Object.entries(tags).map(([Key, Value]) => ({ Key, Value })),
+        }));
+      }
+    },
+    async createTable(table: string, region: string, tags: Record<string, string>): Promise<void> {
       await dynamodb.send(new CreateTableCommand({
         TableName: table,
         BillingMode: "PAY_PER_REQUEST",
@@ -383,6 +418,23 @@ function createTerraformDeps(s3: S3Client, dynamodb: DynamoDBClient, sts: STSCli
         { client: dynamodb, maxWaitTime: 120 },
         { TableName: table },
       );
+      await this.configureTable(table, region, tags);
+    },
+    async workspaceExists(name: string, cwd: string): Promise<boolean> {
+      const result = spawnSync("terraform", ["workspace", "list"], {
+        cwd,
+        encoding: "utf8",
+        env: process.env,
+      });
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        throw new Error(`terraform workspace list failed with exit code ${result.status}: ${result.stderr}`);
+      }
+      return result.stdout
+        .split("\n")
+        .map(line => line.replace(/^\*/, "").trim())
+        .filter(Boolean)
+        .includes(name);
     },
     async run(args: string[], cwd: string): Promise<void> {
       const result = spawnSync("terraform", args, {
@@ -403,6 +455,14 @@ interface TerraformBackendConfig {
   region: string;
   key: string;
   dynamodbTable: string;
+}
+
+function terraformBackendTags(fleetName: string): Record<string, string> {
+  return {
+    "fleetmind:fleet_name": fleetName,
+    "fleetmind:managed_by": "fleetmind-onboard",
+    "terraform:purpose": "remote-state",
+  };
 }
 
 function readBackendConfig(filePath: string): Partial<TerraformBackendConfig> | null {
@@ -483,6 +543,7 @@ async function promptBackendConfig(
 
 async function ensureTerraformBackend(
   backend: TerraformBackendConfig,
+  fleetName: string,
   deps: OnboardDeps,
 ): Promise<void> {
   const terraform = deps.terraform ?? createTerraformDeps(
@@ -491,10 +552,17 @@ async function ensureTerraformBackend(
     new STSClient({ region: backend.region }),
   );
 
+  const tags = terraformBackendTags(fleetName);
   if (await terraform.bucketExists(backend.bucket, backend.region)) {
     log.ok(`  S3 backend bucket exists: ${backend.bucket}`);
+    if (await deps.prompter.confirm("  Configure/verify S3 backend bucket safety settings and tags?", true)) {
+      await terraform.configureBucket(backend.bucket, backend.region, tags);
+      log.ok("  S3 backend bucket configured");
+    } else {
+      throw new Error("Cannot continue without verifying/configuring the Terraform state bucket.");
+    }
   } else if (await deps.prompter.confirm(`  Create S3 backend bucket ${backend.bucket}?`, true)) {
-    await terraform.createBucket(backend.bucket, backend.region);
+    await terraform.createBucket(backend.bucket, backend.region, tags);
     log.ok(`  S3 backend bucket created: ${backend.bucket}`);
   } else {
     throw new Error(`Terraform backend bucket does not exist: ${backend.bucket}`);
@@ -502,8 +570,10 @@ async function ensureTerraformBackend(
 
   if (await terraform.tableExists(backend.dynamodbTable, backend.region)) {
     log.ok(`  DynamoDB lock table exists: ${backend.dynamodbTable}`);
+    await terraform.configureTable(backend.dynamodbTable, backend.region, tags);
+    log.ok("  DynamoDB lock table schema/tags verified");
   } else if (await deps.prompter.confirm(`  Create DynamoDB lock table ${backend.dynamodbTable}?`, true)) {
-    await terraform.createTable(backend.dynamodbTable, backend.region);
+    await terraform.createTable(backend.dynamodbTable, backend.region, tags);
     log.ok(`  DynamoDB lock table created: ${backend.dynamodbTable}`);
   } else {
     throw new Error(`Terraform lock table does not exist: ${backend.dynamodbTable}`);
@@ -517,17 +587,45 @@ async function verifyTerraformPrerequisites(terraform: TerraformDeps): Promise<v
   log.ok(`  AWS credentials active: ${identity}`);
 }
 
-function requireExistingFleetFile(
-  fleetDir: string,
+function terraformCwdForDerivedTfvars(derivedTfvarsAbs: string): string {
+  const derivedDir = path.dirname(derivedTfvarsAbs);
+  return path.basename(derivedDir) === "workspaces"
+    ? path.dirname(derivedDir)
+    : derivedDir;
+}
+
+function terraformVarFileArg(terraformCwd: string, fileAbs: string): string {
+  const relative = path.relative(terraformCwd, fileAbs);
+  return relative && !relative.startsWith("..") && !path.isAbsolute(relative)
+    ? relative
+    : fileAbs;
+}
+
+function candidateInfraTfvarsPaths(derivedTfvarsAbs: string, fleetName: string): string[] {
+  const derivedDir = path.dirname(derivedTfvarsAbs);
+  const base = path.basename(derivedTfvarsAbs);
+  const paired = base.endsWith(".derived.tfvars")
+    ? path.join(derivedDir, base.replace(/\.derived\.tfvars$/, ".tfvars"))
+    : path.join(derivedDir, `${fleetName}.tfvars`);
+  return [...new Set([
+    paired,
+    path.join(derivedDir, `${fleetName}.tfvars`),
+    path.join(derivedDir, "default.tfvars"),
+    path.join(derivedDir, "terraform.tfvars"),
+    path.join(derivedDir, "terraform-extras.tfvars"),
+  ])];
+}
+
+function requireExistingAbsoluteFile(
   candidates: string[],
   description: string,
   deps: OnboardDeps,
 ): string {
-  const match = candidates.find(f => deps.fs.existsSync(path.join(fleetDir, f)));
+  const match = candidates.find(f => deps.fs.existsSync(f));
   if (match) return match;
   throw new Error(
     `Missing ${description}: expected one of ${candidates.join(", ")}.\n` +
-      "Run Step 7 / `fleetmind render` first, then re-run Terraform onboarding.",
+      "Run Step 7 / `fleetmind render` first and ensure the matching infra tfvars file exists.",
   );
 }
 
@@ -950,62 +1048,62 @@ export async function runOnboard(
     new DynamoDBClient({ region }),
     new STSClient({ region }),
   );
-  const backendFile = path.join(fleetDir, "backend.hcl");
-  const infraTfvarsCandidates = [`workspaces/${fleetName}.tfvars`, "workspaces/default.tfvars"];
-  const terraformDerivedTfvarsCandidates = [`workspaces/${fleetName}.derived.tfvars`, "workspaces/default.derived.tfvars"];
+  const derivedTfvarsAbs = resolveTerraformVarsPath(fleet, fleetDir);
+  const terraformCwd = terraformCwdForDerivedTfvars(derivedTfvarsAbs);
+  const backendFile = path.join(terraformCwd, "backend.hcl");
   const planFile = `.fleetmind-${fleetName}.tfplan`;
 
-  console.log("  This can create the remote state backend and run Terraform from the fleet repo root.");
-  console.log(`  tfvars: ${infraTfvarsCandidates[0]} + ${terraformDerivedTfvarsCandidates[0]}`);
+  console.log("  This can create the remote state backend and run Terraform from the detected Terraform directory.");
+  console.log(`  cwd: ${terraformCwd}`);
+  console.log(`  derived tfvars: ${terraformVarFileArg(terraformCwd, derivedTfvarsAbs)}`);
   if (await deps.prompter.confirm("  Run Terraform backend/bootstrap + init/validate/plan/apply now?", false)) {
-    const infraTfvarsPath = requireExistingFleetFile(
-      fleetDir,
-      infraTfvarsCandidates,
-      "Terraform variable file",
-      deps,
-    );
-    const derivedTfvarsPath = requireExistingFleetFile(
-      fleetDir,
-      terraformDerivedTfvarsCandidates,
+    const derivedTfvarsPath = requireExistingAbsoluteFile(
+      [derivedTfvarsAbs],
       "derived Terraform variable file",
       deps,
     );
+    const infraTfvarsPath = requireExistingAbsoluteFile(
+      candidateInfraTfvarsPaths(derivedTfvarsAbs, fleetName),
+      "Terraform variable file",
+      deps,
+    );
+    const infraTfvarsArg = terraformVarFileArg(terraformCwd, infraTfvarsPath);
+    const derivedTfvarsArg = terraformVarFileArg(terraformCwd, derivedTfvarsPath);
     await verifyTerraformPrerequisites(terraform);
     const backend = await promptBackendConfig(fleetName, region, backendFile, deps);
-    await ensureTerraformBackend(backend, deps);
+    await ensureTerraformBackend(backend, fleetName, deps);
 
     log.info("  terraform init");
-    await terraform.run(["init", "-backend-config=backend.hcl"], fleetDir);
+    await terraform.run(["init", "-backend-config=backend.hcl"], terraformCwd);
 
-    try {
+    if (await terraform.workspaceExists(fleetName, terraformCwd)) {
       log.info(`  terraform workspace select ${fleetName}`);
-      await terraform.run(["workspace", "select", fleetName], fleetDir);
-    } catch (err) {
-      if (!await deps.prompter.confirm(`  Terraform workspace ${fleetName} not selected. Create it?`, true)) {
-        throw err;
-      }
+      await terraform.run(["workspace", "select", fleetName], terraformCwd);
+    } else if (await deps.prompter.confirm(`  Terraform workspace ${fleetName} does not exist. Create it?`, true)) {
       log.info(`  terraform workspace new ${fleetName}`);
-      await terraform.run(["workspace", "new", fleetName], fleetDir);
+      await terraform.run(["workspace", "new", fleetName], terraformCwd);
+    } else {
+      throw new Error(`Terraform workspace does not exist: ${fleetName}`);
     }
 
     log.info("  terraform validate");
-    await terraform.run(["validate"], fleetDir);
+    await terraform.run(["validate"], terraformCwd);
 
     log.info("  terraform plan");
     await terraform.run([
       "plan",
-      `-var-file=${infraTfvarsPath}`,
-      `-var-file=${derivedTfvarsPath}`,
+      `-var-file=${infraTfvarsArg}`,
+      `-var-file=${derivedTfvarsArg}`,
       `-out=${planFile}`,
-    ], fleetDir);
+    ], terraformCwd);
 
     if (await deps.prompter.confirm("  Apply this Terraform plan now?", false)) {
       log.info("  terraform apply");
-      await terraform.run(["apply", planFile], fleetDir);
+      await terraform.run(["apply", planFile], terraformCwd);
       log.ok("  Terraform apply complete");
     } else {
       log.warn(`  Terraform apply skipped. Plan saved at ${planFile}`);
-      console.log(`  Run later from the fleet repo root: \x1b[36mterraform apply ${planFile}\x1b[0m`);
+      console.log(`  Run later from ${terraformCwd}: \x1b[36mterraform apply ${planFile}\x1b[0m`);
     }
   } else {
     console.log("  Terraform skipped. Run this step later before populating Secrets Manager:");
