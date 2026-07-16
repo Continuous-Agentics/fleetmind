@@ -55,6 +55,28 @@ function buildModelsMap(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+const OPENCLAW_CONTEXT_SAFETY_DEFAULTS = {
+  contextLimits: {
+    toolResultMaxChars: 6000,
+  },
+  contextPruning: {
+    mode: "cache-ttl",
+    ttl: "90s",
+  },
+  compaction: {
+    reserveTokens: 60000,
+    maxHistoryShare: 0.35,
+    recentTurnsPreserve: 2,
+    midTurnPrecheck: {
+      enabled: true,
+    },
+    truncateAfterCompaction: true,
+  },
+  subagents: {
+    archiveAfterMinutes: 15,
+  },
+};
+
 /**
  * Build the per-agent openclaw.json slice for a single gateway/EC2 instance.
  *
@@ -214,6 +236,7 @@ export function renderAgentOpenClawJson(
       defaults: {
         model: modelConfig(defaults.model, defaults.fallback_models ?? []),
         timeoutSeconds: defaults.timeout_seconds,
+        ...OPENCLAW_CONTEXT_SAFETY_DEFAULTS,
         ...(defaultsParams ? { params: defaultsParams } : {}),
         ...(modelsMap ? { models: modelsMap } : {}),
       },
@@ -392,6 +415,7 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
     agents: {
       defaults: {
         model: modelConfig(defaults.model, defaults.fallback_models ?? []),
+        ...OPENCLAW_CONTEXT_SAFETY_DEFAULTS,
         ...(modelsMap ? { models: modelsMap } : {}),
       },
       list: agentList,
