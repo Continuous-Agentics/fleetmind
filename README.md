@@ -17,10 +17,26 @@ fleet bring-up, day-2 ops, and troubleshooting now live in the [`fleetmind-templ
 | Troubleshooting (Slack, deploy, runtime) | [`fleetmind-template/docs/TROUBLESHOOTING.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/TROUBLESHOOTING.md) |
 | GitHub Apps per agent | [`fleetmind-template/docs/GITHUB-APPS.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/GITHUB-APPS.md) |
 | Vocabulary (CONCEPTS) | [`fleetmind-template/docs/CONCEPTS.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/CONCEPTS.md) |
+| Version compatibility | [`fleetmind/docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) |
+| Customer AWS access handoff | [`fleetmind/docs/CUSTOMER-ONBOARDING.md`](docs/CUSTOMER-ONBOARDING.md) |
 | BYO VPC, module troubleshooting, migrations | [`terraform-aws-fleetmind/docs/`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind#docs) |
 | Standalone task-ledger consumption | [`terraform-aws-fleetmind/docs/TASK-LEDGER-STANDALONE.md`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/blob/main/docs/TASK-LEDGER-STANDALONE.md) |
 
 This repo (`fleetmind`) ships the CLI itself — commands, runtime, and the delegation protocol spec. See [`docs/protocol.md`](docs/protocol.md) and [`docs/integration/delegation.md`](docs/integration/delegation.md).
+
+## Compatibility
+
+FleetMind spans three repos. Keep these versions aligned when onboarding or upgrading a fleet:
+
+| FleetMind CLI | `terraform-aws-fleetmind` | `fleetmind-template` baseline | Notes |
+|---|---|---|---|
+| `0.10.1` | `v1.1.0` | `main` at or after `docs/v1-template-audit` | Public npm path, guided Terraform onboarding, gateway-token connect fix |
+| `0.10.0` | `v1.1.0` | `main` at or after `9775866` | Guided Terraform onboarding and NATS delegation acceptance baseline |
+| `0.9.x` | `v1.1.0` | `main` at or after PR #25 | OpenClaw 2026.7.1 compatibility and module v1.1.0 |
+| `0.8.x` | `v0.5.x`–`v1.0.x` | `main` at or after PR #18 | Per-provider Secrets Manager paths and explicit `providers:` |
+| `0.7.x` and earlier | pre-`v0.5.0` | historical only | Not recommended for new fleets |
+
+See [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) for the full contract and upgrade notes.
 
 ## Architecture
 
@@ -57,7 +73,7 @@ Fleet-wide shared key/value state is available via the **ContextStore** — a Dy
 
 Isolation over efficiency. A misbehaving worker can't crash the orchestrator; a runaway skill on one bot doesn't starve another; each agent can be redeployed, restarted, or rolled back independently. The cost is more EC2 instances per fleet — deemed acceptable for the durability and blast-radius properties.
 
-Bot EC2 hosts are provisioned by the [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) module (currently `v0.1.6`). Operators don't write Terraform from scratch — they start from the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) GitHub template repo, which contains a `main.tf` that calls the module, plus `variables.tf`, `outputs.tf`, `backend.example.hcl`, and a `workspaces/default.tfvars` starter. `fleetmind render` writes the derived tfvars (`workspaces/<fleet>.derived.tfvars`) inside that repo, and `terraform apply -var-file=workspaces/<fleet>.tfvars -var-file=workspaces/<fleet>.derived.tfvars` provisions the fleet. See [`docs/QUICKSTART.md`](docs/QUICKSTART.md), [`docs/SETUP-A-FLEET.md`](docs/SETUP-A-FLEET.md), and [`docs/MULTI-FLEET.md`](docs/MULTI-FLEET.md) for the full workflow.
+Bot EC2 hosts are provisioned by the [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) module (current v1.0 baseline: `v1.1.0`). Operators don't write Terraform from scratch — they start from the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) GitHub template repo, which contains a `main.tf` that calls the module, plus `variables.tf`, `outputs.tf`, `backend.example.hcl`, and a `workspaces/default.tfvars` starter. `fleetmind render` writes the derived tfvars (`workspaces/<fleet>.derived.tfvars`) inside that repo, and `terraform apply -var-file=workspaces/<fleet>.tfvars -var-file=workspaces/<fleet>.derived.tfvars` provisions the fleet. See the template's [`QUICKSTART`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/QUICKSTART.md), [`SETUP-A-FLEET`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/SETUP-A-FLEET.md), and [`MULTI-FLEET`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/MULTI-FLEET.md) docs for the full workflow.
 
 ## Installation
 
@@ -260,7 +276,7 @@ to list the worker IDs they can delegate to. Worker agents add
 `delegation.specialty: <label>` for routing. Wake-pipeline targeting (SSM
 session key, EC2 tag) is configured at the Terraform layer.
 
-The substrate is provisioned by the [`task-ledger`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/tree/v0.1.6/modules/task-ledger) submodule inside [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) — it activates automatically when `delegation_enabled = true` in your fleet's tfvars. Add the `bot-delegation` skill to the PM bot and the `bot-reception` skill to each worker (both ship in `openclaw/skills/`). Full walkthrough: [`docs/integration/delegation.md`](docs/integration/delegation.md). Protocol details: [`docs/protocol.md`](docs/protocol.md).
+The substrate is provisioned by the [`task-ledger`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/tree/main/modules/task-ledger) submodule inside [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) — it activates automatically when `delegation_enabled = true` in your fleet's tfvars. Add the `bot-delegation` skill to the PM bot and the `bot-reception` skill to each worker (both ship in `openclaw/skills/`). Full walkthrough: [`docs/integration/delegation.md`](docs/integration/delegation.md). Protocol details: [`docs/protocol.md`](docs/protocol.md).
 
 ## Skills Repo (GitOps)
 
@@ -290,7 +306,7 @@ Unpinned skills (`- name: coding`) auto-update. Pinned skills (`version: "2.1.0"
 
 ## Terraform Integration
 
-The Terraform module is in a separate repo: [`Continuous-Agentics/terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind). Operators consume it via [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template), whose `main.tf` already calls the module. `fleetmind render` writes derived tfvars (`fleet_name`, `agent_names`, `agent_orchestrators`, `wake_target_session_key`) into the template repo's `workspaces/<fleet>.derived.tfvars`; the operator passes that file + their hand-edited `<fleet>.tfvars` to `terraform apply -var-file=...`. For the full module surface, BYO VPC, troubleshooting, and per-version migration notes, see the [terraform-aws-fleetmind docs](https://github.com/Continuous-Agentics/terraform-aws-fleetmind#docs).
+The Terraform module is in a separate repo: [`Continuous-Agentics/terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind). Operators consume it via [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template), whose `main.tf` already calls the module. `fleetmind render` writes derived tfvars (`fleet_name`, `agent_names`, `agent_orchestrators`, `agent_providers`) into the template repo's `workspaces/<fleet>.derived.tfvars`; the operator passes that file + their hand-edited `<fleet>.tfvars` to `terraform apply -var-file=...`. For the full module surface, BYO VPC, troubleshooting, and per-version migration notes, see the [terraform-aws-fleetmind docs](https://github.com/Continuous-Agentics/terraform-aws-fleetmind#docs).
 
 ## CI
 

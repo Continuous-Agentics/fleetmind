@@ -12,6 +12,9 @@ All notable changes to fleetmind are documented in this file. Format follows
   now publishes to public npm with provenance instead of GitHub Packages, and
   first-run onboarding/self-upgrade no longer require a shared GitHub Packages
   PAT in SSM or a temporary `.npmrc`.
+- **Document the v1 compatibility and customer onboarding contract.** Added a
+  three-repo compatibility matrix plus customer AWS access handoff guidance with
+  cross-account role and fallback IAM-user paths.
 
 ## [0.10.1] — 2026-07-17
 
