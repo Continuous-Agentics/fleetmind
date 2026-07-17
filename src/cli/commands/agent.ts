@@ -5,10 +5,14 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import chalk from "chalk";
 import { SSMClient, SendCommandCommand, GetCommandInvocationCommand } from "@aws-sdk/client-ssm";
+import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { loadFleet } from "../../config/loader.js";
 import { slackChannel } from "../../core/channels.js";
+import { gatewaySecretName } from "../../core/secret-names.js";
 import { log } from "../../utils/log.js";
 import { lookupInstanceId } from "./pull-workspace.js";
+
+const UNRESOLVED_GATEWAY_AUTH_PREFIX = "__FLEETMIND_UNRESOLVED_GATEWAY_AUTH__:";
 
 export function registerAgent(program: Command): void {
   const agent = program
@@ -109,6 +113,7 @@ Requires AWS credentials with:
   - ssm:SendCommand                  (pre-flight diagnostics)
   - ssm:GetCommandInvocation         (read diagnostic output)
   - ssm:StartSession + StartPortForwardingSession  (the port-forward itself)
+  - secretsmanager:GetSecretValue    (to print the gateway auth token)
 
 The AWS Session Manager plugin must be installed locally
 (https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html).
@@ -162,9 +167,13 @@ Examples:
         // ── Pre-flight diagnostics ─────────────────────────────────────────
         let preflightResult: PreflightResult = { dashboardUrl: null, authMode: null, authSecret: null };
         if (!opts.skipPreflight) {
+          const gatewayAuthSecret = await readGatewayAuthSecretFromSecretsManager(fleetName, agentId, region);
           // Workspace base comes from the agent's resolved runtime target.
           const agentWorkspaceBase = fleet.targetForAgent(declared).workspace_base;
           preflightResult = await runPreflight(instanceId, agentId, region, agentWorkspaceBase);
+          if (preflightResult.authMode === "token" && gatewayAuthSecret) {
+            preflightResult.authSecret = gatewayAuthSecret;
+          }
           if (!opts.yes) {
             // Tiny inline confirm (avoid pulling in prompts dep). Skip
             // confirmation if not a TTY (CI / scripted).
@@ -200,13 +209,16 @@ Examples:
               log.warn(`  ⚠ Bot dashboard uses port ${rewritten.botPort} but we forwarded ${remotePort}.`);
               log.warn(`    Either re-run with --port ${rewritten.botPort}, or open a second port-forward.`);
             }
-            if (preflightResult.authMode === "password" && preflightResult.authSecret) {
+            const unresolvedAuth = unresolvedGatewayAuthPlaceholder(preflightResult.authSecret);
+            if (preflightResult.authMode === "password" && preflightResult.authSecret && !unresolvedAuth) {
               log.dim(`  → gateway uses password auth. Paste at the login form:`);
               log.info(`    ⚠ ${chalk.bold.yellow("password:")} ${chalk.yellow(preflightResult.authSecret)}`);
               log.dim(`      (visible in this terminal only — same SSM access lets you read it anyway)`);
-            } else if (preflightResult.authMode === "token" && preflightResult.authSecret) {
+            } else if (preflightResult.authMode === "token" && preflightResult.authSecret && !unresolvedAuth) {
               log.dim(`  → gateway uses token auth. Paste at the login form:`);
               log.info(`    ⚠ ${chalk.bold.yellow("token:")} ${chalk.yellow(preflightResult.authSecret)}`);
+            } else if (unresolvedAuth) {
+              log.warn(`  → gateway auth placeholder ${unresolvedAuth} could not be resolved from Secrets Manager or ${envFileHint(agentId)}.`);
             } else if (preflightResult.authMode === "none") {
               log.dim(`  → no gateway auth configured; URL works as-is`);
             } else {
@@ -295,6 +307,7 @@ async function runPreflight(
   // SSM Run Command runs as root by default, so no sudo needed to read
   // ec2-user-owned files.
   const configFile = `${workspaceBase}/${agentId}/.openclaw/openclaw.json`;
+  const envFile = `/run/openclaw-${agentId}.env`;
   const commands = [
     `set +e`,
     `echo "::SERVICE::"`,
@@ -311,9 +324,10 @@ async function runPreflight(
     `cat "${configFile}" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("gateway",{}).get("auth",{}).get("mode","none"))' 2>/dev/null || true`,
     `echo "::AUTH_SECRET::"`,
     // Extract the auth secret matching the configured mode. Password lives at
-    // gateway.auth.password; token lives at gateway.auth.token. We try both;
-    // whichever is non-null on the bot is what we print.
-    `cat "${configFile}" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); a=d.get("gateway",{}).get("auth",{}); print(a.get("password") or a.get("token") or "")' 2>/dev/null || true`,
+    // gateway.auth.password; token lives at gateway.auth.token. Rendered
+    // FleetMind configs intentionally keep secrets as ${VAR} placeholders, so
+    // resolve that placeholder from the same runtime env file systemd uses.
+    buildGatewayAuthSecretCommand(configFile, envFile),
     `echo "::END::"`,
   ];
 
@@ -391,6 +405,99 @@ async function runPreflight(
   }
 }
 
+export function buildGatewayAuthSecretCommand(configFile: string, envFile: string): string {
+  return `CONFIG_FILE=${shellQuote(configFile)} ENV_FILE=${shellQuote(envFile)} python3 <<'PY' 2>/dev/null || true
+import json
+import os
+import re
+
+with open(os.environ["CONFIG_FILE"]) as fh:
+    data = json.load(fh)
+
+auth = data.get("gateway", {}).get("auth", {})
+raw = str(auth.get("password") or auth.get("token") or "")
+match = re.fullmatch(r"\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}", raw)
+
+if not match:
+    print(raw)
+    raise SystemExit
+
+values = {}
+try:
+    with open(os.environ["ENV_FILE"]) as fh:
+        for line in fh:
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[7:].strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key] = value.strip().strip("'\\\"")
+except FileNotFoundError:
+    pass
+
+name = match.group(1)
+fallbacks = [name]
+if name.endswith("_GATEWAY_TOKEN"):
+    fallbacks.extend(["GATEWAY_TOKEN", "OPENCLAW_GATEWAY_TOKEN"])
+
+for key in fallbacks:
+    value = values.get(key)
+    if value:
+        print(value)
+        break
+else:
+    print("${UNRESOLVED_GATEWAY_AUTH_PREFIX}" + name)
+PY`;
+}
+
+export async function readGatewayAuthSecretFromSecretsManager(
+  fleetName: string,
+  agentId: string,
+  region: string,
+): Promise<string | null> {
+  try {
+    const sm = new SecretsManagerClient({ region });
+    const response = await sm.send(new GetSecretValueCommand({
+      SecretId: gatewaySecretName(fleetName, agentId),
+    }));
+    return extractGatewayTokenFromSecretString(response.SecretString);
+  } catch {
+    return null;
+  }
+}
+
+export function extractGatewayTokenFromSecretString(secretString: string | undefined): string | null {
+  if (!secretString) return null;
+  try {
+    const parsed = JSON.parse(secretString) as Record<string, unknown>;
+    const token = parsed["GATEWAY_TOKEN"] ?? parsed["OPENCLAW_GATEWAY_TOKEN"];
+    return isUsableGatewaySecret(token) ? token.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function isUsableGatewaySecret(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed !== "PENDING_BOOTSTRAP" && !extractPlaceholderName(trimmed);
+}
+
+function extractPlaceholderName(value: string): string | null {
+  const match = value.match(/^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/);
+  return match?.[1] ?? null;
+}
+
+function unresolvedGatewayAuthPlaceholder(value: string | null): string | null {
+  if (!value?.startsWith(UNRESOLVED_GATEWAY_AUTH_PREFIX)) return null;
+  return value.slice(UNRESOLVED_GATEWAY_AUTH_PREFIX.length) || "<unknown>";
+}
+
+function envFileHint(agentId: string): string {
+  return `/run/openclaw-${agentId}.env`;
+}
+
 function parsePreflightOutput(raw: string): {
   service: string; since: string; version: string; log: string;
   dashboard: string; authMode: string; authSecret: string;
@@ -406,6 +513,10 @@ function parsePreflightOutput(raw: string): {
   sections.authMode = raw.slice(indices[5] + markers[5].length, indices[6]);
   sections.authSecret = raw.slice(indices[6] + markers[6].length, indices[7]);
   return sections;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 /** Rewrite a bot-side dashboard URL (e.g. http://127.0.0.1:18789/chat?...&token=...)
