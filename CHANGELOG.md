@@ -6,6 +6,16 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-07-17
+
+### Fixed
+
+- **`fleetmind agent connect` prints a usable gateway auth token.** The preflight
+  now reads the canonical Secrets Manager gateway secret
+  (`<fleet>/agents/<agent>/gateway`) for token-auth gateways, rejects bootstrap
+  placeholders as credentials, and warns clearly when a rendered runtime
+  placeholder cannot be resolved.
+
 ## [0.10.0] — 2026-07-16
 
 ### Added
