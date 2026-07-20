@@ -12,7 +12,7 @@ Use compatible versions across all three. Version drift usually shows up as miss
 
 | Component | Version / baseline |
 |---|---|
-| FleetMind CLI | `0.10.4` |
+| FleetMind CLI | `1.0.0` |
 | `terraform-aws-fleetmind` | `v1.1.5` |
 | `fleetmind-template` | `main` at or after the v1 docs audit |
 | OpenClaw runtime | `2026.7.1` or newer |
@@ -23,7 +23,8 @@ Use compatible versions across all three. Version drift usually shows up as miss
 
 | FleetMind CLI | `terraform-aws-fleetmind` | `fleetmind-template` baseline | Compatibility notes |
 |---|---|---|---|
-| `0.10.4` | `v1.1.5` | `main` at or after the v1 docs audit | Public npm path, MIT license metadata, guided Terraform onboarding, no-delegation deploy-staging IAM fix |
+| `1.0.0` | `v1.1.5` | `main` at or after the v1 docs audit | v1.0 public release baseline: public npm path, MIT license metadata, guided Terraform onboarding, no-delegation deploy-staging IAM fix |
+| `0.10.4` | `v1.1.5` | `main` at or after the v1 docs audit | Public npm smoke-test baseline; npm metadata was published before MIT license metadata landed |
 | `0.10.1` | `v1.1.0` | `main` at or after the v1 docs audit | Initial public npm path, guided Terraform onboarding, usable `agent connect` gateway token output |
 | `0.10.0` | `v1.1.0` | `main` at or after `9775866` | Guided Terraform onboarding, NATS delegation acceptance baseline |
 | `0.9.x` | `v1.1.0` | `main` at or after PR #25 | OpenClaw 2026.7.1 compatibility and v1.1.0 module behavior |

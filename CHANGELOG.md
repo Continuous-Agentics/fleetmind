@@ -6,6 +6,8 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-07-20
+
 ### Changed
 
 - **Mark the npm package as MIT licensed.** Replaces the old proprietary
@@ -17,6 +19,8 @@ All notable changes to fleetmind are documented in this file. Format follows
 - **Document the v1 compatibility and customer onboarding contract.** Added a
   three-repo compatibility matrix plus customer AWS access handoff guidance with
   cross-account role and fallback IAM-user paths.
+- **Cut the v1.0 compatibility baseline.** Documents `fleetmind` `1.0.0`
+  against `terraform-aws-fleetmind` `v1.1.5` and the v1 template docs audit.
 
 ## [0.10.4] — 2026-07-20
 
