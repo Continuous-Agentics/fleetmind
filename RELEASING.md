@@ -1,13 +1,13 @@
 # Releasing fleetmind
 
-fleetmind is published to public npm as `@continuous-agentics/fleetmind`.
+fleetmind is published to public npm as `@ggettert/fleetmind`.
 
 ## Prerequisites
 
 ### npm trusted publishing setup
 
 The publish workflow uses npm trusted publishing via GitHub Actions OIDC. Configure
-the `@continuous-agentics/fleetmind` package on npm to trust this repository's
+the `@ggettert/fleetmind` package on npm to trust this repository's
 `.github/workflows/publish.yml` workflow before cutting a release.
 
 ## Steps
@@ -25,7 +25,7 @@ the `@continuous-agentics/fleetmind` package on npm to trust this repository's
    ```
    The push of the `vMAJOR.MINOR.PATCH` tag fires `.github/workflows/publish.yml`, which:
    - Runs `npm ci` + build + tests
-   - Publishes to public npm (`@continuous-agentics/fleetmind`)
+   - Publishes to public npm (`@ggettert/fleetmind`)
    - Creates a GitHub Release using the matching `[X.Y.Z]` section from CHANGELOG.md as notes
 
    Watch the workflow run at `https://github.com/Continuous-Agentics/fleetmind/actions`. If it fails after build/test, the tag is still there but no publish/release happens — fix the issue and re-trigger via the Actions UI (manual `workflow_dispatch` with `confirm=publish`).
@@ -46,7 +46,7 @@ the `@continuous-agentics/fleetmind` package on npm to trust this repository's
 The publish workflow's tag filter is strict semver: `v[0-9]+.[0-9]+.[0-9]+`. Typo'd tags (`v0.5.2.` or `v0.5-rc`) do **not** trigger a publish — they push to the repo as ordinary tags but no workflow fires.
 
 For pre-releases (e.g. `v0.6.0-rc.1`), the workflow publishes to the `beta`
-dist-tag. Install explicitly with `npm install -g @continuous-agentics/fleetmind@beta`
+dist-tag. Install explicitly with `npm install -g @ggettert/fleetmind@beta`
 or `fleetmind self-upgrade --to 0.6.0-rc.1 --apply`.
 
 ## Manual workflow_dispatch (debug / rerun)

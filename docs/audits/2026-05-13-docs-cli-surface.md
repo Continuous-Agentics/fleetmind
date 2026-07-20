@@ -10,7 +10,7 @@ as the npm package's primary landing page. Changes applied in the same PR where 
 **Status: high-priority stale. Fixed in this PR.**
 
 README.md is the only doc shipped in the npm tarball (per `package.json` `files[]`). It's the
-first thing someone sees when they `npm show @continuous-agentics/fleetmind` or browse GitHub
+first thing someone sees when they `npm show @ggettert/fleetmind` or browse GitHub
 Packages.
 
 ### Issues found and fixed
