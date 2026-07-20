@@ -161,7 +161,7 @@ describe("runSelfUpgrade — happy path (--apply)", () => {
     assert.equal(code, null, "should not exit on happy path");
     assert.deepEqual(
       deps.npmCalls,
-      ["@ggettert/fleetmind@0.4.3"],
+      ["@continuous-agentics/fleetmind@0.4.3"],
       "should install exact version"
     );
     // No restart triggered
@@ -178,7 +178,7 @@ describe("runSelfUpgrade — happy path (--apply)", () => {
     assert.equal(code, null);
     assert.deepEqual(
       deps.npmCalls,
-      ["@ggettert/fleetmind@latest"]
+      ["@continuous-agentics/fleetmind@latest"]
     );
   });
 

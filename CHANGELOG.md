@@ -6,19 +6,19 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
-## [0.10.3] — 2026-07-20
+## [0.10.4] — 2026-07-20
 
 ### Changed
 
-- **Publish FleetMind under Grace's npm scope.** The public package name is now
-  `@ggettert/fleetmind`, matching the trusted-publishing pattern used by
-  `ggettert/openclaw-langgraph-bridge`.
+- **Restrict npm publishing to Grace's GitHub actor.** The public package remains
+  `@continuous-agentics/fleetmind`, but the publish workflow now only runs when
+  `github.actor == 'ggettert'`.
 
 ## [0.10.2] — 2026-07-20
 
 ### Changed
 
-- **Make public npm the default package distribution path.** `@ggettert/fleetmind`
+- **Make public npm the default package distribution path.** `@continuous-agentics/fleetmind`
   now publishes to public npm with provenance instead of GitHub Packages, and
   first-run onboarding/self-upgrade no longer require a shared GitHub Packages
   PAT in SSM or a temporary `.npmrc`.

@@ -57,13 +57,13 @@ Five bootstrap/renderer bugs surfaced during the first live deploy attempt. All 
 - `terraform` ≥ 1.6 (or use `tfenv` — `.terraform-version` is committed)
 - `aws` CLI v2 configured with access to dogfood (`624905204775`)
 - `node` ≥ 20, `npm` ≥ 10
-- `fleetmind` CLI: `npm install -g @ggettert/fleetmind`
+- `fleetmind` CLI: `npm install -g @continuous-agentics/fleetmind`
 - SSH key with access to EC2 (if using SCP transport — see Step 5)
 
 ### Install fleetmind
 
 ```bash
-npm install -g @ggettert/fleetmind
+npm install -g @continuous-agentics/fleetmind
 ```
 
 See `RELEASING.md` for the full release process.
@@ -100,7 +100,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."   # used for both agents in this test flee
 
 ## Step 1: Clone & Install
 
-> **Reminder:** Before `terraform apply`, `@ggettert/fleetmind` must be
+> **Reminder:** Before `terraform apply`, `@continuous-agentics/fleetmind` must be
 > published to npm at the version pinned in `terraform-extras.tfvars`
 > (`fleetmind_version`). If the package isn't published yet, STAGE 6b of the bootstrap
 > will fail on every instance. See `RELEASING.md`.
