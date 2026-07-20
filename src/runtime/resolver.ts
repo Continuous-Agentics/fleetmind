@@ -63,7 +63,7 @@ export function fleetmindPackageRoot(): string {
  *
  * When fleetmind is installed as a local dependency in a fleet repo, npm
  * hoists `clawhub` to the fleet repo's own node_modules/.bin — two directory
- * levels above the fleetmind package root (past `@ggettert/fleetmind`).
+ * levels above the fleetmind package root (past `@continuous-agentics/fleetmind`).
  * When fleetmind is installed globally, npm hoists clawhub to the global bin
  * dir which is already in PATH.
  *
@@ -72,7 +72,7 @@ export function fleetmindPackageRoot(): string {
  */
 function clawHubEnv(): NodeJS.ProcessEnv {
   const pkgRoot = fleetmindPackageRoot();
-  // Local dep scenario: <fleet-repo>/node_modules/@ggettert/fleetmind
+  // Local dep scenario: <fleet-repo>/node_modules/@continuous-agentics/fleetmind
   // clawhub hoisted to:  <fleet-repo>/node_modules/.bin/clawhub
   const hoistedBin = path.join(pkgRoot, "..", "..", ".bin");
   // Nested dep scenario: clawhub inside fleetmind's own node_modules
@@ -92,7 +92,7 @@ async function resolveClawHub(skill: SkillRef, destDir: string, dryRun: boolean)
   try {
     execSync("clawhub -V", { stdio: "pipe", env, timeout: 10_000 });
   } catch {
-    log.error(`  [clawhub] 'clawhub' CLI not found. It should be installed as a fleetmind dependency — try reinstalling: npm install -g @ggettert/fleetmind`);
+    log.error(`  [clawhub] 'clawhub' CLI not found. It should be installed as a fleetmind dependency — try reinstalling: npm install -g @continuous-agentics/fleetmind`);
     return false;
   }
 
