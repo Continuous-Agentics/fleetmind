@@ -10,21 +10,18 @@
  *   - Dry-run (no --apply): no install, prints what would happen
  *   - Missing --version AND --latest: process.exit(1)
  *   - Both --to and --latest: process.exit(1)
- *   - SSM fetch fails: process.exit(1), .npmrc not written
- *   - npm install fails: process.exit(2), .npmrc scrubbed
+ *   - npm install fails: process.exit(2)
  *   - Version mismatch post-install: process.exit(3)
  *   - Not running as root: process.exit(1) early
  */
 
 import assert from "node:assert/strict";
 import { test, describe } from "node:test";
-import { GetParameterCommand } from "@aws-sdk/client-ssm";
 
 import {
   runSelfUpgrade,
   type SelfUpgradeDeps,
   type SelfUpgradeOptions,
-  type SsmReadable,
   type NpmInstallResult,
 } from "../cli/commands/self-upgrade.js";
 
@@ -67,46 +64,24 @@ class ExitError extends Error {
   }
 }
 
-/** Build a default-happy SsmReadable mock. */
-function makeSsmClient(pat = "ghp_test_token"): { client: SsmReadable; calls: GetParameterCommand[] } {
-  const calls: GetParameterCommand[] = [];
-  const client: SsmReadable = {
-    async send(cmd: GetParameterCommand) {
-      calls.push(cmd);
-      return { Parameter: { Value: pat } };
-    },
-  };
-  return { client, calls };
-}
-
 /** Build a default-happy deps bundle. Override fields as needed per test. */
 function makeDeps(overrides: Partial<SelfUpgradeDeps> = {}): SelfUpgradeDeps & {
-  written: Record<string, string>;
-  removed: string[];
   restarted: string[];
   npmCalls: string[];
 } {
-  const written: Record<string, string> = {};
-  const removed: string[] = [];
   const restarted: string[] = [];
   const npmCalls: string[] = [];
-  const { client: ssmClient } = makeSsmClient();
 
   return {
-    ssmClient,
     readCurrentVersion: () => "0.4.2",
     runNpmInstall: (pkg: string): NpmInstallResult => {
       npmCalls.push(pkg);
       return { exitCode: 0, stdout: "added 1 package", stderr: "" };
     },
     restartFn: (unit: string) => { restarted.push(unit); },
-    writeFn: (path: string, content: string) => { written[path] = content; },
-    removeFn: (path: string) => { removed.push(path); },
     getEuid: () => 0,
     ...overrides,
     // expose captured state
-    written,
-    removed,
     restarted,
     npmCalls,
   };
@@ -133,7 +108,6 @@ describe("runSelfUpgrade — validation", () => {
     );
     assert.equal(code, 1, "should exit 1 for missing version/latest");
     assert.deepEqual(deps.npmCalls, [], "no npm install should run");
-    assert.deepEqual(Object.keys(deps.written), [], ".npmrc should not be written");
   });
 
   test("exits 1 when both --to and --latest provided", async () => {
@@ -151,12 +125,11 @@ describe("runSelfUpgrade — validation", () => {
       runSelfUpgrade(baseOpts({ to: "0.4.3" }), deps)
     );
     assert.equal(code, 1, "should exit 1 for non-root");
-    assert.deepEqual(Object.keys(deps.written), [], ".npmrc should not be written");
   });
 });
 
 describe("runSelfUpgrade — dry-run (no --apply)", () => {
-  test("prints what would happen but does not install or write .npmrc", async () => {
+  test("prints what would happen but does not install", async () => {
     const deps = makeDeps();
     const code = await withExitCapture(() =>
       runSelfUpgrade(baseOpts({ to: "0.4.3" }), deps)
@@ -164,7 +137,6 @@ describe("runSelfUpgrade — dry-run (no --apply)", () => {
     // Dry-run should complete without exit
     assert.equal(code, null, "should not call process.exit in dry-run");
     assert.deepEqual(deps.npmCalls, [], "no npm install in dry-run");
-    assert.deepEqual(Object.keys(deps.written), [], ".npmrc should not be written in dry-run");
   });
 
   test("dry-run with --latest also does not install", async () => {
@@ -178,7 +150,7 @@ describe("runSelfUpgrade — dry-run (no --apply)", () => {
 });
 
 describe("runSelfUpgrade — happy path (--apply)", () => {
-  test("--version 0.4.3 --apply: installs correct package, scrubs .npmrc, no restart", async () => {
+  test("--version 0.4.3 --apply: installs correct package, no restart", async () => {
     const deps = makeDeps({
       readCurrentVersion: () => "0.4.3",
     });
@@ -192,19 +164,6 @@ describe("runSelfUpgrade — happy path (--apply)", () => {
       ["@continuous-agentics/fleetmind@0.4.3"],
       "should install exact version"
     );
-    // .npmrc written then removed
-    assert.ok(
-      "/tmp/fleetmind-upgrade.npmrc" in deps.written,
-      ".npmrc should have been written"
-    );
-    assert.ok(
-      deps.removed.includes("/tmp/fleetmind-upgrade.npmrc"),
-      ".npmrc should be scrubbed after install"
-    );
-    // npmrc content checks
-    const npmrc = deps.written["/tmp/fleetmind-upgrade.npmrc"]!;
-    assert.ok(npmrc.includes("ghp_test_token"), ".npmrc should contain PAT");
-    assert.ok(npmrc.includes("npm.pkg.github.com"), ".npmrc should reference GitHub Packages");
     // No restart triggered
     assert.deepEqual(deps.restarted, [], "should not restart without --restart");
   });
@@ -248,21 +207,7 @@ describe("runSelfUpgrade — happy path (--apply)", () => {
 });
 
 describe("runSelfUpgrade — failure paths", () => {
-  test("SSM fetch fails: exits 1, .npmrc not written", async () => {
-    const failingSsm: SsmReadable = {
-      async send() {
-        throw new Error("AccessDenied: no permission");
-      },
-    };
-    const deps = makeDeps({ ssmClient: failingSsm });
-    const code = await withExitCapture(() =>
-      runSelfUpgrade(baseOpts({ to: "0.4.3", apply: true }), deps)
-    );
-    assert.equal(code, 1, "should exit 1 on SSM failure");
-    assert.deepEqual(Object.keys(deps.written), [], ".npmrc should NOT be written if SSM fails");
-  });
-
-  test("npm install fails: exits 2, .npmrc is scrubbed", async () => {
+  test("npm install fails: exits 2", async () => {
     const deps = makeDeps({
       runNpmInstall: (pkg: string): NpmInstallResult => {
         void pkg;
@@ -273,10 +218,6 @@ describe("runSelfUpgrade — failure paths", () => {
       runSelfUpgrade(baseOpts({ to: "0.4.3", apply: true }), deps)
     );
     assert.equal(code, 2, "should exit 2 on npm install failure");
-    assert.ok(
-      deps.removed.includes("/tmp/fleetmind-upgrade.npmrc"),
-      ".npmrc should be scrubbed even when npm fails"
-    );
   });
 
   test("version mismatch post-install: exits 3", async () => {
@@ -295,36 +236,5 @@ describe("runSelfUpgrade — failure paths", () => {
       runSelfUpgrade(baseOpts({ to: "0.4.3", apply: true }), deps)
     );
     assert.equal(code, 3, "should exit 3 on post-install version mismatch");
-    // .npmrc should be scrubbed even on version mismatch
-    assert.ok(
-      deps.removed.includes("/tmp/fleetmind-upgrade.npmrc"),
-      ".npmrc should be scrubbed even on version mismatch"
-    );
-  });
-
-  test("trap path: .npmrc scrubbed on npm install failure (simulates signal cleanup)", async () => {
-    // This tests the cleanup path indirectly: when npm fails, scrubNpmrc() runs.
-    // We verify the write→fail→remove lifecycle.
-    const lifecycleLog: string[] = [];
-    const deps = makeDeps({
-      writeFn: (path: string, content: string) => {
-        lifecycleLog.push(`write:${path}`);
-        deps.written[path] = content;
-      },
-      removeFn: (path: string) => {
-        lifecycleLog.push(`remove:${path}`);
-        deps.removed.push(path);
-      },
-      runNpmInstall: (): NpmInstallResult => {
-        return { exitCode: 2, stdout: "", stderr: "npm ERR! network error" };
-      },
-    });
-    await withExitCapture(() =>
-      runSelfUpgrade(baseOpts({ to: "0.4.3", apply: true }), deps)
-    );
-    assert.ok(
-      lifecycleLog.indexOf("write:/tmp/fleetmind-upgrade.npmrc") < lifecycleLog.indexOf("remove:/tmp/fleetmind-upgrade.npmrc"),
-      ".npmrc should be written before being removed"
-    );
   });
 });

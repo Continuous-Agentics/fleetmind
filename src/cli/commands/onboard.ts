@@ -7,7 +7,7 @@
  *   3. Collect Slack credentials (bot token, signing secret, app token, channels)
  *   4. Discover bot_user_ids
  *   5. Collect GitHub App credentials (app_id, installation_id, pem)
- *   6. Check/set GitHub Packages PAT
+ *   6. Verify FleetMind package access
  *   7. Render tfvars
  *   8. Terraform backend bootstrap + init + validate + plan + apply
  *   9. Populate secrets in Secrets Manager
@@ -61,7 +61,6 @@ import {
 import {
   SSMClient,
   GetParameterCommand as SsmGetCommand,
-  PutParameterCommand as SsmPutCommand,
   DescribeInstanceInformationCommand,
 } from "@aws-sdk/client-ssm";
 import { runPushFleet } from "./push-fleet.js";
@@ -636,13 +635,12 @@ function requireExistingAbsoluteFile(
 interface PreflightState {
   /** "done" when GH Apps are all stored, "skip" when no agent needs one, else "next". */
   githubApps: "done" | "next" | "skip";
-  packagesPat: boolean;
   terraformApplied: boolean;
   secretsPopulated: boolean;
 }
 
 /**
- * Detect real completion of the AWS-touching steps (5/6/8/9) for the pre-flight
+ * Detect real completion of the AWS-touching steps (5/8/9) for the pre-flight
  * summary so re-running onboard doesn't show finished work as outstanding.
  *
  * Every probe is wrapped so any AWS failure (offline, missing creds, throttling)
@@ -656,11 +654,6 @@ async function detectRemoteState(args: {
   region: string;
 }): Promise<PreflightState> {
   const { deps, fleet, fleetName, agents } = args;
-
-  // Step 6: GitHub Packages PAT in shared SSM.
-  const packagesPat = await ssmExistsViaClient(
-    deps.ssm, "/fleetmind/shared/github-packages-token",
-  ).catch(() => false);
 
   // Step 8: Terraform applied — every agent's EC2 instance is registered in SSM
   // under the fleetmind tag namespace. All resolve = apply landed. Uses the
@@ -720,7 +713,7 @@ async function detectRemoteState(args: {
     } catch { githubApps = "next"; }
   }
 
-  return { githubApps, packagesPat, terraformApplied, secretsPopulated };
+  return { githubApps, terraformApplied, secretsPopulated };
 }
 
 // ── Main wizard ───────────────────────────────────────────────────────────────
@@ -786,7 +779,7 @@ export async function runOnboard(
   const tfvarsExist = derivedTfvarsCandidates.some(f =>
     deps.fs.existsSync(path.join(path.dirname(fleetFile), f)));
 
-  // Steps 5/6/8/9 touch AWS (SSM + Secrets Manager). Detect real completion so
+  // Steps 5/8/9 touch AWS (SSM + Secrets Manager). Detect real completion so
   // re-runs don't show already-finished steps as outstanding. Any AWS error
   // (offline, no creds) falls back to "next" — never a false "done".
   const preflight = await detectRemoteState({
@@ -799,7 +792,7 @@ export async function runOnboard(
   step(3, TOTAL, "Slack credentials", allUserIdsSet && allChannelsSet ? "done" : "next");
   step(4, TOTAL, "bot_user_ids", allUserIdsSet ? "done" : "next");
   step(5, TOTAL, "GitHub Apps", preflight.githubApps);
-  step(6, TOTAL, "GitHub Packages PAT", preflight.packagesPat ? "done" : "next");
+  step(6, TOTAL, "FleetMind package access", "done");
   step(7, TOTAL, "Render tfvars", tfvarsExist ? "done" : "next");
   step(8, TOTAL, "Terraform", preflight.terraformApplied ? "done" : "next");
   step(9, TOTAL, "Populate secrets", preflight.secretsPopulated ? "done" : "next");
@@ -1012,25 +1005,10 @@ export async function runOnboard(
   console.log();
   } // end GitHub Apps (step 5) when githubAppNeeded
 
-  // ── Step 6: GitHub Packages PAT ─────────────────────────────────────────────
-  header("Step 6 / 12 — GitHub Packages PAT");
-  console.log("  Bots install the fleetmind CLI from GitHub Packages at bootstrap.");
-  console.log(`  SSM path: /fleetmind/shared/github-packages-token  (region: ${region})`);
-
-  if (await ssmExistsViaClient(deps.ssm, "/fleetmind/shared/github-packages-token")) {
-    log.ok("  PAT already set in SSM — skipping");
-  } else {
-    const pat = await deps.prompter.hiddenPrompt("  GitHub Packages PAT (ghp_...): ");
-    if (pat.trim()) {
-      await deps.ssm.send(new SsmPutCommand({
-        Name: "/fleetmind/shared/github-packages-token",
-        Type: "SecureString",
-        Value: pat.trim(),
-        Overwrite: true,
-      }));
-      log.ok("  PAT stored in SSM");
-    }
-  }
+  // ── Step 6: FleetMind package access ────────────────────────────────────────
+  header("Step 6 / 12 — FleetMind package access");
+  console.log("  Bots install the fleetmind CLI from public npm at bootstrap.");
+  log.ok("  No GitHub Packages PAT or registry-specific .npmrc is required.");
 
   // ── Step 7: Render ──────────────────────────────────────────────────────────
   header("Step 7 / 12 — Render");
@@ -1268,7 +1246,7 @@ Steps guided by this wizard:
   3.  Collect Slack credentials (tokens, channel IDs)
   4.  Discover bot_user_ids via Slack auth.test
   5.  Collect GitHub App credentials (app_id, installation_id, pem)
-  6.  Check/set GitHub Packages PAT in SSM
+  6.  Verify FleetMind package access
   7.  Run fleetmind render
   8.  Bootstrap Terraform backend, then init + validate + plan + apply
   9.  Populate Secrets Manager (Slack + Anthropic keys)
