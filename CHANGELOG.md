@@ -6,6 +6,8 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-07-20
+
 ### Changed
 
 - **Make public npm the default package distribution path.** `@continuous-agentics/fleetmind`
