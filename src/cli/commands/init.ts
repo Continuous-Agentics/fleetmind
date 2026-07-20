@@ -64,6 +64,7 @@ agents:
     - id: conductor
       name: Conductor
       emoji: 🎼
+      role: pm
       description: "Orchestrator. Routes requests to specialist agents."
       orchestrator: true
       persona:
@@ -75,7 +76,11 @@ agents:
           account_id: conductor
           bot_token: \${CONDUCTOR_BOT_TOKEN}
           app_token: \${CONDUCTOR_APP_TOKEN}
-      skills: []
+      skills:
+        - name: bot-delegation
+          source: fleetmind
+        - name: worker-self-start
+          source: fleetmind
       plugins: [anthropic]
       agent_to_agent:
         can_send_to: []
