@@ -30,7 +30,8 @@ FleetMind spans three repos. Keep these versions aligned when onboarding or upgr
 
 | FleetMind CLI | `terraform-aws-fleetmind` | `fleetmind-template` baseline | Notes |
 |---|---|---|---|
-| `0.10.4` | `v1.1.5` | `main` at or after `docs/v1-template-audit` | Public npm path, MIT license metadata, guided Terraform onboarding, no-delegation deploy-staging IAM fix |
+| `1.0.0` | `v1.1.5` | `main` at or after `docs/v1-template-audit` | v1.0 public release baseline: public npm path, MIT license metadata, guided Terraform onboarding, no-delegation deploy-staging IAM fix |
+| `0.10.4` | `v1.1.5` | `main` at or after `docs/v1-template-audit` | Public npm smoke-test baseline; npm metadata was published before MIT license metadata landed |
 | `0.10.1` | `v1.1.0` | `main` at or after `docs/v1-template-audit` | Initial public npm path, guided Terraform onboarding, gateway-token connect fix |
 | `0.10.0` | `v1.1.0` | `main` at or after `9775866` | Guided Terraform onboarding and NATS delegation acceptance baseline |
 | `0.9.x` | `v1.1.0` | `main` at or after PR #25 | OpenClaw 2026.7.1 compatibility and module v1.1.0 |
