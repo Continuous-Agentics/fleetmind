@@ -5,7 +5,7 @@
 #     dist-tag (the default `npm i` target). Release marked as a full release.
 #   - push of a PRERELEASE tag `vMAJOR.MINOR.PATCH-<suffix>` (e.g.
 #     `v0.8.0-beta.0`) → published to the `beta` dist-tag, so `npm i` does NOT
-#     pick it up; opt in with `npm i @continuous-agentics/fleetmind@beta` or, on
+#     pick it up; opt in with `npm i @ggettert/fleetmind@beta` or, on
 #     a host, `fleetmind self-upgrade --to 0.8.0-beta.0`. Release marked as a
 #     prerelease. This is the "beta while testing" path.
 #   - manual `workflow_dispatch` from the GitHub Actions UI for reruns/debug.
@@ -38,8 +38,10 @@ jobs:
     # Auto-run on tag push. For manual workflow_dispatch reruns, require the
     # 'confirm' input (defence in depth — a manual rerun should be deliberate).
     if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'publish')
+      github.actor == 'ggettert' && (
+        github.event_name == 'push' ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'publish')
+      )
 
     permissions:
       contents: write

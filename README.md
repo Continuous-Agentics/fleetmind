@@ -64,7 +64,7 @@ Bot EC2 hosts are provisioned by the [`terraform-aws-fleetmind`](https://github.
 fleetmind is published to public npm:
 
 ```bash
-npm install -g @continuous-agentics/fleetmind
+npm install -g @ggettert/fleetmind
 ```
 
 ## Quick Start
@@ -81,7 +81,7 @@ fleet bring-up happens from a [`fleetmind-template`](https://github.com/Continuo
 Agents that share a `local` target run in **one** OpenClaw gateway on that box (OpenClaw's native multi-agent model — each agent still has its own workspace, skills, Slack app, model, and persona). No AWS, no Terraform:
 
 ```bash
-npm install -g @continuous-agentics/fleetmind openclaw   # openclaw needs Node 24 (or 22.19+)
+npm install -g @ggettert/fleetmind openclaw   # openclaw needs Node 24 (or 22.19+)
 fleetmind init                                            # scaffolds fleet.yaml — set a target to `provider: local`
 fleetmind secrets set CONDUCTOR_BOT_TOKEN xoxb-...        # + app token + ANTHROPIC_API_KEY, per agent/provider
 fleetmind up                                              # render → ~/.openclaw, secrets → ~/.openclaw/.env, start the gateway

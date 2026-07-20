@@ -25,7 +25,7 @@ import { log } from "../../utils/log.js";
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const AGENT_ENV_PATH = "/etc/fleetmind/agent.env";
-const PACKAGE_NAME = "@continuous-agentics/fleetmind";
+const PACKAGE_NAME = "@ggettert/fleetmind";
 
 // ── Dependency-injection interfaces ──────────────────────────────────────────
 
@@ -79,7 +79,7 @@ function defaultReadCurrentVersion(): string {
 function resolveNpmPrefix(): string {
   try {
     // Walk up from the running module to find the npm prefix:
-    // <prefix>/lib/node_modules/@continuous-agentics/fleetmind/dist/...
+    // <prefix>/lib/node_modules/@ggettert/fleetmind/dist/...
     const here = path.dirname(fileURLToPath(import.meta.url));
     // dist/cli/commands -> dist/cli -> dist -> package root -> node_modules -> lib -> prefix
     const pkgRoot = path.resolve(here, "..", "..", "..");
