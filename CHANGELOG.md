@@ -6,6 +6,12 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Match Grace's gated npm publishing flow.** Tag pushes now create draft
+  GitHub Releases, and npm publishing runs only after `ggettert` manually
+  publishes the release or dispatches the workflow for an existing tag.
+
 ## [0.10.4] — 2026-07-20
 
 ### Changed
