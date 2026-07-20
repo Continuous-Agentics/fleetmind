@@ -30,7 +30,8 @@ FleetMind spans three repos. Keep these versions aligned when onboarding or upgr
 
 | FleetMind CLI | `terraform-aws-fleetmind` | `fleetmind-template` baseline | Notes |
 |---|---|---|---|
-| `0.10.1` | `v1.1.0` | `main` at or after `docs/v1-template-audit` | Public npm path, guided Terraform onboarding, gateway-token connect fix |
+| `0.10.4` | `v1.1.5` | `main` at or after `docs/v1-template-audit` | Public npm path, MIT license metadata, guided Terraform onboarding, no-delegation deploy-staging IAM fix |
+| `0.10.1` | `v1.1.0` | `main` at or after `docs/v1-template-audit` | Initial public npm path, guided Terraform onboarding, gateway-token connect fix |
 | `0.10.0` | `v1.1.0` | `main` at or after `9775866` | Guided Terraform onboarding and NATS delegation acceptance baseline |
 | `0.9.x` | `v1.1.0` | `main` at or after PR #25 | OpenClaw 2026.7.1 compatibility and module v1.1.0 |
 | `0.8.x` | `v0.5.x`–`v1.0.x` | `main` at or after PR #18 | Per-provider Secrets Manager paths and explicit `providers:` |
@@ -73,7 +74,7 @@ Fleet-wide shared key/value state is available via the **ContextStore** — a Dy
 
 Isolation over efficiency. A misbehaving worker can't crash the orchestrator; a runaway skill on one bot doesn't starve another; each agent can be redeployed, restarted, or rolled back independently. The cost is more EC2 instances per fleet — deemed acceptable for the durability and blast-radius properties.
 
-Bot EC2 hosts are provisioned by the [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) module (latest release `v1.1.5`). Operators don't write Terraform from scratch — they start from the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) GitHub template repo, which contains a `main.tf` that calls the module, plus `variables.tf`, `outputs.tf`, `backend.example.hcl`, and a `workspaces/default.tfvars` starter. `fleetmind render` writes the derived tfvars (`workspaces/<fleet>.derived.tfvars`) inside that repo, and `terraform apply -var-file=workspaces/<fleet>.tfvars -var-file=workspaces/<fleet>.derived.tfvars` provisions the fleet. See the [`fleetmind-template` docs](https://github.com/Continuous-Agentics/fleetmind-template/tree/main/docs) for the full workflow.
+Bot EC2 hosts are provisioned by the [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) module. Operators don't write Terraform from scratch — they start from the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) GitHub template repo, which contains a `main.tf` that calls the module, plus `variables.tf`, `outputs.tf`, `backend.example.hcl`, and a `workspaces/default.tfvars` starter. `fleetmind render` writes the derived tfvars (`workspaces/<fleet>.derived.tfvars`) inside that repo, and `terraform apply -var-file=workspaces/<fleet>.tfvars -var-file=workspaces/<fleet>.derived.tfvars` provisions the fleet. See [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) for the tested CLI/module matrix, and see the [`fleetmind-template` docs](https://github.com/Continuous-Agentics/fleetmind-template/tree/main/docs) for the full workflow.
 
 ## Installation
 

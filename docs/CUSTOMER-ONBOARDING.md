@@ -41,7 +41,7 @@ In the AWS Console:
 2. Choose `Roles`.
 3. Choose `Create role`.
 4. Select `Custom trust policy`.
-5. Paste this trust policy, replacing `<CONTINUOUS_AGENTICS_AWS_ACCOUNT_ID>` and `<EXTERNAL_ID>`:
+5. Paste this trust policy, replacing `<CONTINUOUS_AGENTICS_OPERATOR_ROLE_ARN>` and `<EXTERNAL_ID>`:
 
 ```json
 {
@@ -50,7 +50,7 @@ In the AWS Console:
     {
       "Effect": "Allow",
       "Principal": {
-        "AWS": "arn:aws:iam::<CONTINUOUS_AGENTICS_AWS_ACCOUNT_ID>:root"
+        "AWS": "<CONTINUOUS_AGENTICS_OPERATOR_ROLE_ARN>"
       },
       "Action": "sts:AssumeRole",
       "Condition": {
@@ -118,10 +118,18 @@ Name: `ContinuousAgenticsFleetMindOperatorPolicy`
       "Resource": "*"
     },
     {
-      "Sid": "FleetMindIamForAgentRoles",
+      "Sid": "FleetMindIamCreateAgentRoles",
       "Effect": "Allow",
       "Action": [
         "iam:CreateRole",
+        "iam:CreateInstanceProfile"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "FleetMindIamManageAgentRoles",
+      "Effect": "Allow",
+      "Action": [
         "iam:DeleteRole",
         "iam:GetRole",
         "iam:ListRolePolicies",
@@ -130,7 +138,6 @@ Name: `ContinuousAgenticsFleetMindOperatorPolicy`
         "iam:DeleteRolePolicy",
         "iam:AttachRolePolicy",
         "iam:DetachRolePolicy",
-        "iam:CreateInstanceProfile",
         "iam:DeleteInstanceProfile",
         "iam:GetInstanceProfile",
         "iam:AddRoleToInstanceProfile",
