@@ -12,7 +12,7 @@
     "cli"
   ],
   "author": "Continuous Agentics",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/Continuous-Agentics/fleetmind.git"
