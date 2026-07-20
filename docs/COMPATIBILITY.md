@@ -1,0 +1,50 @@
+# FleetMind Compatibility
+
+FleetMind is a three-repo system:
+
+- `fleetmind` — CLI, renderer, runtime helpers, bundled OpenClaw templates and skills
+- `fleetmind-template` — operator repo scaffold, Terraform root, fleet docs
+- `terraform-aws-fleetmind` — AWS infrastructure module
+
+Use compatible versions across all three. Version drift usually shows up as missing secrets, bootstrap failures, or Terraform variables that no longer match the rendered schema.
+
+## Current v1.0 Baseline
+
+| Component | Version / baseline |
+|---|---|
+| FleetMind CLI | `0.10.4` |
+| `terraform-aws-fleetmind` | `v1.1.5` |
+| `fleetmind-template` | `main` at or after the v1 docs audit |
+| OpenClaw runtime | `2026.7.1` or newer |
+| Node.js | `22` recommended |
+| Terraform | `>= 1.5` |
+
+## Matrix
+
+| FleetMind CLI | `terraform-aws-fleetmind` | `fleetmind-template` baseline | Compatibility notes |
+|---|---|---|---|
+| `0.10.4` | `v1.1.5` | `main` at or after the v1 docs audit | Public npm path, MIT license metadata, guided Terraform onboarding, no-delegation deploy-staging IAM fix |
+| `0.10.1` | `v1.1.0` | `main` at or after the v1 docs audit | Initial public npm path, guided Terraform onboarding, usable `agent connect` gateway token output |
+| `0.10.0` | `v1.1.0` | `main` at or after `9775866` | Guided Terraform onboarding, NATS delegation acceptance baseline |
+| `0.9.x` | `v1.1.0` | `main` at or after PR #25 | OpenClaw 2026.7.1 compatibility and v1.1.0 module behavior |
+| `0.8.x` | `v0.5.x`–`v1.0.x` | `main` at or after PR #18 | Per-provider Secrets Manager paths; every agent must declare `providers:` |
+| `0.7.x` | `v0.4.x` | historical only | Known secret-schema drift with newer renderers; do not use for new fleets |
+| `0.6.x` and earlier | `v0.1.x`–`v0.3.x` | historical only | Pre-v2 `fleet.yaml` and older delegation wiring |
+
+## Upgrade Rules
+
+- Upgrade the template/module pins before applying a newer FleetMind CLI to a fleet.
+- Run `fleetmind render --check` before `terraform plan`.
+- Read the FleetMind `CHANGELOG.md` entry for the target version; schema-affecting releases call out required module/template changes.
+- Use exact `fleetmind_version` pins in `workspaces/<workspace>.tfvars`; do not use `latest` for EC2 bootstrap.
+- Re-run `fleetmind onboard` after upgrades that touch Terraform, provider secrets, gateway tokens, GitHub App setup, or OpenClaw runtime configuration.
+
+## Known Sharp Edges
+
+- `0.7.x` and older renderers used earlier secret naming conventions. New fleets should start on the v1.0 baseline instead of upgrading through those versions.
+- `delegation_enabled = false` disables the Terraform task-ledger substrate; do not test PM-to-worker delegation in that mode.
+- `fleetmind-template` is not version-tagged. Use the changelog and commit baseline instead of expecting semver tags.
+
+## Future Runtime Check
+
+The next hardening step is a render-time compatibility check that reads the consumer repo's `main.tf`, extracts the `terraform-aws-fleetmind?ref=...` pin, and warns or errors when it is outside the known-good range for the installed FleetMind CLI.

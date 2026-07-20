@@ -14,6 +14,9 @@ All notable changes to fleetmind are documented in this file. Format follows
 - **Match Grace's gated npm publishing flow.** Tag pushes now create draft
   GitHub Releases, and npm publishing runs only after `ggettert` manually
   publishes the release or dispatches the workflow for an existing tag.
+- **Document the v1 compatibility and customer onboarding contract.** Added a
+  three-repo compatibility matrix plus customer AWS access handoff guidance with
+  cross-account role and fallback IAM-user paths.
 
 ## [0.10.4] — 2026-07-20
 
