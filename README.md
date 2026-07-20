@@ -73,7 +73,7 @@ Fleet-wide shared key/value state is available via the **ContextStore** — a Dy
 
 Isolation over efficiency. A misbehaving worker can't crash the orchestrator; a runaway skill on one bot doesn't starve another; each agent can be redeployed, restarted, or rolled back independently. The cost is more EC2 instances per fleet — deemed acceptable for the durability and blast-radius properties.
 
-Bot EC2 hosts are provisioned by the [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) module (current v1.0 baseline: `v1.1.0`). Operators don't write Terraform from scratch — they start from the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) GitHub template repo, which contains a `main.tf` that calls the module, plus `variables.tf`, `outputs.tf`, `backend.example.hcl`, and a `workspaces/default.tfvars` starter. `fleetmind render` writes the derived tfvars (`workspaces/<fleet>.derived.tfvars`) inside that repo, and `terraform apply -var-file=workspaces/<fleet>.tfvars -var-file=workspaces/<fleet>.derived.tfvars` provisions the fleet. See the template's [`QUICKSTART`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/QUICKSTART.md), [`SETUP-A-FLEET`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/SETUP-A-FLEET.md), and [`MULTI-FLEET`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/MULTI-FLEET.md) docs for the full workflow.
+Bot EC2 hosts are provisioned by the [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) module (latest release `v1.1.5`). Operators don't write Terraform from scratch — they start from the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) GitHub template repo, which contains a `main.tf` that calls the module, plus `variables.tf`, `outputs.tf`, `backend.example.hcl`, and a `workspaces/default.tfvars` starter. `fleetmind render` writes the derived tfvars (`workspaces/<fleet>.derived.tfvars`) inside that repo, and `terraform apply -var-file=workspaces/<fleet>.tfvars -var-file=workspaces/<fleet>.derived.tfvars` provisions the fleet. See the [`fleetmind-template` docs](https://github.com/Continuous-Agentics/fleetmind-template/tree/main/docs) for the full workflow.
 
 ## Installation
 
@@ -317,7 +317,7 @@ GitHub Actions runs on every push to `main` and every pull request:
 | `build-and-test` | `npm ci` → `npm run build` (tsc) → `npm test` (320+ tests) → `npm pack --dry-run` (verifies published tarball contains `dist/`, `README.md`, `LICENSE`, and the public `docs/*.md` set; rejects `src/`, `test/`, internal `docs/{audits,design,test}/`, and unexpected `docs/integration/` files) |
 | `shellcheck` | Runs ShellCheck on all `infra/scripts/*.sh` standalone scripts |
 
-A `publish.yml` workflow skeleton is also present for release-on-tag — it is **manual-only** (`workflow_dispatch`) until the flow is validated. See [RELEASING.md](RELEASING.md) for publish instructions.
+Releases are gated through GitHub Releases. Pushing a `v*` tag as `ggettert` creates a draft GitHub Release; publishing that release as `ggettert` runs `publish.yml`, builds/tests the package, and publishes to public npm with provenance through trusted publishing. The same workflow can be manually dispatched for an existing tag. See [RELEASING.md](RELEASING.md) for publish instructions.
 
 ## Requirements
 
@@ -327,8 +327,4 @@ A `publish.yml` workflow skeleton is also present for release-on-tag — it is *
 
 ## License
 
-Copyright (c) 2026 Continuous Agentics. All rights reserved.
-
-This software is proprietary and confidential. Unauthorized copying, distribution, modification, or use of this software, in whole or in part, is strictly prohibited without prior written permission from Continuous Agentics.
-
-For licensing inquiries, contact: gracegettert@gmail.com
+MIT. See [LICENSE](LICENSE).

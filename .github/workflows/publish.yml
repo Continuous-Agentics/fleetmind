@@ -1,54 +1,42 @@
-# publish.yml — Release-on-tag publish to npm.
-#
-# Triggers:
-#   - push of a STABLE tag `vMAJOR.MINOR.PATCH` → published to the `latest`
-#     dist-tag (the default `npm i` target). Release marked as a full release.
-#   - push of a PRERELEASE tag `vMAJOR.MINOR.PATCH-<suffix>` (e.g.
-#     `v0.8.0-beta.0`) → published to the `beta` dist-tag, so `npm i` does NOT
-#     pick it up; opt in with `npm i @continuous-agentics/fleetmind@beta` or, on
-#     a host, `fleetmind self-upgrade --to 0.8.0-beta.0`. Release marked as a
-#     prerelease. This is the "beta while testing" path.
-#   - manual `workflow_dispatch` from the GitHub Actions UI for reruns/debug.
-#
-# Both tag patterns are anchored on strict MAJOR.MINOR.PATCH so typo'd tags
-# (e.g. `v0.5.2.` or `v0.5-prefix`) don't trigger an accidental publish; the
-# prerelease pattern additionally requires a `-<suffix>`.
-#
-# After a successful publish, the workflow also creates a GitHub Release for
-# the same tag with release notes extracted from CHANGELOG.md.
-
 name: Publish to npm
 
+# Fires when Grace publishes a GitHub Release created from a tag, and can also
+# be dispatched manually against an existing tag. A Release created or published
+# by the default GITHUB_TOKEN does not emit release:published, so the manual
+# publish step is the intentional human gate.
 on:
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'      # stable      → latest
-      - 'v[0-9]+.[0-9]+.[0-9]+-*'    # prerelease  → beta
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
-      confirm:
-        description: "Type 'publish' to confirm manual republish (push-tag flow runs automatically)"
+      tag:
+        description: Existing git tag to publish (e.g. v0.10.4)
         required: true
-        default: ""
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  publish-to-npm:
-    name: Publish
+  publish:
+    name: Build & publish to npm
     runs-on: ubuntu-latest
-    # Auto-run on tag push. For manual workflow_dispatch reruns, require the
-    # 'confirm' input (defence in depth — a manual rerun should be deliberate).
-    if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'publish')
-
+    timeout-minutes: 15
+    if: github.actor == 'ggettert'
     permissions:
-      contents: write
       id-token: write
+      contents: read
 
     steps:
-      - name: Checkout (full history for tag context)
+      - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name || github.ref }}
           fetch-depth: 0
 
       - name: Set up Node 22
@@ -62,6 +50,29 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Resolve publish mode and verify version
+        id: release
+        shell: bash
+        env:
+          TARGET_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name || github.ref_name }}
+        run: |
+          set -euo pipefail
+          TAG="${TARGET_TAG}"
+          RAW_VERSION="${TAG#v}"
+          NPM_TAG="latest"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+
+          if [[ "$RAW_VERSION" != "$PACKAGE_VERSION" ]]; then
+            echo "::error::Tag/version mismatch: tag=$TAG package.json=$PACKAGE_VERSION"
+            exit 1
+          fi
+
+          if [[ "$RAW_VERSION" =~ -(alpha|beta|rc)(\.|$) ]]; then
+            NPM_TAG="beta"
+          fi
+
+          echo "npm_tag=${NPM_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Build
         run: npm run build
@@ -80,62 +91,8 @@ jobs:
           npm install "$TMPDIR"/*.tgz
           ./node_modules/.bin/fleetmind --version
 
-      # Route prerelease tags (v1.2.3-beta.0) to the `beta` dist-tag and stable
-      # tags to `latest`. On manual workflow_dispatch (ref is a branch, not a
-      # tag) default to `latest` — preserves the prior manual-rerun behavior.
-      - name: Determine dist-tag
-        id: disttag
-        run: |
-          set -euo pipefail
-          REF="${GITHUB_REF}"
-          TAG="${REF#refs/tags/}"
-          if [[ "$REF" == refs/tags/* && "$TAG" == *-* ]]; then
-            echo "npm_tag=beta"   >> "$GITHUB_OUTPUT"
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "npm_tag=latest"   >> "$GITHUB_OUTPUT"
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Publish
         run: |
           unset NODE_AUTH_TOKEN
           unset NPM_TOKEN
-          npm publish --access public --tag "${{ steps.disttag.outputs.npm_tag }}" --provenance
-
-      # ── Auto-create GitHub Release with CHANGELOG-extracted notes ────────
-      # Skipped on workflow_dispatch reruns (the release usually already
-      # exists for the tag).
-      - name: Extract release notes from CHANGELOG
-        if: github.event_name == 'push'
-        id: changelog
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF#refs/tags/}"
-          VERSION="${TAG#v}"
-          # Extract the section between `## [VERSION]` and the next `## [` header.
-          # Trims leading/trailing blank lines.
-          NOTES=$(awk -v ver="${VERSION}" '
-            $0 ~ "^## \\[" ver "\\]" { flag=1; next }
-            flag && /^## \[/ { exit }
-            flag { print }
-          ' CHANGELOG.md | sed -e '/./,$!d' -e :a -e '/^$/{$d;N;ba' -e '}')
-          if [ -z "$NOTES" ]; then
-            echo "::warning::No CHANGELOG entry found for [${VERSION}]; release will use auto-generated notes"
-            NOTES="(No CHANGELOG entry found for ${VERSION}. See commit history for changes.)"
-          fi
-          # Multi-line output for actions
-          {
-            echo "notes<<RELEASE_NOTES_EOF"
-            echo "$NOTES"
-            echo "RELEASE_NOTES_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Create GitHub Release
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          body: ${{ steps.changelog.outputs.notes }}
-          prerelease: ${{ steps.disttag.outputs.prerelease }}
+          npm publish --access public --tag "${{ steps.release.outputs.npm_tag }}" --provenance
