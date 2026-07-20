@@ -17,6 +17,7 @@ import { test, describe, beforeEach, afterEach } from "node:test";
 
 import { renderInitTemplate } from "../cli/commands/init.js";
 import { loadFleet } from "../config/loader.js";
+import { computeFleetSkillGaps } from "../runtime/skills-manifest.js";
 
 let tmpDir: string;
 
@@ -51,6 +52,17 @@ describe("fleetmind init template", () => {
 
     // Orchestrator accessor works.
     assert.equal(fleet.orchestrator?.id, "conductor");
+  });
+
+  test("scaffolded fleet.yaml passes render --check skill validation", () => {
+    const content = renderInitTemplate("acme-bots", "Acme Corp");
+    const fleetPath = path.join(tmpDir, "fleet.yaml");
+    fs.writeFileSync(fleetPath, content, "utf-8");
+
+    const fleet = loadFleet(fleetPath);
+    const gaps = computeFleetSkillGaps(fleet.agents.list).filter((gap) => gap.missing.length > 0);
+
+    assert.deepEqual(gaps, []);
   });
 
   test("placeholder name substitution leaves no {NAME}/{CLIENT} tokens", () => {
