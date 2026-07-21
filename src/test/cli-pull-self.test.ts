@@ -89,7 +89,7 @@ describe("parseAgentEnv", () => {
   });
 
   test("defaults WORKSPACE_BASE to /opt/openclaw/workspace when absent", () => {
-    const text = `FLEET_NAME=dogfood\nAGENT_ID=forge\n`;
+    const text = `FLEET_NAME=test-fleet\nAGENT_ID=forge\n`;
     const env = parseAgentEnv(text);
     assert.equal(env.workspaceBase, "/opt/openclaw/workspace");
   });
@@ -105,9 +105,9 @@ describe("parseAgentEnv", () => {
   });
 
   test("trims whitespace from values", () => {
-    const text = `FLEET_NAME=  dogfood  \nAGENT_ID=  forge  \n`;
+    const text = `FLEET_NAME=  test-fleet  \nAGENT_ID=  forge  \n`;
     const env = parseAgentEnv(text);
-    assert.equal(env.fleetName, "dogfood");
+    assert.equal(env.fleetName, "test-fleet");
     assert.equal(env.agentId, "forge");
   });
 });
@@ -953,7 +953,7 @@ describe("applyDiff — protected paths (defence-in-depth)", () => {
 
   test("USER.md is not modified even when in diff.modified", () => {
     const userPath = path.join(workspaceDir, "USER.md");
-    fs.writeFileSync(userPath, "# User\n\n- **Name:** Grace", "utf-8");
+    fs.writeFileSync(userPath, "# User\n\n- **Name:** Human Reviewer", "utf-8");
     fs.writeFileSync(path.join(stagingDir, "USER.md"), "# User\n\n- **Name:** Overwritten", "utf-8");
 
     const diff: FileDiff = {
@@ -965,7 +965,7 @@ describe("applyDiff — protected paths (defence-in-depth)", () => {
     applyDiff(stagingDir, workspaceDir, diff);
 
     const result = fs.readFileSync(userPath, "utf-8");
-    assert.ok(result.includes("Grace"), "USER.md must not be modified — agent-owned");
+    assert.ok(result.includes("Human Reviewer"), "USER.md must not be modified — agent-owned");
   });
 
   test("USER.md is not deleted even when in diff.deleted", () => {

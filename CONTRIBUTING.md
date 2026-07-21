@@ -88,7 +88,7 @@ Releases are maintainer-only.
 The release flow is intentionally gated:
 
 1. A `v*` tag creates a draft GitHub Release.
-2. Grace publishes the GitHub Release when ready.
+2. The release maintainer publishes the GitHub Release when ready.
 3. The `publish.yml` workflow publishes to npm via trusted publishing.
 4. The workflow is guarded so only GitHub actor `ggettert` can publish.
 
@@ -107,4 +107,3 @@ No CLA is required. By contributing, you agree that your contributions are licen
 ## Conduct
 
 Be direct, respectful, and constructive. Maintainers may close or edit issues that are spammy, abusive, or unrelated to FleetMind.
-

@@ -80,21 +80,21 @@ standing policy — they do not need to be re-stated in individual task briefs.
 
 ### PR Review Workflow
 
-When a worker ships a PR, share it with Grace (<@U0ASYLGHU9E>) for review
+When a worker ships a PR, share it with the fleet's designated human reviewer
 before it is merged. The In-Review handoff post (Template b from the
-`bot-delegation` references) must include the PR link so Grace can find it
-without digging. Grace is the single approver for all work in this fleet;
-do not request reviews from other humans or bots unless Grace explicitly
-delegates that authority.
+`bot-delegation` references) must include the PR link so the reviewer can find
+it without digging. The designated reviewer is the single approver for all work
+in this fleet; do not request reviews from other humans or bots unless that
+authority has been explicitly delegated.
 
 Steps:
 1. Worker ships → PM bot receives NATS `ship` event.
 2. Spawn an In-Review handoff sub-agent (Template b — read skill before spawning).
-3. Sub-agent posts the review request in the planning thread tagging
-   `<@U0ASYLGHU9E>` with the PR link.
-4. PM bot enters signoff-watchdog mode: nudges Grace every 4 h until she approves
-   or requests changes (see bot-delegation § Signoff Watchdog).
-5. On Grace’s approval → spawn signoff sub-agent (Template c).
+3. Sub-agent posts the review request in the planning thread tagging the
+   designated reviewer with the PR link.
+4. PM bot enters signoff-watchdog mode: nudges the reviewer every 4h until they
+   approve or request changes (see bot-delegation § Signoff Watchdog).
+5. On approval → spawn signoff sub-agent (Template c).
 
 ### Definition of Done
 
