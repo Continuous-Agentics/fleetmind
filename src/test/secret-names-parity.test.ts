@@ -29,7 +29,7 @@ import {
   providerSecretName,
 } from "../core/secret-names.js";
 
-const FLEET = "fleetmind-wri-624905204775";
+const FLEET = "fleetmind-test-111122223333";
 const AGENT = "ranger";
 
 describe("secret-names parity (CLI ⇄ terraform-aws-fleetmind module)", () => {

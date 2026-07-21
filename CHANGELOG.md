@@ -13,7 +13,7 @@ All notable changes to fleetmind are documented in this file. Format follows
 - **Mark the npm package as MIT licensed.** Replaces the old proprietary
   placeholder license metadata with MIT and updates README release/licensing
   notes for the public npm package.
-- **Match Grace's gated npm publishing flow.** Tag pushes now create draft
+- **Match the maintainer-gated npm publishing flow.** Tag pushes now create draft
   GitHub Releases, and npm publishing runs only after `ggettert` manually
   publishes the release or dispatches the workflow for an existing tag.
 - **Document the v1 compatibility and customer onboarding contract.** Added a
@@ -26,7 +26,7 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ### Changed
 
-- **Restrict npm publishing to Grace's GitHub actor.** The public package remains
+- **Restrict npm publishing to the maintainer's GitHub actor.** The public package remains
   `@continuous-agentics/fleetmind`, but the publish workflow now only runs when
   `github.actor == 'ggettert'`.
 

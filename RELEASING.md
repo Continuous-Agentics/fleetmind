@@ -26,7 +26,7 @@ the `@continuous-agentics/fleetmind` package on npm to trust this repository's
    The push of the `vMAJOR.MINOR.PATCH` tag fires `.github/workflows/release.yml`,
    which creates a draft GitHub Release when the actor is `ggettert`.
 
-5. **Grace publishes the GitHub Release manually.**
+5. **The release maintainer publishes the GitHub Release manually.**
    Publishing the release as the real `ggettert` identity is the intentional gate
    that fires `.github/workflows/publish.yml`, which:
    - Runs `npm ci` + build + tests
@@ -52,7 +52,7 @@ the `@continuous-agentics/fleetmind` package on npm to trust this repository's
 
 The release workflow listens to `v*` tags and only creates a draft release when
 the actor is `ggettert`. The npm publish workflow does not run directly from tag
-pushes; it runs when Grace publishes the GitHub Release or manually dispatches
+pushes; it runs when the release maintainer publishes the GitHub Release or manually dispatches
 the workflow for an existing tag.
 
 For pre-releases (e.g. `v0.6.0-rc.1`), the workflow publishes to the `beta`

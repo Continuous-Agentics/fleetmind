@@ -162,7 +162,7 @@ describe("storeGithubApp — live (injected mock SSM)", () => {
     const { client, calls } = makeMockSsmClient();
 
     const result = await storeGithubApp({
-      fleet: "dogfood",
+      fleet: "test-fleet",
       agent: "conductor",
       appId: "99",
       installationId: "88",
@@ -173,9 +173,9 @@ describe("storeGithubApp — live (injected mock SSM)", () => {
       ssmClient: client,
     });
 
-    assert.equal(result.namespace, "/fleetmind/dogfood/agents/conductor/github-app");
+    assert.equal(result.namespace, "/fleetmind/test-fleet/agents/conductor/github-app");
     assert.ok(
-      calls.every((c) => c.Name?.startsWith("/fleetmind/dogfood/agents/conductor/github-app")),
+      calls.every((c) => c.Name?.startsWith("/fleetmind/test-fleet/agents/conductor/github-app")),
       "all param names should start with the expected namespace"
     );
   });

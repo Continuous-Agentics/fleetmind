@@ -80,7 +80,7 @@ The subscriber emits one JSON line per delegation event:
   "at": "2026-05-20T23:00:00Z",
   "definition_of_done": "All tests pass and PR merged.",
   "description": "Refactor the auth module to use JWT instead of sessions.",
-  "requestor": "U0ASYLGHU9E",
+  "requestor": "U_REQUESTOR",
   "tracker_link": "https://github.com/acme/repo/issues/42"
 }
 ```
