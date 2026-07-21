@@ -8,7 +8,7 @@ delegate tasks to worker bots and track them through the full lifecycle.
 
 - AWS account with DynamoDB and S3 access
 - Terraform ≥ 1.5 (for applying the infrastructure module)
-- fleetmind CLI installed (`npm install -g fleetmind`)
+- FleetMind CLI installed (`npm install -g @continuous-agentics/fleetmind`)
 - A `fleet.yaml` with at least one PM bot and one worker bot defined
 
 ## Step 1: Provision the task-ledger infrastructure

@@ -1,44 +1,72 @@
 # FleetMind
 
-Deploy and manage OpenClaw multi-agent fleets. One config file, multiple AI bots, each with its own EC2 host, OpenClaw gateway, Slack identity, persona, and skills — coordinating natively in threads.
+Deploy and operate fleets of OpenClaw agents.
 
-Built with TypeScript. Requires Node.js 20+.
+FleetMind turns one `fleet.yaml` into multiple AI agents: each with its own
+OpenClaw gateway, workspace, Slack identity, persona, skills, secrets, and
+runtime target. Agents can run locally on one machine or as isolated EC2 hosts
+that coordinate through Slack threads, shared context, and an optional durable
+task ledger.
 
-## 📦 Where did the operator docs go?
+Built with TypeScript. The FleetMind CLI requires Node.js 20+; local fleets
+also install OpenClaw, which currently requires Node.js 24 or Node.js 22.19+.
 
-fleet bring-up, day-2 ops, and troubleshooting now live in the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) repo, alongside the Terraform that calls the module. Module-level concerns live in [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind).
+## What FleetMind Does
 
-| Looking for... | Now lives at |
-|---|---|
-| Bring-up (QUICKSTART) | [`fleetmind-template/docs/QUICKSTART.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/QUICKSTART.md) |
-| Comprehensive setup reference | [`fleetmind-template/docs/SETUP-A-FLEET.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/SETUP-A-FLEET.md) |
-| Multi-fleet patterns | [`fleetmind-template/docs/MULTI-FLEET.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/MULTI-FLEET.md) |
-| Day-to-day ops (push, pull-self, restart) | [`fleetmind-template/docs/OPERATING.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/OPERATING.md) |
-| Troubleshooting (Slack, deploy, runtime) | [`fleetmind-template/docs/TROUBLESHOOTING.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/TROUBLESHOOTING.md) |
-| GitHub Apps per agent | [`fleetmind-template/docs/GITHUB-APPS.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/GITHUB-APPS.md) |
-| Vocabulary (CONCEPTS) | [`fleetmind-template/docs/CONCEPTS.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/CONCEPTS.md) |
-| Version compatibility | [`fleetmind/docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) |
-| Customer AWS access handoff | [`fleetmind/docs/CUSTOMER-ONBOARDING.md`](docs/CUSTOMER-ONBOARDING.md) |
-| BYO VPC, module troubleshooting, migrations | [`terraform-aws-fleetmind/docs/`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind#docs) |
-| Standalone task-ledger consumption | [`terraform-aws-fleetmind/docs/TASK-LEDGER-STANDALONE.md`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/blob/main/docs/TASK-LEDGER-STANDALONE.md) |
+- **Scaffold fleet configs** with `fleetmind init` and validate them with `fleetmind render --check`.
+- **Render per-agent workspaces** from one declarative `fleet.yaml`.
+- **Bring up local fleets** with `fleetmind up` for single-machine development.
+- **Provision AWS fleets** through [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) and [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind).
+- **Push updates to deployed agents** with signed manifests, S3 staging, SSM Run Command, and `pull-self`.
+- **Manage fleet secrets** across local env files and AWS Secrets Manager.
+- **Generate Slack and GitHub App setup** for one identity per agent.
+- **Coordinate PM-to-worker delegation** through a DynamoDB/S3 task ledger and NATS wake events.
 
-This repo (`fleetmind`) ships the CLI itself — commands, runtime, and the delegation protocol spec. See [`docs/protocol.md`](docs/protocol.md) and [`docs/integration/delegation.md`](docs/integration/delegation.md).
+## Install
 
-## Compatibility
+```bash
+npm install -g @continuous-agentics/fleetmind
+```
 
-FleetMind spans three repos. Keep these versions aligned when onboarding or upgrading a fleet:
+For local fleets, install OpenClaw too:
 
-| FleetMind CLI | `terraform-aws-fleetmind` | `fleetmind-template` baseline | Notes |
-|---|---|---|---|
-| `1.0.0` | `v1.1.5` | `main` at or after `docs/v1-template-audit` | v1.0 public release baseline: public npm path, MIT license metadata, guided Terraform onboarding, no-delegation deploy-staging IAM fix |
-| `0.10.4` | `v1.1.5` | `main` at or after `docs/v1-template-audit` | Public npm smoke-test baseline; npm metadata was published before MIT license metadata landed |
-| `0.10.1` | `v1.1.0` | `main` at or after `docs/v1-template-audit` | Initial public npm path, guided Terraform onboarding, gateway-token connect fix |
-| `0.10.0` | `v1.1.0` | `main` at or after `9775866` | Guided Terraform onboarding and NATS delegation acceptance baseline |
-| `0.9.x` | `v1.1.0` | `main` at or after PR #25 | OpenClaw 2026.7.1 compatibility and module v1.1.0 |
-| `0.8.x` | `v0.5.x`–`v1.0.x` | `main` at or after PR #18 | Per-provider Secrets Manager paths and explicit `providers:` |
-| `0.7.x` and earlier | pre-`v0.5.0` | historical only | Not recommended for new fleets |
+```bash
+npm install -g @continuous-agentics/fleetmind openclaw
+```
 
-See [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) for the full contract and upgrade notes.
+OpenClaw currently requires Node.js 24, or Node.js 22.19+.
+
+## Quick Start
+
+### Local Fleet
+
+Use this path to run multiple agents on one machine without AWS or Terraform.
+
+```bash
+fleetmind init
+# edit fleet.yaml: add a local target under targets: and point agents at it
+fleetmind secrets set CONDUCTOR_BOT_TOKEN xoxb-...
+fleetmind up
+```
+
+`fleetmind up` renders `~/.openclaw/openclaw.json`, writes resolved secrets to
+`~/.openclaw/.env` with `0600` permissions, provisions each agent workspace,
+and delegates daemon setup to `openclaw onboard --install-daemon`.
+
+### AWS Fleet
+
+Use this path when each agent should run on its own EC2 host.
+
+```bash
+gh repo create my-fleet --template Continuous-Agentics/fleetmind-template --private
+cd my-fleet
+fleetmind onboard
+```
+
+The template repo owns the Terraform root, workspace tfvars, and operator docs.
+FleetMind renders the derived tfvars and per-agent workspaces; the Terraform
+module provisions EC2, IAM, SSM, Secrets Manager, S3, DynamoDB, and optional
+NATS infrastructure.
 
 ## Architecture
 
@@ -77,37 +105,42 @@ Isolation over efficiency. A misbehaving worker can't crash the orchestrator; a 
 
 Bot EC2 hosts are provisioned by the [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) module. Operators don't write Terraform from scratch — they start from the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) GitHub template repo, which contains a `main.tf` that calls the module, plus `variables.tf`, `outputs.tf`, `backend.example.hcl`, and a `workspaces/default.tfvars` starter. `fleetmind render` writes the derived tfvars (`workspaces/<fleet>.derived.tfvars`) inside that repo, and `terraform apply -var-file=workspaces/<fleet>.tfvars -var-file=workspaces/<fleet>.derived.tfvars` provisions the fleet. See [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) for the tested CLI/module matrix, and see the [`fleetmind-template` docs](https://github.com/Continuous-Agentics/fleetmind-template/tree/main/docs) for the full workflow.
 
-## Installation
+## Documentation Map
 
-fleetmind is published to public npm:
+FleetMind spans three repos:
 
-```bash
-npm install -g @continuous-agentics/fleetmind
-```
+- [`fleetmind`](https://github.com/Continuous-Agentics/fleetmind) — CLI, renderer, runtime helpers, bundled OpenClaw templates, and delegation protocol
+- [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) — operator repo scaffold, Terraform root, workspace tfvars, and bring-up docs
+- [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) — AWS infrastructure module
 
-## Quick Start
+| Looking for... | Start here |
+|---|---|
+| Bring-up walkthrough | [`fleetmind-template/docs/QUICKSTART.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/QUICKSTART.md) |
+| Comprehensive fleet setup | [`fleetmind-template/docs/SETUP-A-FLEET.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/SETUP-A-FLEET.md) |
+| Day-to-day operations | [`fleetmind-template/docs/OPERATING.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/OPERATING.md) |
+| Troubleshooting | [`fleetmind-template/docs/TROUBLESHOOTING.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/TROUBLESHOOTING.md) |
+| GitHub Apps per agent | [`fleetmind-template/docs/GITHUB-APPS.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/GITHUB-APPS.md) |
+| Compatibility matrix | [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) |
+| Delegation protocol | [`docs/protocol.md`](docs/protocol.md) |
+| Enable PM-to-worker delegation | [`docs/integration/delegation.md`](docs/integration/delegation.md) |
+| Customer AWS access handoff | [`docs/CUSTOMER-ONBOARDING.md`](docs/CUSTOMER-ONBOARDING.md) |
+| Terraform module docs | [`terraform-aws-fleetmind/docs/`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind#docs) |
 
-### AWS (one EC2 per agent)
+## Compatibility
 
-fleet bring-up happens from a [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) clone, not from this repo. Two paths:
+FleetMind spans three repos. Keep these versions aligned when onboarding or upgrading a fleet:
 
-- *Guided:* `fleetmind onboard` (interactive wizard — [README § Guided onboarding](https://github.com/Continuous-Agentics/fleetmind-template#guided-onboarding-recommended))
-- *Manual:* [`docs/QUICKSTART.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/QUICKSTART.md) — ~20–30 min, narrative walkthrough
+| FleetMind CLI | `terraform-aws-fleetmind` | `fleetmind-template` baseline | Notes |
+|---|---|---|---|
+| `1.0.0` | `v1.1.5` | `main` at or after the v1 docs audit | v1.0 public release baseline: public npm path, MIT license metadata, guided Terraform onboarding, no-delegation deploy-staging IAM fix |
+| `0.10.4` | `v1.1.5` | `main` at or after the v1 docs audit | Public npm smoke-test baseline; npm metadata was published before MIT license metadata landed |
+| `0.10.1` | `v1.1.0` | `main` at or after the v1 docs audit | Initial public npm path, guided Terraform onboarding, gateway-token connect fix |
+| `0.10.0` | `v1.1.0` | `main` at or after `9775866` | Guided Terraform onboarding and NATS delegation acceptance baseline |
+| `0.9.x` | `v1.1.0` | `main` at or after PR #25 | OpenClaw 2026.7.1 compatibility and module v1.1.0 |
+| `0.8.x` | `v0.5.x`–`v1.0.x` | `main` at or after PR #18 | Per-provider Secrets Manager paths and explicit `providers:` |
+| `0.7.x` and earlier | pre-`v0.5.0` | historical only | Not recommended for new fleets |
 
-### Local (Mac mini / single box, no cloud)
-
-Agents that share a `local` target run in **one** OpenClaw gateway on that box (OpenClaw's native multi-agent model — each agent still has its own workspace, skills, Slack app, model, and persona). No AWS, no Terraform:
-
-```bash
-npm install -g @continuous-agentics/fleetmind openclaw   # openclaw needs Node 24 (or 22.19+)
-fleetmind init                                            # scaffolds fleet.yaml — set a target to `provider: local`
-fleetmind secrets set CONDUCTOR_BOT_TOKEN xoxb-...        # + app token + ANTHROPIC_API_KEY, per agent/provider
-fleetmind up                                              # render → ~/.openclaw, secrets → ~/.openclaw/.env, start the gateway
-```
-
-`fleetmind up` renders the host's `~/.openclaw/openclaw.json`, writes resolved secrets to `~/.openclaw/.env` (chmod 600; OpenClaw substitutes them), provisions each agent's workspace, then delegates the daemon to `openclaw onboard --install-daemon`. Use `--no-daemon` to stage everything and start the gateway yourself, or `--dry-run` to preview.
-
-This repo ships the fleetmind CLI itself — see [CLI Reference](#cli-reference) below for the commands the template drives.
+See [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) for the full contract and upgrade notes.
 
 ## fleet.yaml Overview
 
@@ -323,7 +356,7 @@ Releases are gated through GitHub Releases. Pushing a `v*` tag as `ggettert` cre
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 20+ for FleetMind; Node.js 24 or 22.19+ for local OpenClaw fleets
 - AWS credentials (for DynamoDB ContextStore + delegation in production)
 - OpenClaw installed on each agent's target EC2 host
 
