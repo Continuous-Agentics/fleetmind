@@ -8,11 +8,12 @@ runtime target. Agents can run locally on one machine or as isolated EC2 hosts
 that coordinate through Slack threads, shared context, and an optional durable
 task ledger.
 
-Built with TypeScript. Requires Node.js 20+.
+Built with TypeScript. The FleetMind CLI requires Node.js 20+; local fleets
+also install OpenClaw, which currently requires Node.js 24 or Node.js 22.19+.
 
 ## What FleetMind Does
 
-- **Scaffold fleet configs** with `fleetmind init` and validate them with `render --check`.
+- **Scaffold fleet configs** with `fleetmind init` and validate them with `fleetmind render --check`.
 - **Render per-agent workspaces** from one declarative `fleet.yaml`.
 - **Bring up local fleets** with `fleetmind up` for single-machine development.
 - **Provision AWS fleets** through [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) and [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind).
@@ -43,7 +44,7 @@ Use this path to run multiple agents on one machine without AWS or Terraform.
 
 ```bash
 fleetmind init
-# edit fleet.yaml: set target.provider: local and add your agents
+# edit fleet.yaml: add a local target under targets: and point agents at it
 fleetmind secrets set CONDUCTOR_BOT_TOKEN xoxb-...
 fleetmind up
 ```
@@ -355,7 +356,7 @@ Releases are gated through GitHub Releases. Pushing a `v*` tag as `ggettert` cre
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 20+ for FleetMind; Node.js 24 or 22.19+ for local OpenClaw fleets
 - AWS credentials (for DynamoDB ContextStore + delegation in production)
 - OpenClaw installed on each agent's target EC2 host
 
