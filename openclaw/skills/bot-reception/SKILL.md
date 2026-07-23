@@ -188,38 +188,9 @@ where things stand. Keep it short — one or two sentences.
 signal (DDB Streams → EventBridge Pipe → PM bot wake). Don't fire the signal
 before the narrative is readable.
 
-**Step 1: Write the narrative to S3**
-
-```bash
-cat <<'NARRATIVE' | fleetmind narrative put --task-id <task_id> --event shipped
----
-v: 0.2
-task_id: <task_id>
----
-
-## Task
-<one-paragraph statement of what was delegated>
-
-## What I did
-<narrative — outcomes, not a tool-call transcript>
-
-## What I didn't do
-<scope cuts, follow-ups, gotchas>
-
-## Links
-- PR: <url>
-- Preview: <url>
-
-## Learned
-<2-5 non-obvious bullets, or []>
-NARRATIVE
-```
-
-If `fleetmind narrative put` exits with code 2 (S3 failure, local fallback):
-write the local fallback path to `memory/task-queue.md`, surface it as a
-follow-up, and do NOT proceed to DDB update yet.
-
-**Step 2: Update DDB status to shipped**
+Write the narrative first, then update DDB. Copy the exact templates from
+[references/narrative-template.md](references/narrative-template.md) - do not
+compose the frontmatter/section headers ad-hoc.
 
 ```bash
 fleetmind task ship \
@@ -228,32 +199,14 @@ fleetmind task ship \
   --project <project-slug>     # from the initial 'task get'; saves a GetItem round-trip
 ```
 
+If `fleetmind narrative put` exits with code 2 (S3 failure, local fallback):
+write the local fallback path to `memory/task-queue.md`, surface it as a
+follow-up, and do NOT proceed to the DDB update yet.
+
 ### Block (same ordering)
 
-**Step 1: Write the narrative to S3 (with `## Need` section)**
-
-```bash
-cat <<'NARRATIVE' | fleetmind narrative put --task-id <task_id> --event blocked
----
-v: 0.2
-task_id: <task_id>
----
-
-## Task
-<what was delegated>
-
-## What I tried
-<what you attempted>
-
-## Need
-<what would unblock — info, decision, dep fix>
-
-## Learned
-<bullets or []>
-NARRATIVE
-```
-
-**Step 2: Update DDB status to blocked**
+Same S3-then-DDB ordering, using the block template (with `## Need`) from
+[references/narrative-template.md](references/narrative-template.md):
 
 ```bash
 fleetmind task block \
@@ -482,43 +435,19 @@ On completion/blocked: move to `## Recently Shipped` or `## Blocked` with outcom
 
 ---
 
+## Reference files
+
+Load these only when the task you're handling needs them:
+
+- *[references/narrative-template.md](references/narrative-template.md)* -
+  exact S3 narrative frontmatter/section templates for ship and block events.
+  **Always copy from here; never compose the narrative headers ad-hoc.**
+
+- *[references/CHANGELOG.md](references/CHANGELOG.md)* - full version history
+  for this skill.
+
 ## Changelog
 
-- **1.6.0 (2026-07-09)** — Tracker-agnostic self-start trigger (#241):
-  - § Handling Human Requests (Non-Delegation): removed Linear-specific bullets;
-    "Linear issue assigned to you" replaced with "human directly asks you to pick
-    up a discrete piece of work (non-delegation) → worker-self-start".
-  - § Push-back: rewritten tracker-agnostic; no longer asks human to create a
-    Linear issue; asks for task description + optional tracker URL.
-- **1.5.0 (2026-07-09)** — Worker Self-Start Protocol integration (CON-91,
-  re-authored from PR #169 onto NATS transport):
-  - § Handling Human Requests renamed to "Non-Delegation"; classifies requests:
-    discussion, push-back for unlinked feature requests, self-start for
-    Linear-assigned tasks.
-  - New § Push-back: exact reply text for unlinked feature requests.
-  - § Informal-task ledger CLI corrected: `--lifecycle informal` and
-    `--status accepted` are not valid CLI options (bug in v1.4.0 / main);
-    replaced with `--lifecycle shipped-is-done` and explicit `task ack` step.
-  - `--envelope-ts` documented as optional for NATS-only fleets.
-- **1.2.0 (2026-05-21)** — Rewrite for NATS-only transport (CON-115):
-  - Removed Slack envelope recognition entirely. Delegation arrives via NATS
-    subscriber, not a Slack message with `Task ID:` / `React :eyes:`.
-  - Session boot now has two steps: NATS subscriber startup (new) then DDB
-    write-health precheck. DDB unhealthy → publish NATS block event instead
-    of posting in Slack channel.
-  - "On Receiving a Delegation" rewritten: handle NATS JSON event, open Slack
-    thread with the human requestor (not a reaction in a bot channel), store
-    `thread_ts` in task-queue.md.
-  - New § Mid-task Progress Updates: `fleetmind nats progress` at milestones
-    + brief update in the requestor's Slack thread.
-  - Completion/blocker replies go in the requestor's Slack thread, not a
-    reply mentioning the PM bot. `fleetmind task ship/block` publishes the
-    NATS event automatically; PM bot receives and closes DDB lifecycle.
-  - Voice discipline rewritten: Slack is human-facing only; NATS is
-    agent-to-agent only.
-  - task-queue.md now tracks `thread_ts` for the requestor's Slack thread.
-  - `bot-delegation-nats` and `bot-reception-nats` standalone skills removed;
-    NATS transport is now the only transport in these core skills.
-- **1.1.0 (2026-05-11)** — DDB write-health precheck, informal-task ledger,
-  task-queue-before-eyes ordering.
-- **1.0.0** — Initial release.
+Full version history moved to
+[references/CHANGELOG.md](references/CHANGELOG.md). Latest: **1.6.0
+(2026-07-09)** - tracker-agnostic self-start trigger (#241).

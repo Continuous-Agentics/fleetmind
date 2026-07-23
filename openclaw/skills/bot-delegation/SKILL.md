@@ -111,24 +111,19 @@ If `task create` exits non-zero with "already exists": regenerate the task ID.
 If it fails with a network/permissions error: log the failure in `memory/active-delegations.md` (field:
 `ledger_write_failed: <reason>`) and retry on the next heartbeat.
 
-**Amending task metadata after delegation:**
-If the scope changes after a task is delegated (worker pushback, PM clarification, reassignment),
-use `fleetmind task update` instead of abandoning and recreating. Update history is preserved.
+**Amending task metadata after delegation:** if scope changes post-delegation
+(worker pushback, PM clarification, reassignment), use `fleetmind task update`
+instead of abandoning and recreating - update history is preserved.
 
 ```bash
-# Narrow the DoD after worker review
 fleetmind task update --task-id <hex> --dod "..." --reason "scope cut after worker review"
-
-# Reassign to a specialist
-fleetmind task update --task-id <hex> --worker <new-worker-id> --reason "specialist now available"
-
-# Fix a wrong thread URL
-fleetmind task update --task-id <hex> --thread "https://slack.com/archives/..."
 ```
 
-Immutable fields (rejected by `task update`): `task_id`, `status`, `created_at`, `created_by`,
-and all transition timestamps (`accepted_at`, `shipped_at`, etc.). Terminal tasks (`merged`,
-`abandoned`) are frozen - update will exit 2 with `TaskConditionError`.
+Also accepts `--worker` (reassign) and `--thread` (fix a wrong URL); always pass
+`--reason`. Immutable fields (rejected by `task update`): `task_id`, `status`,
+`created_at`, `created_by`, and all transition timestamps (`accepted_at`,
+`shipped_at`, etc.). Terminal tasks (`merged`, `abandoned`) are frozen - update
+will exit 2 with `TaskConditionError`.
 
 **Picking the project slug:**
 - A project is a durable initiative, not a single task. "website-rewrite" is a
@@ -395,30 +390,13 @@ blocked-handlers, or any future variant.*
 > recurred multiple times across real delegations; the `NO_REPLY` discipline and
 > literal templates exist specifically to prevent it.
 
-Concretely, every sub-agent `task` block in this skill must contain a section
-like:
-
-```
-## Output discipline (READ THIS LAST, OBEY IT FIRST)
-
-- Your ONLY permitted Slack writes are those explicitly named in this brief
-  (e.g., one threaded reply in the planning thread). List them here with
-  target + replyTo.
-- ZERO top-level posts in any channel. ZERO additional planning-thread posts.
-  ZERO DMs.
-- Report-back to the parent goes via this sub-agent's *tool return value* (the
-  text emitted on the assistant turn immediately before `NO_REPLY`). The parent
-  reads that text directly; do NOT mirror it to a Slack channel.
-- Final assistant turn must be exactly the literal token `NO_REPLY` (9 chars,
-  no quotes, no trailing punctuation).
-```
-
-*Authoring checklist when adding a sub-agent spawn block to this skill:*
-1. The `task` field includes the Output discipline block (or verbatim reference to § 7a).
-2. The discipline block is the last substantive section in the prompt, so it cannot be missed.
-3. The single allowed Slack write(s) are enumerated explicitly with target + replyTo.
-4. The `NO_REPLY` final-turn requirement is stated.
-5. The task brief says: "Your report-back goes in the tool return value, NOT as a Slack post."
+Every sub-agent `task` block in this skill must contain an `## Output
+discipline (READ THIS LAST, OBEY IT FIRST)` section embedding this rule
+verbatim, naming its one allowed Slack write with target + replyTo, and
+ending with the literal `NO_REPLY` requirement - see the fenced blocks in
+[references/sub-agent-task-templates.md](references/sub-agent-task-templates.md)
+for the exact wording to copy. When adding a new variant there, follow its
+§ Maintenance checklist.
 
 ## Signoff Watchdog (heartbeat-driven)
 
@@ -560,53 +538,28 @@ Load these only when the task you're handling needs them:
   sub-agent (close-the-loop, In-Review, signoff, blocked). Each template embeds
   the § 7a hard rule verbatim. **Always copy from here; never compose ad-hoc.**
 
+- *[references/inbound-self-start.md](references/inbound-self-start.md)* -
+  full step-by-step handler for worker self-start notices (§ Inbound Self-Start
+  Notices below only has the summary + pointer).
+
+- *[references/CHANGELOG.md](references/CHANGELOG.md)* - full version history
+  for this skill.
+
 ## Inbound Self-Start Notices (from worker bots)
 
-Workers running `worker-self-start` may self-start when a human directly asks them to pick up a discrete piece of work, then post a self-start notice in this planning channel. No specific tracker is required.
+Workers running `worker-self-start` may self-start when a human directly asks
+them to pick up a discrete piece of work, then post a self-start notice
+(containing `"— self-start notice"`, a `Task ID:`, and a `Tracker:` field -
+`"none"` is valid) in this planning channel. No NATS delegation event is
+published for these - the worker is already running.
 
-> NATS model: no separate delegation channel. Self-start notices arrive as Slack messages here.
-
-**Recognising a self-start notice:** Slack message from a worker bot containing `"— self-start notice"` with a `Task ID:` and `Tracker:` field.
-(The `Tracker:` field may be `"none"` if no ticket was referenced — this is valid.)
-
-**Handler — run inline (no sub-agent needed):**
-
-1. **Verify the request is legitimate.** Confirm the notice came from a known worker bot and the summary describes a plausible discrete task.
-   - If the notice looks automated, spoofed, or incoherent: reply in thread: `This self-start notice doesn't look like a direct human-initiated request. Cannot register.` Take no further action.
-   - If a tracker URL is present: verify it is reachable and describes the stated work. A missing or unreachable tracker URL alone is NOT grounds to reject — tracker is optional.
-2. **React `:white_check_mark:`** to the notice message.
-3. **Resolve the project slug** from the notice summary (and tracker issue if provided) before any DDB operation. If the project cannot be determined: do NOT guess. Reply:
-   ```
-   @<worker> — I can't determine the project slug from this notice.
-   Can you confirm which project this belongs to? (e.g. `ca-core`, `ca-infra`)
-   ```
-   Wait for clarification before proceeding.
-4. **Check DDB:**
-   ```bash
-   fleetmind task get --task-id <8-char-hex> --json
-   ```
-   - **Row exists** → worker created it correctly (SF-2-compliant path). Skip to step 5.
-   - **Row MISSING** → recovery: create on behalf of the worker with `attribute_not_exists(PK)` (idempotent — first write wins if worker races this):
-     ```bash
-     fleetmind task create \
-       --project <resolved project slug>                   \
-       --worker  <notifying-worker-id>                     \
-       --delegated-by <notifying-worker-id>                \
-       --dod "<from notice summary>"                       \
-       --thread "<notice message Slack permalink>"         \
-       --tracker "<tracker URL from notice, if present>"   \
-       --lifecycle requires-human-signoff                  \
-       --task-id <8-char-hex from notice>                  \
-       --json
-
-     fleetmind task ack \
-       --task-id <8-char-hex from notice>      \
-       --worker  <notifying-worker-id>         \
-       --project <resolved project slug>
-     ```
-     `ConditionalCheckFailedException` = worker's row exists — treat as "Row exists".
-5. **Do NOT** post a NATS delegation event. Worker is already running; doing so triggers a duplicate ack and lifecycle transition.
-6. **Add to `memory/active-delegations.md`** under `## Active` — same format as PM-delegated, marked `[self-start]`. Enters normal signoff-watchdog lifecycle. Human sign-off required before `signed_off` (PR #236 conditional write; IAM gap tracked in #237).
+Run the handler inline (no sub-agent): verify legitimacy, react
+`:white_check_mark:`, resolve the project slug (ask rather than guess),
+check/recover the DDB row idempotently, then log it in
+`memory/active-delegations.md` marked `[self-start]`. Full step-by-step in
+[references/inbound-self-start.md](references/inbound-self-start.md) - this is
+a rare path; do not deduplicate it against `worker-self-start`'s own copy
+(independent skill resolution makes that unsafe).
 
 ---
 
@@ -626,61 +579,6 @@ Workers running `worker-self-start` may self-start when a human directly asks th
 
 ## Changelog
 
-- **1.5.0 (2026-07-15)** - Close-the-loop routing by task origin (#ea73f9e4):
-  - § 7 Step 3: close-the-loop summaries now route based on `delegation_thread`
-    presence in DDB. Thread-originated tasks (non-empty `delegation_thread`)
-    keep the existing threaded-reply behavior. Follow-on operational tasks
-    (empty `delegation_thread`) now post top-level in the planning channel so
-    the update surfaces in the channel feed without requiring thread navigation.
-  - references/sub-agent-task-templates.md Template (a): Output discipline and
-    Step 6 updated with conditional routing logic matching § 7 Step 3.
-- **1.4.0 (2026-07-09)** - Tracker-agnostic self-start trigger (#241):
-  - § Inbound Self-Start Notices: "Linear-assigned tasks" replaced with
-    "human directly asks the worker to pick up a discrete piece of work".
-  - Recognition pattern: `Linear:` field renamed to `Tracker:` (optional;
-    may be `"none"`).
-  - Handler step 1: "Verify Linear assignment via linear-fleet" replaced with
-    "Verify the request is legitimate" — confirms notice came from a known
-    worker and describes plausible work; tracker URL checked if present but
-    not mandatory.
-  - Handler step 3: project-slug inference now uses notice summary + optional
-    tracker issue instead of Linear issue labels.
-  - Recovery `task create`: `--dod` now derived from notice summary (not
-    "Linear issue title"); `--tracker` now marked as optional.
-- **1.3.0 (2026-07-09)** - Worker Self-Start Protocol integration (CON-91,
-  re-authored from PR #169 onto NATS transport):
-  - New § Inbound Self-Start Notices: handler for when worker bots post a
-    `"— self-start notice"` message in the planning channel. Covers
-    `:white_check_mark:` reaction, project-slug inference (with ambiguity
-    guard), DDB row check / idempotent recovery via `attribute_not_exists(PK)`,
-    and the explicit "do NOT send a delegation event" rule (SF-2-aware ordering).
-  - Updated Hard limits: self-start notices in the planning channel are now
-    a recognised in-protocol trigger.
-  - NATS-model clarification: no "delegation channel"; self-start notices
-    arrive in the planning channel.
-  - Human-signoff enforcement prose: describes ledger conditional-write
-    (PR #236); notes IAM gap tracked in #237; does not close #237.
-- **1.2.1 (2026-05-27)** - Documentation fix: Step 4 minimum fields now
-  correctly reference `Source planning channel` + `Source planning thread`
-  instead of removed `thread` field. Aligns with active-delegations-format
-  schema.
-- **1.2.0 (2026-05-21)** - Rewrite for NATS-only transport (CON-115):
-  - New § Session boot - PM subscriber startup: start `fleetmind nats
-    subscribe --mode pm` before handling any work. This is the replacement
-    for sweep cron jobs - workers push events, PM bot reacts.
-  - `fleetmind task create` now includes `--description`, `--requestor`,
-    and `--tracker` flags. Removed `--envelope-ts` (no envelope). The command
-    auto-publishes the NATS delegation event - no separate publish step.
-  - § 3 "Post the delegation envelope" replaced with § 3 "Delegation is sent
-    via NATS". No Slack envelope is posted in the worker's channel.
-  - § 5 table updated: `:eyes:` reaction and threaded reply signals replaced
-    with NATS `ack`/`progress`/`ship`/`block` events from the subscriber.
-    `DDB_TERMINAL_WAKE` retained as a fallback path.
-  - `references/envelope-template.md` removed from reference files (no
-    envelope format to maintain).
-  - `bot-delegation-nats` and `bot-reception-nats` standalone skills removed;
-    NATS transport is now the only transport in these core skills.
-- **1.1.0 (2026-05-11)** - DDB-first idempotency, reopen-on-reship, signoff
-  watchdog, reconciliation, § 7 completion checklist, NO_REPLY sub-agent
-  discipline, canonical sub-agent task templates.
-- **1.0.0** - Initial release.
+Full version history moved to
+[references/CHANGELOG.md](references/CHANGELOG.md). Latest: **1.5.0
+(2026-07-15)** - close-the-loop routing by task origin (#ea73f9e4).
