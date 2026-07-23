@@ -98,11 +98,65 @@ function applyPlaceholders(text: string, agent: AgentConfig, fleet?: Fleet): str
  */
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
+/**
+ * Shared workspace template dir (relative to the package root). Holds files
+ * that are byte-identical across every bot type (HEARTBEAT.md, MEMORY.md,
+ * TOOLS.md) so there is exactly one copy to edit instead of one per role.
+ * Role-specific dirs (openclaw/<bot-type>/workspace/) still take priority —
+ * this is only a fallback when the role dir doesn't ship the file itself.
+ */
+const SHARED_WORKSPACE_TEMPLATE_DIR = "openclaw/_shared/workspace";
+
+/**
+ * Dir holding AGENTS.md sub-section partials that are byte-identical across
+ * multiple roles but can't use the whole-file shared-template fallback above
+ * (each role's AGENTS.md differs everywhere else — What You Do, Skills First,
+ * Hard Limits, etc.). A role's AGENTS.md opts a section in with a
+ * `<!-- SHARED-INCLUDE: <filename> -->` marker on its own line;
+ * resolveSharedIncludes swaps it for the partial's contents so there is one
+ * copy to edit (e.g. the `gh-app-token` Host Tools block, identical across
+ * every bot type) instead of one per bot-type dir.
+ */
+const SHARED_AGENTS_PARTIALS_DIR = "openclaw/_shared/workspace/agents-partials";
+
+const SHARED_INCLUDE_RE = /^<!-- SHARED-INCLUDE: ([\w.-]+) -->\s*$/m;
+
+/**
+ * Replace every `<!-- SHARED-INCLUDE: <filename> -->` marker line in `text`
+ * with the contents of that file under SHARED_AGENTS_PARTIALS_DIR. Throws if
+ * a marker references a partial that doesn't exist, so a typo'd filename
+ * fails loudly at provision time instead of silently shipping a bare marker
+ * line to a bot's workspace.
+ */
+export function resolveSharedIncludes(text: string): string {
+  let result = text;
+  let match: RegExpMatchArray | null;
+  // Loop (rather than a single global replace) so each marker occurrence is
+  // validated independently; SHARED_INCLUDE_RE has no "g" flag so re-running
+  // match() after each replace re-scans from the start of the (shrinking) string.
+  while ((match = result.match(SHARED_INCLUDE_RE)) !== null) {
+    const [marker, filename] = match;
+    const partialPath = path.resolve(PACKAGE_ROOT, SHARED_AGENTS_PARTIALS_DIR, filename!);
+    if (!fs.existsSync(partialPath)) {
+      throw new Error(
+        `AGENTS.md references shared partial "${filename}" which does not exist at ${partialPath}`
+      );
+    }
+    const partial = fs.readFileSync(partialPath, "utf8").replace(/\n+$/, "");
+    result = result.replace(marker, partial);
+  }
+  return result;
+}
+
 function readRoleTemplate(role: string, filename: string): string | null {
   const dir = workspaceTemplatePath(role) ?? workspaceTemplatePath("worker")!;
   const filePath = path.resolve(PACKAGE_ROOT, dir, filename);
-  if (!fs.existsSync(filePath)) return null;
-  return fs.readFileSync(filePath, "utf8");
+  if (fs.existsSync(filePath)) return fs.readFileSync(filePath, "utf8");
+
+  const sharedPath = path.resolve(PACKAGE_ROOT, SHARED_WORKSPACE_TEMPLATE_DIR, filename);
+  if (fs.existsSync(sharedPath)) return fs.readFileSync(sharedPath, "utf8");
+
+  return null;
 }
 
 // =============================================================================
@@ -165,7 +219,7 @@ export async function provisionAgent(
 
   const agentsTemplate = readRoleTemplate(role, "AGENTS.md");
   const agentsContent = agentsTemplate !== null
-    ? applyPlaceholders(agentsTemplate, agent, fleet)
+    ? applyPlaceholders(resolveSharedIncludes(agentsTemplate), agent, fleet)
     : agentsMd(agent);
   writeFile(path.join(workspace, "AGENTS.md"), agentsContent, dryRun);
 
@@ -177,7 +231,9 @@ export async function provisionAgent(
 
   // HEARTBEAT.md — operator-scaffolded, bots add task sections. Always ship
   // so pull-self's section merge can update the AUTO-tagged operator sections
-  // while preserving bot-added task sections.
+  // while preserving bot-added task sections. Content is identical across every
+  // role, so it lives once in SHARED_WORKSPACE_TEMPLATE_DIR and is picked up via
+  // readRoleTemplate's fallback rather than duplicated per bot-type dir.
   const heartbeatTemplate = readRoleTemplate(role, "HEARTBEAT.md");
   if (heartbeatTemplate !== null) {
     writeFile(path.join(workspace, "HEARTBEAT.md"), heartbeatTemplate, dryRun);
@@ -185,7 +241,8 @@ export async function provisionAgent(
 
   // MEMORY.md — shipped on every push so the section merge can update
   // AUTO-tagged operator sections (e.g. Active Tasks) while preserving
-  // everything the bot has written in untagged sections.
+  // everything the bot has written in untagged sections. Same shared-file
+  // treatment as HEARTBEAT.md above.
   const memoryTemplate = readRoleTemplate(role, "MEMORY.md");
   if (memoryTemplate !== null) {
     writeFile(path.join(workspace, "MEMORY.md"), memoryTemplate, dryRun);
@@ -193,6 +250,10 @@ export async function provisionAgent(
 
   // TOOLS.md — only create if missing. pull-self protects this file from
   // being overwritten on existing agents, so this seeds it once for new agents.
+  // Sourced from SHARED_WORKSPACE_TEMPLATE_DIR for every role (pm-bot and
+  // backend-worker-bot previously shipped no TOOLS.md template at all, even
+  // though every role's AGENTS.md boot sequence instructs the agent to read
+  // TOOLS.md — the shared fallback closes that drift for all four bot types).
   const toolsMdTemplate = readRoleTemplate(role, "TOOLS.md");
   const toolsMdPath = path.join(workspace, "TOOLS.md");
   if (toolsMdTemplate !== null && !fs.existsSync(toolsMdPath)) {

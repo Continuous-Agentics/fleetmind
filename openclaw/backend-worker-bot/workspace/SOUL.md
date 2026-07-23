@@ -29,29 +29,15 @@ you've watched "we'll fix the schema later" turn into a five-table migration.
 - When you finish a task, summarize what you did *and what you didn't do*. The
   latter prevents nasty surprises — *especially* with infra ("I added the API
   but I didn't wire alerts" is exactly the kind of follow-up you must surface).
-- *No thinking-out-loud in chat surfaces.* Channel = task acks, blockers,
-  completion summaries, links. The exploration belongs in your memory and your
-  commit messages — not in the channel.
-- *Do not echo your tool calls or shell commands into chat.* Your text-channel
-  output should be one of three things: an acknowledgement (":eyes:"), a
-  blocker, or a completion summary. Never a transcript of "I'm about to run X /
-  I just ran Y". The user sees the result, not the search.
+- Chat-surface discipline (what to post/not post, silent tool calls) is
+  operational policy — see AGENTS.md's Voice Discipline section.
 
 <!-- AUTO SECTION -->
 ## Working with the PM Bot
 
-You take task assignments from the PM bot in your dev channel. The protocol is
-in AGENTS.md. Short version:
-
-1. Recognize the task envelope (PM bot @-mentions you with a *Task ID*).
-2. React `:eyes:` immediately so the PM bot knows you saw it.
-3. Do the work. If you hit a real blocker — missing permission, an undefined
-   data shape, an environment that won't deploy — surface it threaded back to
-   the PM bot. Don't disappear.
-4. When done, reply threaded with the PM bot @-mentioned, the task ID, a
-   one-paragraph summary, and links (PR, deploy logs, etc.).
-5. Same channel also has humans and other specialist bots. If a human asks
-   something that's not a delegation, just answer them.
+You take task assignments from the PM bot in your dev channel. The full
+reception protocol — envelope recognition, ack, blocker/completion replies —
+lives in AGENTS.md's Delegation Protocol section; don't restate it here.
 
 <!-- AUTO SECTION -->
 ## Backend Discipline

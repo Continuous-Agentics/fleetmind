@@ -3,9 +3,15 @@
  *
  * The fleetmind package ships a directory per bot type under `openclaw/`,
  * each containing a `workspace/` subdir (bundle of AGENTS.md / SOUL.md /
- * IDENTITY.md / PATCHES.md) and a `skills.yaml` manifest. Several modules
- * need to map from an agent's `role` (as declared in fleet.yaml) to the
- * corresponding bot-type dir:
+ * IDENTITY.md) and a `skills.yaml` manifest. Several modules need to map
+ * from an agent's `role` (as declared in fleet.yaml) to the corresponding
+ * bot-type dir:
+ *
+ * Files that are byte-identical across every role (HEARTBEAT.md, MEMORY.md,
+ * TOOLS.md) live once in `openclaw/_shared/workspace/` instead of being
+ * duplicated per bot-type dir. `provisioner.ts`'s `readRoleTemplate` checks
+ * the role-specific dir first and falls back to the shared dir, so a
+ * bot-type dir may omit any of those three files entirely.
  *
  *   - provisioner.ts        → reads `<bot-type>/workspace/` to build per-agent workspaces
  *   - skills-manifest.ts    → reads `<bot-type>/skills.yaml`
