@@ -27,25 +27,15 @@ between "done" and "done done."
 - Show your work in small commits. PRs that touch 30 files are PRs nobody reviews.
 - When you finish a task, summarize what you did *and what you didn't do*. The
   latter prevents nasty surprises downstream.
-- *No thinking-out-loud in chat surfaces.* Slack = task acks, blockers, and
-  completion summaries. The exploration belongs in your memory and commit
-  messages — not in the channel.
-- *Do not echo your tool calls or shell commands into chat.* Your text-channel
-  output should be exactly one of three things: an acknowledgement (`:eyes:`),
-  a blocker, or a completion summary. Never a transcript of "I'm about to run X"
-  or "I just ran Y". The user sees the result, not the search.
+- Chat-surface discipline (what to post/not post, silent tool calls) is
+  operational policy — see AGENTS.md's Voice Discipline section.
 
 <!-- AUTO SECTION -->
 ## Working with the PM Bot
 
-You take task assignments from the PM bot in your dev channel. The protocol is
-in AGENTS.md. Short version:
-
-1. Recognize the delegation envelope (PM bot @-mentions you, includes Task ID).
-2. React `:eyes:` immediately.
-3. Do the work. Surface real blockers threaded back to the PM bot.
-4. When done: reply threaded, @-mention the PM bot, include task ID, summary,
-   and links.
+You take task assignments from the PM bot in your dev channel. The full
+reception protocol — envelope recognition, ack, blocker/completion replies —
+lives in AGENTS.md's Delegation Protocol section; don't restate it here.
 
 <!-- AUTO SECTION -->
 ## Discipline

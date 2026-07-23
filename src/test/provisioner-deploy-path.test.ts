@@ -928,6 +928,55 @@ describe("role-template rendering", () => {
       "fallback IDENTITY.md must include 'Specialist' from the inline identityMd() stub"
     );
   });
+
+  // ── Shared workspace template fallback (HEARTBEAT.md / MEMORY.md / TOOLS.md) ──
+
+  test("provisionAgent seeds TOOLS.md for pm and backend-worker roles via the shared template fallback", async () => {
+    // Regression test for the documented drift: pm-bot/workspace/ and
+    // backend-worker-bot/workspace/ ship no role-specific TOOLS.md, yet every
+    // role's AGENTS.md Session Boot step instructs the agent to read TOOLS.md.
+    // readRoleTemplate now falls back to openclaw/_shared/workspace/TOOLS.md
+    // for any role dir that doesn't ship its own copy.
+    for (const { agent, id } of [
+      { agent: makeConductorAgent(), id: "conductor" }, // role: pm
+      { agent: makeForgeAgent(), id: "forge" }, // role: backend-worker
+    ]) {
+      const fleet = makeFleet();
+      await provisionAgent(fleet, agent, false, tmpDir);
+
+      const toolsPath = path.join(tmpDir, "rendered", "workspaces", id, "TOOLS.md");
+      assert.ok(fs.existsSync(toolsPath), `${id}: TOOLS.md must be seeded (was previously missing)`);
+
+      const content = fs.readFileSync(toolsPath, "utf8");
+      assert.ok(
+        content.includes("Environment Notes"),
+        `${id}: TOOLS.md content should come from the shared template`
+      );
+      // Placeholders must be substituted, not left dangling.
+      assert.ok(!content.includes("{{"), `${id}: TOOLS.md must not contain unsubstituted placeholders`);
+    }
+  });
+
+  test("HEARTBEAT.md and MEMORY.md are identical for every bundled role via the shared template", async () => {
+    const roles: Array<{ agent: AgentConfig; id: string }> = [
+      { agent: makeConductorAgent(), id: "conductor" }, // pm
+      { agent: makeForgeAgent(), id: "forge" }, // backend-worker
+    ];
+
+    const results: Record<string, { heartbeat: string; memory: string }> = {};
+    for (const { agent, id } of roles) {
+      const fleet = makeFleet();
+      const ws = path.join(tmpDir, id);
+      await provisionAgent(fleet, agent, false, ws);
+      results[id] = {
+        heartbeat: fs.readFileSync(path.join(ws, "rendered", "workspaces", id, "HEARTBEAT.md"), "utf8"),
+        memory: fs.readFileSync(path.join(ws, "rendered", "workspaces", id, "MEMORY.md"), "utf8"),
+      };
+    }
+
+    assert.equal(results.conductor!.heartbeat, results.forge!.heartbeat);
+    assert.equal(results.conductor!.memory, results.forge!.memory);
+  });
 });
 
 // =============================================================================

@@ -98,11 +98,24 @@ function applyPlaceholders(text: string, agent: AgentConfig, fleet?: Fleet): str
  */
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
+/**
+ * Shared workspace template dir (relative to the package root). Holds files
+ * that are byte-identical across every bot type (HEARTBEAT.md, MEMORY.md,
+ * TOOLS.md) so there is exactly one copy to edit instead of one per role.
+ * Role-specific dirs (openclaw/<bot-type>/workspace/) still take priority —
+ * this is only a fallback when the role dir doesn't ship the file itself.
+ */
+const SHARED_WORKSPACE_TEMPLATE_DIR = "openclaw/_shared/workspace";
+
 function readRoleTemplate(role: string, filename: string): string | null {
   const dir = workspaceTemplatePath(role) ?? workspaceTemplatePath("worker")!;
   const filePath = path.resolve(PACKAGE_ROOT, dir, filename);
-  if (!fs.existsSync(filePath)) return null;
-  return fs.readFileSync(filePath, "utf8");
+  if (fs.existsSync(filePath)) return fs.readFileSync(filePath, "utf8");
+
+  const sharedPath = path.resolve(PACKAGE_ROOT, SHARED_WORKSPACE_TEMPLATE_DIR, filename);
+  if (fs.existsSync(sharedPath)) return fs.readFileSync(sharedPath, "utf8");
+
+  return null;
 }
 
 // =============================================================================
@@ -177,7 +190,9 @@ export async function provisionAgent(
 
   // HEARTBEAT.md — operator-scaffolded, bots add task sections. Always ship
   // so pull-self's section merge can update the AUTO-tagged operator sections
-  // while preserving bot-added task sections.
+  // while preserving bot-added task sections. Content is identical across every
+  // role, so it lives once in SHARED_WORKSPACE_TEMPLATE_DIR and is picked up via
+  // readRoleTemplate's fallback rather than duplicated per bot-type dir.
   const heartbeatTemplate = readRoleTemplate(role, "HEARTBEAT.md");
   if (heartbeatTemplate !== null) {
     writeFile(path.join(workspace, "HEARTBEAT.md"), heartbeatTemplate, dryRun);
@@ -185,7 +200,8 @@ export async function provisionAgent(
 
   // MEMORY.md — shipped on every push so the section merge can update
   // AUTO-tagged operator sections (e.g. Active Tasks) while preserving
-  // everything the bot has written in untagged sections.
+  // everything the bot has written in untagged sections. Same shared-file
+  // treatment as HEARTBEAT.md above.
   const memoryTemplate = readRoleTemplate(role, "MEMORY.md");
   if (memoryTemplate !== null) {
     writeFile(path.join(workspace, "MEMORY.md"), memoryTemplate, dryRun);
@@ -193,6 +209,10 @@ export async function provisionAgent(
 
   // TOOLS.md — only create if missing. pull-self protects this file from
   // being overwritten on existing agents, so this seeds it once for new agents.
+  // Sourced from SHARED_WORKSPACE_TEMPLATE_DIR for every role (pm-bot and
+  // backend-worker-bot previously shipped no TOOLS.md template at all, even
+  // though every role's AGENTS.md boot sequence instructs the agent to read
+  // TOOLS.md — the shared fallback closes that drift for all four bot types).
   const toolsMdTemplate = readRoleTemplate(role, "TOOLS.md");
   const toolsMdPath = path.join(workspace, "TOOLS.md");
   if (toolsMdTemplate !== null && !fs.existsSync(toolsMdPath)) {
