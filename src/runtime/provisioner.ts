@@ -107,6 +107,47 @@ const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
  */
 const SHARED_WORKSPACE_TEMPLATE_DIR = "openclaw/_shared/workspace";
 
+/**
+ * Dir holding AGENTS.md sub-section partials that are byte-identical across
+ * multiple roles but can't use the whole-file shared-template fallback above
+ * (each role's AGENTS.md differs everywhere else — What You Do, Skills First,
+ * Hard Limits, etc.). A role's AGENTS.md opts a section in with a
+ * `<!-- SHARED-INCLUDE: <filename> -->` marker on its own line;
+ * resolveSharedIncludes swaps it for the partial's contents so there is one
+ * copy to edit (e.g. the `gh-app-token` Host Tools block, identical across
+ * every bot type) instead of one per bot-type dir.
+ */
+const SHARED_AGENTS_PARTIALS_DIR = "openclaw/_shared/workspace/agents-partials";
+
+const SHARED_INCLUDE_RE = /^<!-- SHARED-INCLUDE: ([\w.-]+) -->\s*$/m;
+
+/**
+ * Replace every `<!-- SHARED-INCLUDE: <filename> -->` marker line in `text`
+ * with the contents of that file under SHARED_AGENTS_PARTIALS_DIR. Throws if
+ * a marker references a partial that doesn't exist, so a typo'd filename
+ * fails loudly at provision time instead of silently shipping a bare marker
+ * line to a bot's workspace.
+ */
+export function resolveSharedIncludes(text: string): string {
+  let result = text;
+  let match: RegExpMatchArray | null;
+  // Loop (rather than a single global replace) so each marker occurrence is
+  // validated independently; SHARED_INCLUDE_RE has no "g" flag so re-running
+  // match() after each replace re-scans from the start of the (shrinking) string.
+  while ((match = result.match(SHARED_INCLUDE_RE)) !== null) {
+    const [marker, filename] = match;
+    const partialPath = path.resolve(PACKAGE_ROOT, SHARED_AGENTS_PARTIALS_DIR, filename!);
+    if (!fs.existsSync(partialPath)) {
+      throw new Error(
+        `AGENTS.md references shared partial "${filename}" which does not exist at ${partialPath}`
+      );
+    }
+    const partial = fs.readFileSync(partialPath, "utf8").replace(/\n+$/, "");
+    result = result.replace(marker, partial);
+  }
+  return result;
+}
+
 function readRoleTemplate(role: string, filename: string): string | null {
   const dir = workspaceTemplatePath(role) ?? workspaceTemplatePath("worker")!;
   const filePath = path.resolve(PACKAGE_ROOT, dir, filename);
@@ -178,7 +219,7 @@ export async function provisionAgent(
 
   const agentsTemplate = readRoleTemplate(role, "AGENTS.md");
   const agentsContent = agentsTemplate !== null
-    ? applyPlaceholders(agentsTemplate, agent, fleet)
+    ? applyPlaceholders(resolveSharedIncludes(agentsTemplate), agent, fleet)
     : agentsMd(agent);
   writeFile(path.join(workspace, "AGENTS.md"), agentsContent, dryRun);
 

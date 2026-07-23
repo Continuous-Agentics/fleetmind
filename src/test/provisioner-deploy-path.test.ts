@@ -26,7 +26,12 @@ import os from "node:os";
 import path from "node:path";
 import { test, describe, beforeEach, afterEach } from "node:test";
 
-import { provisionAgent, provisionFleet, buildFleetRoster } from "../runtime/provisioner.js";
+import {
+  provisionAgent,
+  provisionFleet,
+  buildFleetRoster,
+  resolveSharedIncludes,
+} from "../runtime/provisioner.js";
 import { renderOpenClawJson, renderAgentOpenClawJson, writeOutputs } from "../runtime/renderer.js";
 import type { Fleet, AgentConfig } from "../config/schema.js";
 
@@ -976,6 +981,94 @@ describe("role-template rendering", () => {
 
     assert.equal(results.conductor!.heartbeat, results.forge!.heartbeat);
     assert.equal(results.conductor!.memory, results.forge!.memory);
+  });
+
+  // ── Shared AGENTS.md sub-section partials (SHARED-INCLUDE) ──────────────────
+
+  test("resolveSharedIncludes swaps a SHARED-INCLUDE marker for the referenced partial's content", () => {
+    const rendered = resolveSharedIncludes(
+      "## Host Tools\n\n<!-- SHARED-INCLUDE: host-tools.md -->\n\n<!-- AUTO SECTION -->\n## Next Section\n"
+    );
+
+    assert.ok(!rendered.includes("SHARED-INCLUDE"), "marker line must be fully replaced");
+    assert.ok(rendered.includes("gh-app-token"), "partial content must be inlined");
+    assert.ok(rendered.includes("## Next Section"), "content after the marker must be preserved");
+  });
+
+  test("resolveSharedIncludes throws when the referenced partial doesn't exist", () => {
+    assert.throws(
+      () => resolveSharedIncludes("<!-- SHARED-INCLUDE: does-not-exist.md -->"),
+      /does not exist/,
+      "a typo'd shared partial filename must fail loudly, not ship a bare marker line"
+    );
+  });
+
+  test("text with no SHARED-INCLUDE marker passes through unchanged", () => {
+    const text = "## Host Tools\n\nplain content, no markers here.\n";
+    assert.equal(resolveSharedIncludes(text), text);
+  });
+
+  test("every bundled role's rendered AGENTS.md Host Tools section shares one gh-app-token source (no per-role duplication)", async () => {
+    const roles: Array<{ agent: AgentConfig; id: string }> = [
+      { agent: makeConductorAgent(), id: "conductor" }, // pm
+      { agent: makeForgeAgent(), id: "forge" }, // backend-worker
+      {
+        agent: {
+          id: "pixel",
+          name: "Pixel",
+          emoji: "🎨",
+          description: "frontend specialist",
+          orchestrator: false,
+          role: "frontend-worker",
+          persona: { soul: "frontend soul" },
+          slack: { account_id: "pixel", bot_token: "xoxb-pixel", app_token: "xapp-pixel" },
+          skills: [],
+          plugins: ["anthropic"],
+          agent_to_agent: { can_send_to: [] },
+        } as unknown as AgentConfig,
+        id: "pixel",
+      },
+      {
+        agent: {
+          id: "genericworker",
+          name: "GenericWorker",
+          emoji: "🤖",
+          description: "generic worker",
+          orchestrator: false,
+          role: "worker",
+          persona: { soul: "generic worker soul" },
+          slack: { account_id: "genericworker", bot_token: "xoxb-generic", app_token: "xapp-generic" },
+          skills: [],
+          plugins: ["anthropic"],
+          agent_to_agent: { can_send_to: [] },
+        } as unknown as AgentConfig,
+        id: "genericworker",
+      },
+    ];
+
+    for (const { agent, id } of roles) {
+      const fleet = makeFleet();
+      await provisionAgent(fleet, agent, false, tmpDir);
+
+      const content = fs.readFileSync(
+        path.join(tmpDir, "rendered", "workspaces", id, "AGENTS.md"),
+        "utf8"
+      );
+
+      assert.ok(!content.includes("SHARED-INCLUDE"), `${id}: AGENTS.md must not leak the include marker`);
+      assert.ok(!content.includes("{{"), `${id}: AGENTS.md must not contain unsubstituted placeholders`);
+
+      const hostToolsCount = content.split("## Host Tools").length - 1;
+      assert.equal(hostToolsCount, 1, `${id}: AGENTS.md must have exactly one Host Tools section`);
+
+      const ghAppTokenCount = content.split("### `gh-app-token`").length - 1;
+      assert.equal(ghAppTokenCount, 1, `${id}: AGENTS.md must have exactly one gh-app-token block (no duplication)`);
+
+      assert.ok(
+        content.includes("ssm:GetParameter"),
+        `${id}: AGENTS.md Host Tools section must retain the SSM IAM-grant troubleshooting note`
+      );
+    }
   });
 });
 
