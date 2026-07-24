@@ -11,7 +11,7 @@ The hard rule from SKILL.md § 7a (NO_REPLY-final-turn + at-most-one-threaded-pl
 Placeholders are uppercase angle-bracketed tokens. Fill in every one before spawning.
 
 | Placeholder | Meaning |
-|---|---|
+| --- | --- |
 | `<TASK_ID>` | 8-char hex task id |
 | `<PROJECT_SLUG>` | Project slug from DDB `project` attribute |
 | `<PLANNING_CHANNEL_ID>` | Channel id for the planning/coordination channel |
@@ -29,7 +29,7 @@ Placeholders are uppercase angle-bracketed tokens. Fill in every one before spaw
 
 ## Template (a) — close-the-loop on terminal worker reply
 
-**Trigger:** Worker posts a *ship* terminal in an active delegation thread when `lifecycle: shipped-is-done`, OR a `blocked` terminal at any time, OR a DDB terminal wake fires for a task whose `lifecycle` allows direct close. (For `lifecycle: requires-human-signoff` *ship*, use template **(b)** instead.)
+**Trigger:** Worker posts a _ship_ terminal in an active delegation thread when `lifecycle: shipped-is-done`, OR a `blocked` terminal at any time, OR a DDB terminal wake fires for a task whose `lifecycle` allows direct close. (For `lifecycle: requires-human-signoff` _ship_, use template **(b)** instead.)
 
 ```
 ## Output discipline (READ THIS LAST, OBEY IT FIRST)
@@ -127,7 +127,7 @@ Steps:
 
 ## Template (b) — In-Review handoff on `shipped` + `requires-human-signoff`
 
-**Trigger:** Worker posts a *ship* terminal in a delegation whose `lifecycle: requires-human-signoff`. The delegation does NOT close yet — a human must sign off first. This sub-agent transitions the tracker issue to In Review and posts the artifact-for-review in the planning thread.
+**Trigger:** Worker posts a _ship_ terminal in a delegation whose `lifecycle: requires-human-signoff`. The delegation does NOT close yet — a human must sign off first. This sub-agent transitions the tracker issue to In Review and posts the artifact-for-review in the planning thread.
 
 ```
 ## Output discipline (READ THIS LAST, OBEY IT FIRST)
@@ -261,7 +261,7 @@ Steps:
 
 ## Template (d) — blocked-handler on ⛔ / DDB `blocked`
 
-**Trigger:** Worker posts a *blocked* terminal in an active delegation thread, OR a DDB terminal wake fires for a task whose `status` flipped to `blocked`. Posts the blocker in the planning thread; does NOT close the delegation (a human decides next step).
+**Trigger:** Worker posts a _blocked_ terminal in an active delegation thread, OR a DDB terminal wake fires for a task whose `status` flipped to `blocked`. Posts the blocker in the planning thread; does NOT close the delegation (a human decides next step).
 
 ```
 ## Output discipline (READ THIS LAST, OBEY IT FIRST)
@@ -335,10 +335,8 @@ Steps:
 When adding a new sub-agent variant to the delegation lifecycle:
 
 1. Add a new fenced template here (variant **(e)**, **(f)**, …).
-2. Embed the § 7a rule **verbatim** at the top of the new template's
-   `## Output discipline` block.
-3. Add a one-line pointer in `SKILL.md` from the prose section that describes
-   the new spawn to this file's variant id.
-4. Bump SKILL.md version + add a changelog entry.
+2. Embed the § 7a rule **verbatim** at the top of the new template's `## Output discipline` block.
+3. Add a one-line pointer in `SKILL.md` from the prose section that describes the new spawn to this file's variant id.
+4. Bump SKILL.md's `version` frontmatter field.
 
 Do not delete templates; deprecate them in place with a `> **Deprecated <date>**:` admonition above the fenced block.
