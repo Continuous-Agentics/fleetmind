@@ -1,0 +1,15 @@
+# Terraform state and lock files (consumers regenerate)
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# Operator-local
+backend.hcl
+*.derived.tfvars
+
+# Editor / OS noise
+.DS_Store
+.vscode/
+.idea/
