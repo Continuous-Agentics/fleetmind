@@ -16,7 +16,7 @@ also install OpenClaw, which currently requires Node.js 24 or Node.js 22.19+.
 - **Scaffold fleet configs** with `fleetmind init` and validate them with `fleetmind render --check`.
 - **Render per-agent workspaces** from one declarative `fleet.yaml`.
 - **Bring up local fleets** with `fleetmind up` for single-machine development.
-- **Provision AWS fleets** through [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) and [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind).
+- **Provision AWS fleets** through [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) and the in-repository [Terraform module](docs/terraform/README.md).
 - **Push updates to deployed agents** with signed manifests, S3 staging, SSM Run Command, and `pull-self`.
 - **Manage fleet secrets** across local env files and AWS Secrets Manager.
 - **Generate Slack and GitHub App setup** for one identity per agent.
@@ -65,8 +65,10 @@ fleetmind onboard
 
 The template repo owns the Terraform root, workspace tfvars, and operator docs.
 FleetMind renders the derived tfvars and per-agent workspaces; the Terraform
-module provisions EC2, IAM, SSM, Secrets Manager, S3, DynamoDB, and optional
-NATS infrastructure.
+module at [`infra/terraform/`](infra/terraform/) provisions EC2, IAM, SSM,
+Secrets Manager, S3, DynamoDB, and optional NATS infrastructure. The template
+consumes that path through a pinned FleetMind release tag; see the [Terraform
+module provenance](docs/terraform/PROVENANCE.md) for the migration sequence.
 
 ## Architecture
 
@@ -103,15 +105,14 @@ Fleet-wide shared key/value state is available via the **ContextStore** — a Dy
 
 Isolation over efficiency. A misbehaving worker can't crash the orchestrator; a runaway skill on one bot doesn't starve another; each agent can be redeployed, restarted, or rolled back independently. The cost is more EC2 instances per fleet — deemed acceptable for the durability and blast-radius properties.
 
-Bot EC2 hosts are provisioned by the [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) module. Operators don't write Terraform from scratch — they start from the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) GitHub template repo, which contains a `main.tf` that calls the module, plus `variables.tf`, `outputs.tf`, `backend.example.hcl`, and a `workspaces/default.tfvars` starter. `fleetmind render` writes the derived tfvars (`workspaces/<fleet>.derived.tfvars`) inside that repo, and `terraform apply -var-file=workspaces/<fleet>.tfvars -var-file=workspaces/<fleet>.derived.tfvars` provisions the fleet. See [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) for the tested CLI/module matrix, and see the [`fleetmind-template` docs](https://github.com/Continuous-Agentics/fleetmind-template/tree/main/docs) for the full workflow.
+Bot EC2 hosts are provisioned by the FleetMind [Terraform module](docs/terraform/README.md). Operators don't write Terraform from scratch — they start from the [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) GitHub template repo, which contains a `main.tf` that calls the module, plus `variables.tf`, `outputs.tf`, `backend.example.hcl`, and a `workspaces/default.tfvars` starter. `fleetmind render` writes the derived tfvars (`workspaces/<fleet>.derived.tfvars`) inside that repo, and `terraform apply -var-file=workspaces/<fleet>.tfvars -var-file=workspaces/<fleet>.derived.tfvars` provisions the fleet. See [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) for the tested CLI/module matrix, and see the [`fleetmind-template` docs](https://github.com/Continuous-Agentics/fleetmind-template/tree/main/docs) for the full workflow.
 
 ## Documentation Map
 
-FleetMind spans three repos:
+FleetMind has one runtime/infrastructure repository plus an operator template:
 
-- [`fleetmind`](https://github.com/Continuous-Agentics/fleetmind) — CLI, renderer, runtime helpers, bundled OpenClaw templates, and delegation protocol
+- [`fleetmind`](https://github.com/Continuous-Agentics/fleetmind) — CLI, renderer, runtime helpers, bundled OpenClaw templates, delegation protocol, and the AWS module at [`infra/terraform/`](infra/terraform/)
 - [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) — operator repo scaffold, Terraform root, workspace tfvars, and bring-up docs
-- [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) — AWS infrastructure module
 
 | Looking for... | Start here |
 |---|---|
@@ -124,13 +125,13 @@ FleetMind spans three repos:
 | Delegation protocol | [`docs/protocol.md`](docs/protocol.md) |
 | Enable PM-to-worker delegation | [`docs/integration/delegation.md`](docs/integration/delegation.md) |
 | Customer AWS access handoff | [`docs/CUSTOMER-ONBOARDING.md`](docs/CUSTOMER-ONBOARDING.md) |
-| Terraform module docs | [`terraform-aws-fleetmind/docs/`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind#docs) |
+| Terraform module docs | [`docs/terraform/`](docs/terraform/README.md) |
 
 ## Compatibility
 
-FleetMind spans three repos. Keep these versions aligned when onboarding or upgrading a fleet:
+Keep the FleetMind CLI, its in-repository Terraform module, and the template source pin aligned when onboarding or upgrading a fleet:
 
-| FleetMind CLI | `terraform-aws-fleetmind` | `fleetmind-template` baseline | Notes |
+| FleetMind CLI | `infra/terraform` module baseline | `fleetmind-template` baseline | Notes |
 |---|---|---|---|
 | `1.0.0` | `v1.1.5` | `main` at or after the v1 docs audit | v1.0 public release baseline: public npm path, MIT license metadata, guided Terraform onboarding, no-delegation deploy-staging IAM fix |
 | `0.10.4` | `v1.1.5` | `main` at or after the v1 docs audit | Public npm smoke-test baseline; npm metadata was published before MIT license metadata landed |
@@ -311,7 +312,7 @@ to list the worker IDs they can delegate to. Worker agents add
 `delegation.specialty: <label>` for routing. Wake-pipeline targeting (SSM
 session key, EC2 tag) is configured at the Terraform layer.
 
-The substrate is provisioned by the [`task-ledger`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/tree/main/modules/task-ledger) submodule inside [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) — it activates automatically when `delegation_enabled = true` in your fleet's tfvars. Add the `bot-delegation` skill to the PM bot and the `bot-reception` skill to each worker (both ship in `openclaw/skills/`). Full walkthrough: [`docs/integration/delegation.md`](docs/integration/delegation.md). Protocol details: [`docs/protocol.md`](docs/protocol.md).
+The substrate is provisioned by the [`task-ledger`](infra/terraform/modules/task-ledger) submodule inside the [FleetMind Terraform module](docs/terraform/README.md) — it activates automatically when `delegation_enabled = true` in your fleet's tfvars. Add the `bot-delegation` skill to the PM bot and the `bot-reception` skill to each worker (both ship in `openclaw/skills/`). Full walkthrough: [`docs/integration/delegation.md`](docs/integration/delegation.md). Protocol details: [`docs/protocol.md`](docs/protocol.md).
 
 ## Skills Repo (GitOps)
 
@@ -341,7 +342,7 @@ Unpinned skills (`- name: coding`) auto-update. Pinned skills (`version: "2.1.0"
 
 ## Terraform Integration
 
-The Terraform module is in a separate repo: [`Continuous-Agentics/terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind). Operators consume it via [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template), whose `main.tf` already calls the module. `fleetmind render` writes derived tfvars (`fleet_name`, `agent_names`, `agent_orchestrators`, `agent_providers`) into the template repo's `workspaces/<fleet>.derived.tfvars`; the operator passes that file + their hand-edited `<fleet>.tfvars` to `terraform apply -var-file=...`. For the full module surface, BYO VPC, troubleshooting, and per-version migration notes, see the [terraform-aws-fleetmind docs](https://github.com/Continuous-Agentics/terraform-aws-fleetmind#docs).
+The canonical Terraform module lives in this repository at [`infra/terraform/`](infra/terraform/), with user-facing documentation under [`docs/terraform/`](docs/terraform/README.md). Operators consume it through [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template), whose `main.tf` will pin the `fleetmind//infra/terraform` source to a FleetMind release tag. `fleetmind render` writes derived tfvars (`fleet_name`, `agent_names`, `agent_orchestrators`, `agent_providers`) into the template repo's `workspaces/<fleet>.derived.tfvars`; the operator passes that file plus their hand-edited `<fleet>.tfvars` to `terraform apply -var-file=...`. The template pin changes only after the first FleetMind release containing the module; see [module provenance](docs/terraform/PROVENANCE.md).
 
 ## CI
 

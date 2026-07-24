@@ -34,3 +34,6 @@ infra/terraform/*.auto.tfvars
 
 # Grace notes
 docs/grace/
+# Generated per-fleet Terraform inputs (passed explicitly with -var-file).
+*.derived.tfvars
+backend.hcl

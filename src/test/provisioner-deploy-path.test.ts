@@ -32,7 +32,12 @@ import {
   buildFleetRoster,
   resolveSharedIncludes,
 } from "../runtime/provisioner.js";
-import { renderOpenClawJson, renderAgentOpenClawJson, writeOutputs } from "../runtime/renderer.js";
+import {
+  renderOpenClawJson,
+  renderAgentOpenClawJson,
+  resolveTerraformRoot,
+  writeOutputs,
+} from "../runtime/renderer.js";
 import type { Fleet, AgentConfig } from "../config/schema.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -766,6 +771,20 @@ describe("writeOutputs — per-agent file layout", () => {
 
     assert.ok("openclaw_json:conductor" in written, "written must have openclaw_json:conductor key");
     assert.ok("openclaw_json:forge" in written, "written must have openclaw_json:forge key");
+  });
+
+  test("uses the canonical infra/terraform root when rendering from a FleetMind checkout", () => {
+    const fleet = makeFleet();
+    const terraformRoot = path.join(tmpDir, "infra", "terraform");
+    fs.mkdirSync(terraformRoot, { recursive: true });
+    fs.writeFileSync(path.join(terraformRoot, "main.tf"), "terraform {}\n", "utf8");
+
+    const written = writeOutputs(fleet, tmpDir);
+    const expected = path.join(terraformRoot, "workspaces", "test-fleet.derived.tfvars");
+
+    assert.equal(resolveTerraformRoot(tmpDir), terraformRoot);
+    assert.equal(written.terraform_vars, expected);
+    assert.ok(fs.existsSync(expected), "render must write tfvars next to the canonical module");
   });
 });
 

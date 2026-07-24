@@ -584,6 +584,24 @@ function terraformCwdForDerivedTfvars(derivedTfvarsAbs: string): string {
     : derivedDir;
 }
 
+/**
+ * Onboard always executes Terraform from the root that owns the rendered
+ * tfvars. For a FleetMind monorepo checkout this is `infra/terraform`; for an
+ * operator fleet created from fleetmind-template it is that fleet repository's
+ * root. Requiring `main.tf` prevents a typo in outputs.terraform_vars from
+ * turning a nearby directory into Terraform's working directory.
+ */
+function requireTerraformRoot(terraformCwd: string, deps: OnboardDeps): void {
+  const mainTf = path.join(terraformCwd, "main.tf");
+  if (!deps.fs.existsSync(mainTf)) {
+    throw new Error(
+      `Missing Terraform root at ${mainTf}.\n` +
+      "Set outputs.terraform_vars inside the Terraform root (FleetMind uses infra/terraform; " +
+      "fleetmind-template fleets use their repository root).",
+    );
+  }
+}
+
 function terraformVarFileArg(terraformCwd: string, fileAbs: string): string {
   const relative = path.relative(terraformCwd, fileAbs);
   return relative && !relative.startsWith("..") && !path.isAbsolute(relative)
@@ -1032,6 +1050,7 @@ export async function runOnboard(
       "derived Terraform variable file",
       deps,
     );
+    requireTerraformRoot(terraformCwd, deps);
     const infraTfvarsPath = requireExistingAbsoluteFile(
       candidateInfraTfvarsPaths(derivedTfvarsAbs, fleetName),
       "Terraform variable file",

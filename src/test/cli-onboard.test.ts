@@ -31,6 +31,7 @@ import {
 
 import { runOnboard, type OnboardDeps } from "../cli/commands/onboard.js";
 import { loadFleet } from "../config/loader.js";
+import { writeOutputs } from "../runtime/renderer.js";
 import type { PushFleetResult } from "../cli/commands/push-fleet.js";
 
 // ── Mock builders ─────────────────────────────────────────────────────────────
@@ -338,6 +339,10 @@ function cleanupTempDir(dir: string): void {
 }
 
 function writeTfvarsFixture(tmpDir: string, fleetName: string): void {
+  // The template's Terraform root owns workspaces/. FleetMind's monorepo uses
+  // the same relationship under infra/terraform, so onboard must always find
+  // a concrete main.tf before it executes Terraform there.
+  fs.writeFileSync(path.join(tmpDir, "main.tf"), "terraform {}\n", "utf-8");
   const workspacesDir = path.join(tmpDir, "workspaces");
   fs.mkdirSync(workspacesDir, { recursive: true });
   fs.writeFileSync(path.join(workspacesDir, `${fleetName}.tfvars`), "# test tfvars\n", "utf-8");
@@ -373,6 +378,7 @@ function makeDeps(
 
 interface MockTerraform {
   runs: string[][];
+  runCwds: string[];
   createdBuckets: string[];
   createdTables: string[];
   configuredBuckets: string[];
@@ -387,12 +393,14 @@ function makeMockTerraform(opts: {
   awsIdentityError?: Error;
 } = {}): MockTerraform {
   const runs: string[][] = [];
+  const runCwds: string[] = [];
   const createdBuckets: string[] = [];
   const createdTables: string[] = [];
   const configuredBuckets: string[] = [];
   const configuredTables: string[] = [];
   return {
     runs,
+    runCwds,
     createdBuckets,
     createdTables,
     configuredBuckets,
@@ -412,8 +420,9 @@ function makeMockTerraform(opts: {
       tableExists: async () => opts.tableExists ?? true,
       configureTable: async (table) => { configuredTables.push(table); },
       createTable: async (table) => { createdTables.push(table); configuredTables.push(table); },
-      run: async (args) => {
+      run: async (args, cwd) => {
         runs.push(args);
+        runCwds.push(cwd);
       },
     },
   };
@@ -737,6 +746,7 @@ outputs:
     fs.writeFileSync(setup.fleetFile, yaml, "utf-8");
     const terraformDir = path.join(setup.tmpDir, "infra", "terraform");
     fs.mkdirSync(terraformDir, { recursive: true });
+    fs.writeFileSync(path.join(terraformDir, "main.tf"), "terraform {}\n", "utf-8");
     fs.writeFileSync(path.join(terraformDir, "fleet.derived.tfvars"), "# derived\n", "utf-8");
     fs.writeFileSync(path.join(terraformDir, "fleet.tfvars"), "# infra\n", "utf-8");
 
@@ -766,6 +776,48 @@ outputs:
       ["plan", "-var-file=fleet.tfvars", "-var-file=fleet.derived.tfvars", "-out=.fleetmind-tf-custom.tfplan"],
     ]);
     assert.ok(fs.existsSync(path.join(terraformDir, "backend.hcl")), "backend.hcl should be written next to Terraform files");
+    assert.deepEqual(tf.runCwds, [terraformDir, terraformDir, terraformDir]);
+  });
+
+  test("renders and runs the default tfvars from the canonical infra/terraform module", async () => {
+    const fleetName = "tf-monorepo";
+    setup = makeTempFleet(makeFleetYaml({ fleetName, githubApp: false }));
+    const terraformDir = path.join(setup.tmpDir, "infra", "terraform");
+    fs.mkdirSync(terraformDir, { recursive: true });
+    fs.writeFileSync(path.join(terraformDir, "main.tf"), "terraform {}\n", "utf-8");
+    writeOutputs(loadFleet(setup.fleetFile), setup.tmpDir);
+    fs.writeFileSync(
+      path.join(terraformDir, "workspaces", `${fleetName}.tfvars`),
+      "# fleet-specific inputs\n",
+      "utf-8",
+    );
+
+    const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
+    const smMock = makeMockSM();
+    const tf = makeMockTerraform({ bucketExists: true, tableExists: true });
+    const mock = makeMockPrompter([
+      true,  // Start onboarding?
+      false, // Run render? (already rendered above)
+      true,  // Run Terraform workflow?
+      true,  // Write backend.hcl?
+      true,  // Configure existing S3 backend bucket?
+      true,  // Configure existing DynamoDB lock table?
+      false, // Apply plan?
+      false, // Populate secrets?
+      false, // Push fleet?
+    ], ["", "", ""]);
+
+    await runOnboard(setup.fleetFile, "us-west-2", {}, {
+      ...makeDeps(mock.prompter, ssmMock.ssm, smMock.sm),
+      terraform: tf.deps,
+    });
+
+    assert.deepEqual(tf.runCwds, [terraformDir, terraformDir, terraformDir]);
+    assert.deepEqual(tf.runs, [
+      ["init", "-backend-config=backend.hcl"],
+      ["validate"],
+      ["plan", `-var-file=workspaces/${fleetName}.tfvars`, `-var-file=workspaces/${fleetName}.derived.tfvars`, `-out=.fleetmind-${fleetName}.tfplan`],
+    ]);
   });
 });
 

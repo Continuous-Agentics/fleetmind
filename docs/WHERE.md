@@ -7,6 +7,6 @@ Most operator-facing documentation (bring-up, day-2 ops, troubleshooting, vocabu
 | Looking for... | Repo + path |
 |---|---|
 | **Bring-up & ops** (QUICKSTART, SETUP-A-FLEET, MULTI-FLEET, OPERATING, TROUBLESHOOTING, GITHUB-APPS, CONCEPTS) | [`Continuous-Agentics/fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template) → `docs/` |
-| **Module details** (inputs, outputs, BYO VPC, IaC troubleshooting, migrations, standalone task-ledger) | [`Continuous-Agentics/terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) → `docs/` |
+| **Module details** (inputs, outputs, BYO VPC, IaC troubleshooting, migrations, standalone task-ledger) | [`docs/terraform/`](terraform/README.md) in this repository |
 
 If you're operating a fleet from a `fleetmind-template`-derived repo, all the docs you need are in your own repo under `docs/`.

@@ -575,16 +575,36 @@ export function resolveOpenClawBaseDir(ocJsonPath: string, baseDir: string): str
   return resolved;
 }
 
+/**
+ * Resolve the Terraform root for a fleet checkout.
+ *
+ * A FleetMind monorepo checkout owns the canonical module at
+ * `infra/terraform`; a fleet generated from fleetmind-template still owns a
+ * wrapper Terraform root beside fleet.yaml. This detection deliberately keys
+ * off main.tf rather than the directory alone, so a partially-created
+ * `infra/terraform/` cannot silently change an operator's render destination.
+ */
+export function resolveTerraformRoot(baseDir: string): string {
+  const monorepoRoot = path.resolve(baseDir, "infra", "terraform");
+  return fs.existsSync(path.join(monorepoRoot, "main.tf"))
+    ? monorepoRoot
+    : path.resolve(baseDir);
+}
+
 export function resolveTerraformVarsPath(fleet: Fleet, baseDir: string): string {
   // Auto-derive tfvars path from fleet name when the operator hasn't set
   // outputs.terraform_vars explicitly (i.e. it still has the schema default).
-  // Result: ./workspaces/<fleet-name>.derived.tfvars
+  // A monorepo checkout writes alongside its canonical module; the template
+  // wrapper retains its established ./workspaces/ layout.
   const DEFAULT_TF_VARS = "./rendered/fleet.derived.tfvars";
-  const resolvedTfVars =
-    fleet.outputs.terraform_vars === DEFAULT_TF_VARS
-      ? `./workspaces/${fleet.fleet.name}.derived.tfvars`
-      : fleet.outputs.terraform_vars;
-  return path.resolve(baseDir, resolvedTfVars);
+  if (fleet.outputs.terraform_vars === DEFAULT_TF_VARS) {
+    return path.join(
+      resolveTerraformRoot(baseDir),
+      "workspaces",
+      `${fleet.fleet.name}.derived.tfvars`,
+    );
+  }
+  return path.resolve(baseDir, fleet.outputs.terraform_vars);
 }
 
 export function writeOutputs(

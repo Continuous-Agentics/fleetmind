@@ -8,3 +8,7 @@
 # Code Owners admin if a referenced user isn't a repository collaborator.
 
 * @ggettert
+
+# Terraform module and its public documentation live with FleetMind.
+/infra/terraform/ @ggettert
+/docs/terraform/ @ggettert
