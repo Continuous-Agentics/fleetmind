@@ -1,0 +1,17 @@
+name: Feature request
+description: Suggest an improvement to the Terraform module.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What infrastructure or operator workflow should improve?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+

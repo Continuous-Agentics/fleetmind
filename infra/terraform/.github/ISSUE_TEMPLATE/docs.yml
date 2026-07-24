@@ -1,0 +1,16 @@
+name: Documentation
+description: Report missing, stale, or confusing module docs.
+title: "docs: "
+labels: ["documentation"]
+body:
+  - type: textarea
+    id: docs_gap
+    attributes:
+      label: Documentation gap
+    validations:
+      required: true
+  - type: input
+    id: page
+    attributes:
+      label: Page or file
+

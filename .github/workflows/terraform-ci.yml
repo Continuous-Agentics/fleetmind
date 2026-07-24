@@ -1,0 +1,103 @@
+name: Terraform module CI
+
+on:
+  pull_request:
+    paths:
+      - "infra/terraform/**"
+      - ".github/workflows/terraform-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "infra/terraform/**"
+      - ".github/workflows/terraform-ci.yml"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: infra/terraform
+
+jobs:
+  terraform:
+    name: fmt-validate-lint-security
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init (no backend)
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Docs Check (root)
+        uses: terraform-docs/gh-actions@v1.4.1
+        with:
+          working-dir: infra/terraform
+          config-file: infra/terraform/.terraform-docs.yml
+          output-file: README.md
+          output-method: inject
+          git-push: "false"
+          fail-on-diff: "true"
+
+      - name: Terraform Docs Check (basic example)
+        uses: terraform-docs/gh-actions@v1.4.1
+        with:
+          working-dir: infra/terraform/examples/basic
+          config-file: infra/terraform/.terraform-docs.yml
+          output-file: README.md
+          output-method: inject
+          git-push: "false"
+          fail-on-diff: "true"
+
+      - name: Terraform Docs Check (existing VPC example)
+        uses: terraform-docs/gh-actions@v1.4.1
+        with:
+          working-dir: infra/terraform/examples/existing-vpc
+          config-file: infra/terraform/.terraform-docs.yml
+          output-file: README.md
+          output-method: inject
+          git-push: "false"
+          fail-on-diff: "true"
+
+      - name: Terraform Test
+        run: terraform test
+
+      - name: Validate Examples
+        run: |
+          set -euo pipefail
+          for dir in examples/*; do
+            [ -d "$dir" ] || continue
+            echo "==> $dir"
+            terraform -chdir="$dir" init -backend=false
+            terraform -chdir="$dir" validate
+          done
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+
+      - name: TFLint Init
+        run: tflint --init
+
+      - name: TFLint
+        run: tflint --recursive --config "$(pwd)/.tflint.hcl"
+
+      - name: Trivy IaC Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: infra/terraform
+          exit-code: "1"
+          severity: "CRITICAL,HIGH"
+          skip-dirs: ".terraform"
+          hide-progress: true

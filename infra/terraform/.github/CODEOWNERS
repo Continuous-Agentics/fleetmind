@@ -1,0 +1,10 @@
+# Code owners — review enforcement
+# https://docs.github.com/en/repositories/managing-your-repositories-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Default: Grace owns everything.
+# Add more owners or scope by path when other maintainers join.
+#
+# Note: GitHub's CODEOWNERS validator runs on every push and will warn in the
+# Code Owners admin if a referenced user isn't a repository collaborator.
+
+* @ggettert
