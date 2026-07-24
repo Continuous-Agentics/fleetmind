@@ -185,9 +185,50 @@ describe("source: fleetmind — happy path", () => {
     assert.ok(!fs.existsSync(staleFile), "stale files must be removed on re-install");
     assert.ok(fs.existsSync(path.join(dest, "SKILL.md")), "SKILL.md must still be present");
   });
-});
 
-// ── source: fleetmind — error path ────────────────────────────────────────────
+  // Per-skill reference isolation (see the doc comment on resolveFleetmind()
+  // in resolver.ts): bot-delegation's references/inbound-self-start.md and
+  // worker-self-start's references/pm-inbound-handler.md intentionally
+  // duplicate the self-start-notice handler content rather than sharing one
+  // file, because an agent may have only one of the two skills installed.
+  // installSkill() has no cross-skill dedup step, so installing one must
+  // never depend on, or reach into, the other's directory. These tests pin
+  // that behaviour so a future "let's dedupe these" refactor gets caught
+  // here instead of silently breaking single-skill installs.
+  test("installing bot-delegation alone does not require or copy worker-self-start", async () => {
+    const fleet = makeFleet();
+    const skill = skillRef("bot-delegation", "fleetmind");
+
+    await installSkill(skill, destDir, fleet, false);
+
+    const dest = path.join(destDir, "bot-delegation");
+    assert.ok(
+      fs.existsSync(path.join(dest, "references", "inbound-self-start.md")),
+      "bot-delegation must carry its own full inbound-self-start reference"
+    );
+    assert.ok(
+      !fs.existsSync(path.join(destDir, "worker-self-start")),
+      "installing bot-delegation alone must not pull in worker-self-start"
+    );
+  });
+
+  test("installing worker-self-start alone does not require or copy bot-delegation", async () => {
+    const fleet = makeFleet();
+    const skill = skillRef("worker-self-start", "fleetmind");
+
+    await installSkill(skill, destDir, fleet, false);
+
+    const dest = path.join(destDir, "worker-self-start");
+    assert.ok(
+      fs.existsSync(path.join(dest, "references", "pm-inbound-handler.md")),
+      "worker-self-start must carry its own full pm-inbound-handler reference"
+    );
+    assert.ok(
+      !fs.existsSync(path.join(destDir, "bot-delegation")),
+      "installing worker-self-start alone must not pull in bot-delegation"
+    );
+  });
+});
 
 describe("source: fleetmind — unknown skill name", () => {
   let destDir: string;

@@ -12,18 +12,14 @@ description: "Tracker-agnostic worker self-start. Use when a human directly asks
 
 **A human directly asking you (NOT via PM delegation) to pick up a discrete piece of work = approval to self-start.** The human MAY supply a ticket or issue URL (Linear, Jira, GitHub Issues, or any other tracker) which you record as the `--tracker` reference. No specific tracker is assumed, and there is no automated tracker trigger — self-start is always initiated by a human speaking to you directly. For vague or untracked requests, push back first.
 
----
-
 ## Step 0 — Classify the inbound request
 
 | Check | Action |
-|-------|--------|
+| --- | --- |
 | NATS delegation event arrived (from PM bot) | → `bot-reception`. This skill doesn't apply. |
 | Human directly asks you to pick up a discrete piece of work (non-delegation) | → § Self-start flow |
 | Request is vague, indirect, or scope is unclear | → § Push-back |
 | Spike / design question (< 1 day, no tracker issue) | → § Informal start |
-
----
 
 ## Push-back
 
@@ -35,89 +31,19 @@ When asked for new feature work but the request is vague, indirect, or scope is 
 
 One reply, no repeats, no caveats.
 
----
-
 ## Self-start flow
 
 **SF-2: create the DDB row BEFORE posting the Slack notice.** `attribute_not_exists(PK)` makes a concurrent PM recovery write an idempotent no-op.
 
-### Step 1. Generate a task ID
+1. Generate an 8-char hex task ID.
+2. Write to `memory/task-queue.md` under `## In Progress` (crash recovery).
+3. Create the DDB row with `fleetmind task create --lifecycle requires-human-signoff` **before any notice**.
+4. Self-acknowledge (`delegated` → `accepted`) — usually auto-acked by the NATS subscriber; manual `task ack` only if it wasn't running.
+5. Post the self-start notice (top-level, within 60s) in the PM bot's planning channel, and a short note in your home channel.
+6. Do the work silently.
+7. Ship: write the S3 narrative, then `fleetmind task ship`.
 
-```bash
-TASK_ID=$(openssl rand -hex 4)
-```
-
-### Step 2. Write to `memory/task-queue.md` (crash recovery)
-
-Add to `## In Progress`:
-```
-- **<TASK_ID>** — <summary> | self-start | tracker: <url-or-none>
-```
-
-### Step 3. Create the DDB row (before any notice)
-
-```bash
-fleetmind task create \
-  --project <best-fit-project-slug>         \
-  --worker  <your-agent-id>                 \
-  --delegated-by <your-agent-id>            \
-  --dod "<definition of done — one line>"   \
-  --tracker "<tracker URL if provided>"     \
-  --lifecycle requires-human-signoff        \
-  --task-id  "${TASK_ID}"                   \
-  --json
-```
-
-- `--lifecycle requires-human-signoff` — sign-off enforced by the ledger conditional-write (`ConditionExpression` in `TaskLedger`, PR #236). Not enforced at IAM level; raw-SDK bypass is the known gap tracked in #237.
-- `--delegated-by <your-agent-id>` — self-delegation; PM bot did not create this row.
-- `--tracker` — optional. Include when the human provides a tracker URL (Linear, Jira, GitHub Issues, or any other system). Omit if no ticket was referenced.
-- `--thread` — omit here (notice not yet posted). PM bot falls back to `:main` session for ship/block wakes. SF-2 takes precedence over this limitation.
-
-`fleetmind task create` uses `attribute_not_exists(PK)` — a duplicate create from a racing PM recovery write is a safe no-op returning `ConditionalCheckFailedException`.
-
-### Step 4. Self-acknowledge (`delegated` → `accepted`)
-
-If your worker-mode NATS subscriber (`fleetmind nats subscribe --mode worker`) is running, it will **auto-ack** this delegation the moment `fleetmind task create` publishes the NATS `delegation` event — no manual step needed.
-
-Only run `task ack` manually if the row is still `delegated` (subscriber was not running when the row was created):
-
-```bash
-fleetmind task ack \
-  --task-id "${TASK_ID}"       \
-  --worker  <your-agent-id>    \
-  --project <best-fit-project-slug>
-```
-
-If this fails with `TaskConditionError`, the subscriber already acked it — treat that as a no-op (already accepted).
-
-### Step 5. Post self-start notice in the PM bot's planning channel
-
-Post a **top-level message** (not a reply) within 60 seconds of beginning work. Skip if the PM bot already delegated this via NATS.
-
-```
-<@PM_BOT_SLACK_ID> — self-start notice
-
-Worker: <your name and emoji>
-Tracker: <issue URL if provided, otherwise "none">
-Task ID: <TASK_ID>
-Summary: <one sentence — what you're starting and why>
-```
-
-Also in your home channel:
-```
-🏃 Self-starting on <task summary> (TASK#<TASK_ID>).<if tracker: " Tracker: <url>">
-```
-
-### Step 6. Do the work silently
-
-Same voice discipline as delegated tasks (no "working on it…" posts).
-
-### Step 7. Ship
-
-1. Write narrative to S3 (`fleetmind narrative put --event shipped`)
-2. `fleetmind task ship` — publishes NATS `ship` event. PM bot handles DDB lifecycle. Human sign-off required before `signed_off`.
-
----
+Full commands, exact notice template, and field notes: [references/self-start-flow.md](references/self-start-flow.md).
 
 ## Informal start (spike / design question, < 1 day)
 
@@ -125,14 +51,9 @@ Same voice discipline as delegated tasks (no "working on it…" posts).
 - If it produces real deliverables: generate task ID, create DDB row with `--lifecycle shipped-is-done`, self-ack, post notice, proceed.
 - `--lifecycle informal` is not a valid CLI option.
 
----
-
 ## PM inbound handler
 
-PM bot receiving a worker self-start notice in the planning channel → see
-[references/pm-inbound-handler.md](references/pm-inbound-handler.md).
-
----
+PM bot receiving a worker self-start notice in the planning channel → see [references/pm-inbound-handler.md](references/pm-inbound-handler.md).
 
 ## Hard limits
 
@@ -147,9 +68,7 @@ PM bot receiving a worker self-start notice in the planning channel → see
 - ✅ Use `attribute_not_exists(PK)` on DDB row create.
 - ✅ Record the tracker URL in `--tracker` if the human provided one; omit if no ticket was referenced.
 
----
+## Reference files
 
-## Changelog
-
-- **1.1.0 (2026-07-09)** — Tracker-agnostic self-start trigger (#241): removed Linear coupling; trigger is now "a human directly asks you" (not a Linear assignment); `Linear:` notice field renamed to `Tracker:` (optional); push-back copy rewritten; `--tracker` is now optional; hard limits updated; frontmatter rewritten.
-- **1.0.0 (2026-07-09)** — Initial release (CON-91, re-authored from PR #169 onto NATS transport): no "delegation channel"; SF-2 ordering (DDB before notice); `attribute_not_exists(PK)` idempotency; `--lifecycle shipped-is-done` (not `informal`); IAM gap (#237); PM inbound handler moved to references/.
+- [references/self-start-flow.md](references/self-start-flow.md) - full step-by-step for § Self-start flow: exact `task create`/`task ack` commands, notice templates, and field notes.
+- [references/pm-inbound-handler.md](references/pm-inbound-handler.md) - full PM-side handler for inbound self-start notices.

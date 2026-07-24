@@ -1,30 +1,17 @@
 # Sub-agent task templates (canonical)
 
-This file holds the **verbatim, copy-pasteable `task:` briefs** for every
-sub-agent the PM bot spawns inside the delegation lifecycle. Compose nothing
-ad-hoc. Pick the variant that matches the trigger, copy the fenced block in
-full, fill the `<PLACEHOLDERS>`, and paste it into the `task` field of
-`sessions_spawn`.
+This file holds the **verbatim, copy-pasteable `task:` briefs** for every sub-agent the PM bot spawns inside the delegation lifecycle. Compose nothing ad-hoc. Pick the variant that matches the trigger, copy the fenced block in full, fill the `<PLACEHOLDERS>`, and paste it into the `task` field of `sessions_spawn`.
 
-The hard rule from SKILL.md § 7a (NO_REPLY-final-turn + at-most-one-threaded-
-planning-post) is **embedded verbatim at the top of every template** — not by
-reference. Every spawned sub-agent's prompt independently carries the rule. Do
-not edit the rule out of a copy.
+The hard rule from SKILL.md § 7a (NO_REPLY-final-turn + at-most-one-threaded-planning-post) is **embedded verbatim at the top of every template** — not by reference. Every spawned sub-agent's prompt independently carries the rule. Do not edit the rule out of a copy.
 
-## Why literal templates
-
-Prose-only guidance for sub-agent discipline is insufficient. Sub-agents
-composing their own briefs from prose have repeatedly leaked top-level Slack
-posts ("Done. Accomplished: …") that should have gone via the tool return.
-The structural fix is a literal template per variant so the parent copies
-instead of composes.
+**Copy literally; never compose ad-hoc.** Prose-only guidance was tried and failed in production: sub-agents composing their own briefs from prose repeatedly leaked top-level "Done. Accomplished: …" Slack posts that should have gone via the tool return instead. Literal, fill-in-the-placeholder templates are the fix — composing a brief from memory/summary reintroduces the exact failure mode this file exists to prevent.
 
 ## Placeholder legend
 
 Placeholders are uppercase angle-bracketed tokens. Fill in every one before spawning.
 
 | Placeholder | Meaning |
-|---|---|
+| --- | --- |
 | `<TASK_ID>` | 8-char hex task id |
 | `<PROJECT_SLUG>` | Project slug from DDB `project` attribute |
 | `<PLANNING_CHANNEL_ID>` | Channel id for the planning/coordination channel |
@@ -42,10 +29,7 @@ Placeholders are uppercase angle-bracketed tokens. Fill in every one before spaw
 
 ## Template (a) — close-the-loop on terminal worker reply
 
-**Trigger:** Worker posts a *ship* terminal in an active delegation thread when
-`lifecycle: shipped-is-done`, OR a `blocked` terminal at any time, OR a
-DDB terminal wake fires for a task whose `lifecycle` allows direct close. (For
-`lifecycle: requires-human-signoff` *ship*, use template **(b)** instead.)
+**Trigger:** Worker posts a _ship_ terminal in an active delegation thread when `lifecycle: shipped-is-done`, OR a `blocked` terminal at any time, OR a DDB terminal wake fires for a task whose `lifecycle` allows direct close. (For `lifecycle: requires-human-signoff` _ship_, use template **(b)** instead.)
 
 ```
 ## Output discipline (READ THIS LAST, OBEY IT FIRST)
@@ -143,10 +127,7 @@ Steps:
 
 ## Template (b) — In-Review handoff on `shipped` + `requires-human-signoff`
 
-**Trigger:** Worker posts a *ship* terminal in a delegation whose
-`lifecycle: requires-human-signoff`. The delegation does NOT close yet — a
-human must sign off first. This sub-agent transitions the tracker issue to
-In Review and posts the artifact-for-review in the planning thread.
+**Trigger:** Worker posts a _ship_ terminal in a delegation whose `lifecycle: requires-human-signoff`. The delegation does NOT close yet — a human must sign off first. This sub-agent transitions the tracker issue to In Review and posts the artifact-for-review in the planning thread.
 
 ```
 ## Output discipline (READ THIS LAST, OBEY IT FIRST)
@@ -216,8 +197,7 @@ Steps:
 
 ## Template (c) — signoff close on human approval
 
-**Trigger:** A human posts approval in a planning thread for a delegation
-currently `in-review` (DDB `status: shipped`, `lifecycle: requires-human-signoff`).
+**Trigger:** A human posts approval in a planning thread for a delegation currently `in-review` (DDB `status: shipped`, `lifecycle: requires-human-signoff`).
 
 ```
 ## Output discipline (READ THIS LAST, OBEY IT FIRST)
@@ -281,10 +261,7 @@ Steps:
 
 ## Template (d) — blocked-handler on ⛔ / DDB `blocked`
 
-**Trigger:** Worker posts a *blocked* terminal in an active delegation thread,
-OR a DDB terminal wake fires for a task whose `status` flipped to `blocked`.
-Posts the blocker in the planning thread; does NOT close the delegation (a
-human decides next step).
+**Trigger:** Worker posts a _blocked_ terminal in an active delegation thread, OR a DDB terminal wake fires for a task whose `status` flipped to `blocked`. Posts the blocker in the planning thread; does NOT close the delegation (a human decides next step).
 
 ```
 ## Output discipline (READ THIS LAST, OBEY IT FIRST)
@@ -353,16 +330,13 @@ Steps:
 
 ---
 
-## Maintenance
+## Maintenance checklist
 
 When adding a new sub-agent variant to the delegation lifecycle:
 
 1. Add a new fenced template here (variant **(e)**, **(f)**, …).
-2. Embed the § 7a rule **verbatim** at the top of the new template's
-   `## Output discipline` block.
-3. Add a one-line pointer in `SKILL.md` from the prose section that describes
-   the new spawn to this file's variant id.
-4. Bump SKILL.md version + add a changelog entry.
+2. Embed the § 7a rule **verbatim** at the top of the new template's `## Output discipline` block.
+3. Add a one-line pointer in `SKILL.md` from the prose section that describes the new spawn to this file's variant id.
+4. Bump SKILL.md's `version` frontmatter field.
 
-Do not delete templates; deprecate them in place with a
-`> **Deprecated <date>**:` admonition above the fenced block.
+Do not delete templates; deprecate them in place with a `> **Deprecated <date>**:` admonition above the fenced block.

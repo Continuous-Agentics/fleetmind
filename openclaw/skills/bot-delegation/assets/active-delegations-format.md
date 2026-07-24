@@ -1,8 +1,6 @@
 # `memory/active-delegations.md` — Block Format
 
-The file has two sections: `## Active` (in-flight) and `## Closed` (terminal).
-Newest at top of each section. Move blocks from Active to Closed on terminal
-status — never delete history.
+The file has two sections: `## Active` (in-flight) and `## Closed` (terminal). Newest at top of each section. Move blocks from Active to Closed on terminal status — never delete history.
 
 ## Active block template
 
@@ -44,36 +42,23 @@ Drop the `Deadline` field on closure — it's not relevant anymore.
 
 ## Reopen-on-reship
 
-The `last-handled-terminal-at` field is the freshness anchor for re-terminal
-events. The terminal-wake handler (§ 5a of `SKILL.md`) compares it against
-DDB's `shipped_at` / `blocked_at` / `merged_at` / `abandoned_at`. If DDB's
-value is newer, the block is moved from `## Closed` back to `## Active`:
+The `last-handled-terminal-at` field is the freshness anchor for re-terminal events. The terminal-wake handler (§ 5a of `SKILL.md`) compares it against DDB's `shipped_at` / `blocked_at` / `merged_at` / `abandoned_at`. If DDB's value is newer, the block is moved from `## Closed` back to `## Active`:
 
-- `Status:` is restored to `acked` (or `in-review` if `lifecycle:
-  requires-human-signoff` and DDB `status: shipped`).
+- `Status:` is restored to `acked` (or `in-review` if `lifecycle: requires-human-signoff` and DDB `status: shipped`).
 - `Closeloop subagent:` and `Closeloop spawned at:` are cleared.
 - `Closed at:` and `Outcome:` are removed.
-- `last-handled-terminal-at:` is left in place; the close-the-loop sub-agent
-  overwrites it as its last mutation when it finishes the fresh close pass.
-- The reopen is **silent**: no coordination-channel post, no notice. The
-  downstream close-the-loop sub-agent posts normally when it completes.
+- `last-handled-terminal-at:` is left in place; the close-the-loop sub-agent overwrites it as its last mutation when it finishes the fresh close pass.
+- The reopen is **silent**: no coordination-channel post, no notice. The downstream close-the-loop sub-agent posts normally when it completes.
 
 ## Field semantics
 
-- *Status* is the in-flight state. Values:
+- _Status_ is the in-flight state. Values:
   - `pending` — NATS delegation event published, awaiting worker ack.
   - `acked` — worker sent NATS ack event, work in progress.
   - `in-review` — worker shipped, awaiting human sign-off (only when DoD requires it).
   - `escalated` — heartbeat hit a missed deadline.
-- *Last update* — refresh on every status change. Heartbeat uses this to compute idle time.
-- *Lifecycle correction* — record when a delegation/issue was prematurely flipped
-  to Done before sign-off and had to be reverted. Format:
-  `YYYY-MM-DDTHH:MMZ <session/cause> flipped issue to Done before sign-off;
-  reverted to In Review at <ts>.`
-- *Process miss* — record skipped state transitions even if the outcome is
-  correct. Format: `did not log the worker's :eyes: ack; issue transitioned
-  Todo → Done directly. Cosmetic; outcome correct.`
+- _Last update_ — refresh on every status change. Heartbeat uses this to compute idle time.
+- _Lifecycle correction_ — record when a delegation/issue was prematurely flipped to Done before sign-off and had to be reverted. Format: `YYYY-MM-DDTHH:MMZ <session/cause> flipped issue to Done before sign-off; reverted to In Review at <ts>.`
+- _Process miss_ — record skipped state transitions even if the outcome is correct. Format: `did not log the worker's :eyes: ack; issue transitioned Todo → Done directly. Cosmetic; outcome correct.`
 
-Capturing both `Lifecycle correction` and `Process miss` separately matters:
-lifecycle issues are correctness bugs; process misses are paperwork bugs. They
-get tuned differently.
+Capturing both `Lifecycle correction` and `Process miss` separately matters: lifecycle issues are correctness bugs; process misses are paperwork bugs. They get tuned differently.
