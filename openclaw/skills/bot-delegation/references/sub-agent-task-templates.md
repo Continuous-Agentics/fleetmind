@@ -9,10 +9,14 @@ full, fill the `<PLACEHOLDERS>`, and paste it into the `task` field of
 The hard rule from SKILL.md § 7a (NO_REPLY-final-turn + at-most-one-threaded-
 planning-post) is **embedded verbatim at the top of every template** — not by
 reference. Every spawned sub-agent's prompt independently carries the rule. Do
-not edit the rule out of a copy. (Prose-only guidance was tried and failed:
-sub-agents composing their own briefs repeatedly leaked top-level "Done.
-Accomplished: …" Slack posts that should have gone via the tool return —
-hence literal, copy-only templates.)
+not edit the rule out of a copy.
+
+**Copy literally; never compose ad-hoc.** Prose-only guidance was tried and
+failed in production: sub-agents composing their own briefs from prose
+repeatedly leaked top-level "Done. Accomplished: …" Slack posts that should
+have gone via the tool return instead. Literal, fill-in-the-placeholder
+templates are the fix — composing a brief from memory/summary reintroduces
+the exact failure mode this file exists to prevent.
 
 ## Placeholder legend
 
@@ -348,7 +352,7 @@ Steps:
 
 ---
 
-## Maintenance
+## Maintenance checklist
 
 When adding a new sub-agent variant to the delegation lifecycle:
 

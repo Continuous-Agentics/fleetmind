@@ -208,6 +208,21 @@ async function resolvePrivate(
  * Use `source: fleetmind` in fleet.yaml for bundled skills like bot-delegation
  * and bot-reception. If the skill name is wrong, an explicit error is raised
  * (not a silent skip) because a typo in fleet.yaml is always a user error.
+ *
+ * Per-skill reference isolation: each bundled skill directory (including its
+ * `references/*.md`) is copied whole via `fs.cpSync(src, dest, ...)` below,
+ * independently per skill name — there is no shared references/ pool and no
+ * cross-skill dedup step anywhere in this resolver. This is why
+ * `bot-delegation/references/inbound-self-start.md` and
+ * `worker-self-start/references/pm-inbound-handler.md` are two separate files
+ * with overlapping content rather than one shared file: an agent with only
+ * `bot-delegation` installed (no `worker-self-start`) must still get the full
+ * handler, and vice versa. Do NOT collapse these into a single shared
+ * reference — that would break installs where only one of the two skills is
+ * present in an agent's `skills:` list. If you introduce an actual shared-file
+ * mechanism (e.g. symlinks or a common `references/` root) update this note
+ * and the corresponding "do not deduplicate" callouts in both skills' SKILL.md
+ * files.
  */
 async function resolveFleetmind(
   skill: SkillRef,
