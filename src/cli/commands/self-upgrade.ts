@@ -73,8 +73,8 @@ function defaultReadCurrentVersion(): string {
  * Resolve the npm global prefix used by the currently installed fleetmind binary.
  * This ensures the upgrade installs to the same location as the running binary
  * rather than the current user's home-dir npm prefix (which would diverge
- * when self-upgrade is invoked as ec2-user but the system install lives under
- * the root npm prefix, e.g. /usr).
+ * when self-upgrade is invoked as the configured runtime user but the system
+ * install lives under the root npm prefix, e.g. /usr).
  */
 function resolveNpmPrefix(): string {
   try {

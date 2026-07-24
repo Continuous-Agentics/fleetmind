@@ -68,14 +68,14 @@ describe("resolveArtifactBucket", () => {
 });
 
 describe("on-host command builders", () => {
-  it("aws-ssm: runs as ec2-user with --region; --restart only when asked", () => {
+  it("aws-ssm: runs as the user-systemd runtime account with XDG/DBus; --restart only when asked", () => {
     assert.equal(
       buildPullSelfCommand({ provider: "aws-ssm", restart: false, region: "us-west-2", agentId: "conductor" }),
-      "sudo -u ec2-user fleetmind pull-self --apply --region us-west-2"
+      "sudo -H -u openclaw env XDG_RUNTIME_DIR=/run/user/$(id -u openclaw) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u openclaw)/bus fleetmind pull-self --apply --region us-west-2 --user-systemd"
     );
     assert.equal(
-      buildPullSelfCommand({ provider: "aws-ssm", restart: true, region: "eu-west-1", agentId: "conductor" }),
-      "sudo -u ec2-user fleetmind pull-self --apply --restart --region eu-west-1"
+      buildPullSelfCommand({ provider: "aws-ssm", restart: true, region: "eu-west-1", agentId: "conductor", runtimeUser: "ec2-user" }),
+      "sudo -H -u ec2-user env XDG_RUNTIME_DIR=/run/user/$(id -u ec2-user) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u ec2-user)/bus fleetmind pull-self --apply --restart --region eu-west-1 --user-systemd"
     );
   });
 

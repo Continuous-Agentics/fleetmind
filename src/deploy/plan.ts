@@ -16,6 +16,7 @@
 import path from "node:path";
 import type { Fleet, TargetProvider } from "../config/schema.js";
 import { resolveOpenClawBaseDir } from "../runtime/renderer.js";
+import { buildAwsRuntimeUserCommand, DEFAULT_AWS_RUNTIME_USER } from "./aws-runtime-user.js";
 
 /** Root prefix for all deploy artifacts in the artifact store. */
 export const DEPLOY_STAGING_PREFIX = "deploy-staging";
@@ -68,18 +69,22 @@ export interface PullSelfCommandOptions {
   agentId: string;
   /** Fleet config path the host loads to learn its target (local/ssh). */
   fleetPath?: string;
+  /** AWS Linux account running the user-systemd services. Ignored for
+   * non-AWS providers. */
+  runtimeUser?: string;
 }
 
 /**
  * The on-host command that pulls and applies the latest workspace bundle.
- * Provider-specific: on AWS the SSM command runs as root and drops to ec2-user
- * and needs the region (for the S3 store); on a local/ssh host it runs as the
- * connecting user and learns its target by loading the fleet config.
+ * Provider-specific: on AWS the SSM command runs as root and enters the
+ * configured runtime user's XDG/DBus session; on a local/ssh host it runs as
+ * the connecting user and learns its target by loading the fleet config.
  */
 export function buildPullSelfCommand(opts: PullSelfCommandOptions): string {
   const restartFlag = opts.restart ? " --restart" : "";
   if (opts.provider === "aws-ssm") {
-    return `sudo -u ec2-user fleetmind pull-self --apply${restartFlag} --region ${opts.region}`;
+    const pullSelf = `fleetmind pull-self --apply${restartFlag} --region ${opts.region} --user-systemd`;
+    return buildAwsRuntimeUserCommand(opts.runtimeUser ?? DEFAULT_AWS_RUNTIME_USER, pullSelf);
   }
   const fleetFlag = opts.fleetPath ? ` --fleet ${opts.fleetPath}` : "";
   return `fleetmind pull-self --apply${restartFlag} --agent ${opts.agentId}${fleetFlag}`;

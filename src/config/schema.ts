@@ -19,6 +19,7 @@ import {
   NatsSubjectPrefixSchema,
   WorkspaceBaseSchema,
 } from "../core/identifiers.js";
+import { AWS_RUNTIME_USER_PATTERN, DEFAULT_AWS_RUNTIME_USER } from "../deploy/aws-runtime-user.js";
 
 /** Where a skill comes from:
  *  - clawhub:   public skill published on ClaWHub (e.g. by continuous-agentics)
@@ -330,6 +331,12 @@ export const AwsSsmTargetSchema = z.object({
   ...TargetCommonSchema,
   aws: z.object({
     region: z.string(),
+    /** Linux account that owns the OpenClaw user-systemd services on this
+     * target. Set `ec2-user` for existing pre-user-systemd hosts during a
+     * migration; new FleetMind AWS hosts use `openclaw`. */
+    runtime_user: z.string()
+      .regex(AWS_RUNTIME_USER_PATTERN, "must be a safe Linux username")
+      .default(DEFAULT_AWS_RUNTIME_USER),
   }),
 });
 

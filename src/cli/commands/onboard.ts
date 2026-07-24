@@ -1202,7 +1202,8 @@ export async function runOnboard(
   console.log("  Check that both bots are running:\n");
   console.log(`  \x1b[36mterraform output ssm_connect\x1b[0m`);
   console.log("  (then paste the SSM command for each agent and run:)");
-  console.log(`  \x1b[36msudo journalctl -u openclaw-<agent> -n 50\x1b[0m\n`);
+  console.log(`  \x1b[36msudo -H -u openclaw env XDG_RUNTIME_DIR=/run/user/$(id -u openclaw) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u openclaw)/bus journalctl --user -u openclaw-<agent> -n 50 --no-pager\x1b[0m`);
+  console.log("  (replace openclaw with targets.<id>.aws.runtime_user when overridden)\n");
 
   console.log("\x1b[32m\x1b[1m🎉 Onboarding complete!\x1b[0m");
   console.log(`  Fleet \x1b[1m${fleetName}\x1b[0m is deployed. Your bots should be online in Slack shortly.\n`);

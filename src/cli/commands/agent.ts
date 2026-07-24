@@ -11,6 +11,7 @@ import { slackChannel } from "../../core/channels.js";
 import { gatewaySecretName } from "../../core/secret-names.js";
 import { log } from "../../utils/log.js";
 import { lookupInstanceId } from "./pull-workspace.js";
+import { buildAwsRuntimeUserCommand } from "../../deploy/aws-runtime-user.js";
 
 const UNRESOLVED_GATEWAY_AUTH_PREFIX = "__FLEETMIND_UNRESOLVED_GATEWAY_AUTH__:";
 
@@ -168,9 +169,19 @@ Examples:
         let preflightResult: PreflightResult = { dashboardUrl: null, authMode: null, authSecret: null };
         if (!opts.skipPreflight) {
           const gatewayAuthSecret = await readGatewayAuthSecretFromSecretsManager(fleetName, agentId, region);
-          // Workspace base comes from the agent's resolved runtime target.
-          const agentWorkspaceBase = fleet.targetForAgent(declared).workspace_base;
-          preflightResult = await runPreflight(instanceId, agentId, region, agentWorkspaceBase);
+          // Workspace base and runtime user come from the resolved AWS target.
+          const target = fleet.targetForAgent(declared);
+          if (target.provider !== "aws-ssm") {
+            throw new Error(`agent connect requires an aws-ssm target; '${agentId}' uses ${target.provider}`);
+          }
+          const agentWorkspaceBase = target.workspace_base;
+          preflightResult = await runPreflight(
+            instanceId,
+            agentId,
+            region,
+            agentWorkspaceBase,
+            target.aws.runtime_user,
+          );
           if (preflightResult.authMode === "token" && gatewayAuthSecret) {
             preflightResult.authSecret = gatewayAuthSecret;
           }
@@ -287,6 +298,7 @@ async function runPreflight(
   agentId: string,
   region: string,
   workspaceBase: string,
+  runtimeUser: string,
 ): Promise<PreflightResult> {
   log.bold(`Pre-flight diagnostics...`);
   const ssm = new SSMClient({ region });
@@ -304,22 +316,22 @@ async function runPreflight(
   // /opt/openclaw/workspace per the fleetmind agent_bootstrap.sh.tpl), with
   // the per-agent dir appended:
   //   <workspaceBase>/<agent_id>/.openclaw/openclaw.json
-  // SSM Run Command runs as root by default, so no sudo needed to read
-  // ec2-user-owned files.
+  // SSM Run Command runs as root by default. User-systemd diagnostics and the
+  // dashboard run as the configured runtime user with its XDG/DBus bus.
   const configFile = `${workspaceBase}/${agentId}/.openclaw/openclaw.json`;
   const envFile = `/run/openclaw-${agentId}.env`;
   const commands = [
     `set +e`,
     `echo "::SERVICE::"`,
-    `systemctl is-active openclaw-${agentId} || true`,
+    `${buildAwsRuntimeUserCommand(runtimeUser, `systemctl --user is-active openclaw-${agentId}`)} || true`,
     `echo "::SINCE::"`,
-    `systemctl show -p ActiveEnterTimestamp --value openclaw-${agentId} 2>/dev/null || true`,
+    `${buildAwsRuntimeUserCommand(runtimeUser, `systemctl --user show -p ActiveEnterTimestamp --value openclaw-${agentId}`)} 2>/dev/null || true`,
     `echo "::VERSION::"`,
-    `openclaw --version 2>/dev/null | head -1 || echo "<openclaw CLI not on PATH>"`,
+    `${buildAwsRuntimeUserCommand(runtimeUser, "openclaw --version")} 2>/dev/null | head -1 || echo "<openclaw CLI not on PATH>"`,
     `echo "::LOG::"`,
-    `journalctl -u openclaw-${agentId} -n 5 --no-pager 2>/dev/null || true`,
+    `${buildAwsRuntimeUserCommand(runtimeUser, `journalctl --user -u openclaw-${agentId} -n 5 --no-pager`)} 2>/dev/null || true`,
     `echo "::DASHBOARD::"`,
-    `sudo -u ec2-user openclaw dashboard --no-open 2>&1 | grep -oE 'http[s]?://[^[:space:]]+' | head -1 || true`,
+    `${buildAwsRuntimeUserCommand(runtimeUser, "openclaw dashboard --no-open")} 2>&1 | grep -oE 'http[s]?://[^[:space:]]+' | head -1 || true`,
     `echo "::AUTH_MODE::"`,
     `cat "${configFile}" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("gateway",{}).get("auth",{}).get("mode","none"))' 2>/dev/null || true`,
     `echo "::AUTH_SECRET::"`,
