@@ -383,7 +383,6 @@ interface MockTerraform {
 function makeMockTerraform(opts: {
   bucketExists?: boolean;
   tableExists?: boolean;
-  workspaceExists?: boolean;
   terraformError?: Error;
   awsIdentityError?: Error;
 } = {}): MockTerraform {
@@ -413,7 +412,6 @@ function makeMockTerraform(opts: {
       tableExists: async () => opts.tableExists ?? true,
       configureTable: async (table) => { configuredTables.push(table); },
       createTable: async (table) => { createdTables.push(table); configuredTables.push(table); },
-      workspaceExists: async () => opts.workspaceExists ?? true,
       run: async (args) => {
         runs.push(args);
       },
@@ -581,7 +579,7 @@ describe("step 8 — Terraform workflow", () => {
     writeTfvarsFixture(setup.tmpDir, fleetName);
     const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
     const smMock = makeMockSM();
-    const tf = makeMockTerraform({ bucketExists: false, tableExists: false, workspaceExists: false });
+    const tf = makeMockTerraform({ bucketExists: false, tableExists: false });
     const mock = makeMockPrompter(
       [
         true,  // Start onboarding?
@@ -590,7 +588,6 @@ describe("step 8 — Terraform workflow", () => {
         true,  // Write backend.hcl?
         true,  // Create S3 bucket?
         true,  // Create DynamoDB table?
-        true,  // Create Terraform workspace?
         true,  // Apply plan?
         false, // Populate secrets?
         false, // Push fleet?
@@ -610,7 +607,6 @@ describe("step 8 — Terraform workflow", () => {
     assert.ok(fs.existsSync(path.join(setup.tmpDir, "backend.hcl")), "backend.hcl should be written");
     assert.deepEqual(tf.runs, [
       ["init", "-backend-config=backend.hcl"],
-      ["workspace", "new", fleetName],
       ["validate"],
       ["plan", "-var-file=workspaces/tf-fleet.tfvars", "-var-file=workspaces/tf-fleet.derived.tfvars", "-out=.fleetmind-tf-fleet.tfplan"],
       ["apply", ".fleetmind-tf-fleet.tfplan"],
@@ -633,7 +629,7 @@ describe("step 8 — Terraform workflow", () => {
     );
     const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
     const smMock = makeMockSM();
-    const tf = makeMockTerraform({ bucketExists: true, tableExists: true, workspaceExists: true });
+    const tf = makeMockTerraform({ bucketExists: true, tableExists: true });
     const mock = makeMockPrompter(
       [
         true,  // Start onboarding?
@@ -658,7 +654,6 @@ describe("step 8 — Terraform workflow", () => {
     assert.deepEqual(tf.configuredTables, ["existing-lock"]);
     assert.deepEqual(tf.runs, [
       ["init", "-backend-config=backend.hcl"],
-      ["workspace", "select", fleetName],
       ["validate"],
       ["plan", "-var-file=workspaces/tf-existing.tfvars", "-var-file=workspaces/tf-existing.derived.tfvars", "-out=.fleetmind-tf-existing.tfplan"],
     ]);
@@ -747,7 +742,7 @@ outputs:
 
     const ssmMock = makeMockSSM(["/fleetmind/shared/github-packages-token"]);
     const smMock = makeMockSM();
-    const tf = makeMockTerraform({ bucketExists: true, tableExists: true, workspaceExists: true });
+    const tf = makeMockTerraform({ bucketExists: true, tableExists: true });
     const mock = makeMockPrompter([
       true,  // Start onboarding?
       false, // Run render?
@@ -767,7 +762,6 @@ outputs:
 
     assert.deepEqual(tf.runs, [
       ["init", "-backend-config=backend.hcl"],
-      ["workspace", "select", fleetName],
       ["validate"],
       ["plan", "-var-file=fleet.tfvars", "-var-file=fleet.derived.tfvars", "-out=.fleetmind-tf-custom.tfplan"],
     ]);

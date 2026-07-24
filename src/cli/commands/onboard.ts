@@ -204,7 +204,6 @@ export interface TerraformDeps {
   tableExists(table: string, region: string): Promise<boolean>;
   configureTable(table: string, region: string, tags: Record<string, string>): Promise<void>;
   createTable(table: string, region: string, tags: Record<string, string>): Promise<void>;
-  workspaceExists(name: string, cwd: string): Promise<boolean>;
   run(args: string[], cwd: string): Promise<void>;
 }
 
@@ -419,22 +418,6 @@ function createTerraformDeps(s3: S3Client, dynamodb: DynamoDBClient, sts: STSCli
       );
       await this.configureTable(table, region, tags);
     },
-    async workspaceExists(name: string, cwd: string): Promise<boolean> {
-      const result = spawnSync("terraform", ["workspace", "list"], {
-        cwd,
-        encoding: "utf8",
-        env: process.env,
-      });
-      if (result.error) throw result.error;
-      if (result.status !== 0) {
-        throw new Error(`terraform workspace list failed with exit code ${result.status}: ${result.stderr}`);
-      }
-      return result.stdout
-        .split("\n")
-        .map(line => line.replace(/^\*/, "").trim())
-        .filter(Boolean)
-        .includes(name);
-    },
     async run(args: string[], cwd: string): Promise<void> {
       const result = spawnSync("terraform", args, {
         cwd,
@@ -500,7 +483,11 @@ function defaultBackendConfig(fleetName: string, region: string): TerraformBacke
   return {
     bucket: `${prefix}-fleetmind-tfstate-${suffix}`.toLowerCase(),
     region,
-    key: "terraform.tfstate",
+    // Explicit per-fleet key (not a bare `terraform.tfstate` paired with a CLI
+    // workspace) — see fleetmind#255. Keeps each fleet's state independently
+    // discoverable in the S3 console/CLI without relying on the operator's
+    // currently selected `terraform workspace`.
+    key: `fleets/${fleetName}/terraform.tfstate`,
     dynamodbTable: `${prefix}-fleetmind-tf-lock`.toLowerCase(),
   };
 }
@@ -768,10 +755,11 @@ export async function runOnboard(
   const allUserIdsSet = agents.every(a => isRealUserId(slackChannel(a)?.bot_user_id));
   const allChannelsSet = agents.every(a => (slackChannel(a)?.channels ?? []).every(c => isRealChannelId(c)));
 
-  // Render output: the renderer writes the derived tfvars next to the workspace
-  // infra tfvars. Single-fleet repos render to `default.derived.tfvars` (the
-  // "default" Terraform workspace); multi-fleet repos render to
-  // `<fleet>.derived.tfvars`. Accept either so step 7 isn't a false negative.
+  // Render output: the renderer writes the derived tfvars next to the
+  // `workspaces/` infra tfvars directory (a plain directory name, unrelated
+  // to `terraform workspace` — see fleetmind#255). Accept either
+  // `workspaces/<fleet>.derived.tfvars` or `workspaces/default.derived.tfvars`
+  // so Step 7 isn't a false negative.
   const derivedTfvarsCandidates = [
     `workspaces/${fleetName}.derived.tfvars`,
     "workspaces/default.derived.tfvars",
@@ -1057,16 +1045,6 @@ export async function runOnboard(
 
     log.info("  terraform init");
     await terraform.run(["init", "-backend-config=backend.hcl"], terraformCwd);
-
-    if (await terraform.workspaceExists(fleetName, terraformCwd)) {
-      log.info(`  terraform workspace select ${fleetName}`);
-      await terraform.run(["workspace", "select", fleetName], terraformCwd);
-    } else if (await deps.prompter.confirm(`  Terraform workspace ${fleetName} does not exist. Create it?`, true)) {
-      log.info(`  terraform workspace new ${fleetName}`);
-      await terraform.run(["workspace", "new", fleetName], terraformCwd);
-    } else {
-      throw new Error(`Terraform workspace does not exist: ${fleetName}`);
-    }
 
     log.info("  terraform validate");
     await terraform.run(["validate"], terraformCwd);
