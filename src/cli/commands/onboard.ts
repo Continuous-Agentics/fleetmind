@@ -757,9 +757,9 @@ export async function runOnboard(
 
   // Render output: the renderer writes the derived tfvars next to the
   // `workspaces/` infra tfvars directory (a plain directory name, unrelated
-  // to `terraform workspace` — see fleetmind#255). Single-fleet repos render
-  // to `default.derived.tfvars`; multi-fleet repos render to
-  // `<fleet>.derived.tfvars`. Accept either so step 7 isn't a false negative.
+  // to `terraform workspace` — see fleetmind#255). Accept either
+  // `workspaces/<fleet>.derived.tfvars` or `workspaces/default.derived.tfvars`
+  // so Step 7 isn't a false negative.
   const derivedTfvarsCandidates = [
     `workspaces/${fleetName}.derived.tfvars`,
     "workspaces/default.derived.tfvars",
