@@ -6,6 +6,22 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-07-24
+
+### Changed
+
+- **Consolidate shared bot workspace seed files.** Moved common host-tools
+  guidance for the worker/PM/backend/frontend bots into a shared
+  `agents-partials/host-tools.md` partial instead of duplicating it across
+  each bot's `AGENTS.md`/`SOUL.md`, and updated the provisioner and its tests
+  to render the shared partial during bot deploys.
+- **Trim bundled skill delegation and reception prompts.** Moved historical
+  and rare-path detail out of the runtime-facing skill prompts into linked
+  reference docs, kept the runtime delivery and lifecycle contracts intact,
+  and standardized bundled skill Markdown to unwrapped natural-width prose.
+  Added tests guarding per-skill reference isolation and reference-link
+  resolution.
+
 ## [1.0.0] — 2026-07-20
 
 ### Changed
