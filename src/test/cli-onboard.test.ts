@@ -29,11 +29,36 @@ import {
   PutParameterCommand,
 } from "@aws-sdk/client-ssm";
 
-import { runOnboard, type OnboardDeps } from "../cli/commands/onboard.js";
+import {
+  formatAwsVerificationHandoff,
+  runOnboard,
+  type OnboardDeps,
+} from "../cli/commands/onboard.js";
 import { loadFleet } from "../config/loader.js";
 import type { PushFleetResult } from "../cli/commands/push-fleet.js";
 
 // ── Mock builders ─────────────────────────────────────────────────────────────
+
+test("AWS verification handoff uses PR #47 aliases and preserves runtime-user overrides", () => {
+  assert.equal(
+    formatAwsVerificationHandoff(),
+    [
+      "  Check that both bots are running:",
+      "",
+      "  \x1b[36mterraform output ssm_connect\x1b[0m",
+      "  (then paste the SSM command for each agent)",
+      "",
+      "  After pinning terraform-aws-fleetmind PR #47 (or a release containing it):",
+      "  \x1b[36msudo -iu openclaw\x1b[0m",
+      "  (use targets.<id>.aws.runtime_user when overridden)",
+      "  \x1b[36mocalias\x1b[0m   # list shortcuts",
+      "  \x1b[36mocstatus\x1b[0m  # gateway status",
+      "  \x1b[36moclog\x1b[0m     # recent gateway logs",
+      "  \x1b[36moctail\x1b[0m    # follow gateway logs",
+      "  \x1b[36mocnatsstatus | ocnatslog | ocnatstail\x1b[0m  # NATS subscriber (when enabled)",
+    ].join("\n"),
+  );
+});
 
 /**
  * Tracked prompter call — type, question text, defaultYes (for confirm only).

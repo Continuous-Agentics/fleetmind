@@ -35,6 +35,11 @@ Use compatible versions across all three. Version drift usually shows up as miss
 ## Upgrade Rules
 
 - Upgrade the template/module pins before applying a newer FleetMind CLI to a fleet.
+- The concise AWS runtime-account handoff (`sudo -iu openclaw`, then `ocalias`
+  and the `oc*` shortcuts) requires
+  [`terraform-aws-fleetmind` PR #47](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/pull/47)
+  or a release that includes it. Keep the module pin on the existing baseline
+  until that prerequisite is available; the aliases are not guaranteed before it.
 - Run `fleetmind render --check` before `terraform plan`.
 - Read the FleetMind `CHANGELOG.md` entry for the target version; schema-affecting releases call out required module/template changes.
 - Use exact `fleetmind_version` pins in `workspaces/<workspace>.tfvars`; do not use `latest` for EC2 bootstrap.

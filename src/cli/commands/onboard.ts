@@ -293,6 +293,29 @@ function anyAgentNeedsGithubApp(agents: { github_access?: boolean }[]): boolean 
   return agents.some(agentNeedsGithubApp);
 }
 
+/**
+ * AWS-only post-onboarding handoff. The aliases are installed by
+ * terraform-aws-fleetmind PR #47, so keep that prerequisite explicit rather
+ * than presenting a raw user-manager command that operators must copy.
+ */
+export function formatAwsVerificationHandoff(): string {
+  return [
+    "  Check that both bots are running:",
+    "",
+    "  \x1b[36mterraform output ssm_connect\x1b[0m",
+    "  (then paste the SSM command for each agent)",
+    "",
+    "  After pinning terraform-aws-fleetmind PR #47 (or a release containing it):",
+    "  \x1b[36msudo -iu openclaw\x1b[0m",
+    "  (use targets.<id>.aws.runtime_user when overridden)",
+    "  \x1b[36mocalias\x1b[0m   # list shortcuts",
+    "  \x1b[36mocstatus\x1b[0m  # gateway status",
+    "  \x1b[36moclog\x1b[0m     # recent gateway logs",
+    "  \x1b[36moctail\x1b[0m    # follow gateway logs",
+    "  \x1b[36mocnatsstatus | ocnatslog | ocnatstail\x1b[0m  # NATS subscriber (when enabled)",
+  ].join("\n");
+}
+
 function createTerraformDeps(s3: S3Client, dynamodb: DynamoDBClient, sts: STSClient): TerraformDeps {
   const isNotFound = (err: unknown): boolean => {
     const candidate = err as { name?: string; $metadata?: { httpStatusCode?: number } };
@@ -1199,11 +1222,7 @@ export async function runOnboard(
 
   // ── Step 12: Verify ──────────────────────────────────────────────────────────
   header("Step 12 / 12 — Verify");
-  console.log("  Check that both bots are running:\n");
-  console.log(`  \x1b[36mterraform output ssm_connect\x1b[0m`);
-  console.log("  (then paste the SSM command for each agent and run:)");
-  console.log(`  \x1b[36msudo -H -u openclaw env XDG_RUNTIME_DIR=/run/user/$(id -u openclaw) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u openclaw)/bus journalctl --user -u openclaw-<agent> -n 50 --no-pager\x1b[0m`);
-  console.log("  (replace openclaw with targets.<id>.aws.runtime_user when overridden)\n");
+  console.log(`${formatAwsVerificationHandoff()}\n`);
 
   console.log("\x1b[32m\x1b[1m🎉 Onboarding complete!\x1b[0m");
   console.log(`  Fleet \x1b[1m${fleetName}\x1b[0m is deployed. Your bots should be online in Slack shortly.\n`);
