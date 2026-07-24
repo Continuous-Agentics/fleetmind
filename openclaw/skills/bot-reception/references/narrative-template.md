@@ -1,9 +1,6 @@
 # S3 narrative templates (ship / block)
 
-Copy the matching template verbatim into `fleetmind narrative put`. Both
-templates share the `v: 0.2` / `task_id` frontmatter and a `## Learned`
-closing section — see `SKILL.md` § `Learned` section: good vs. bad for what
-belongs there.
+Copy the matching template verbatim into `fleetmind narrative put`. Both templates share the `v: 0.2` / `task_id` frontmatter and a `## Learned` closing section — see `SKILL.md` § `Learned` section: good vs. bad for what belongs there.
 
 ## Ship narrative
 
@@ -32,9 +29,7 @@ task_id: <task_id>
 NARRATIVE
 ```
 
-If `fleetmind narrative put` exits with code 2 (S3 failure, local fallback):
-write the local fallback path to `memory/task-queue.md`, surface it as a
-follow-up, and do NOT proceed to the DDB update yet.
+If `fleetmind narrative put` exits with code 2 (S3 failure, local fallback): write the local fallback path to `memory/task-queue.md`, surface it as a follow-up, and do NOT proceed to the DDB update yet.
 
 ## Block narrative
 

@@ -6,11 +6,7 @@ description: "PM bot protocol for delegating dev tasks to workers via NATS and t
 
 # Bot Delegation Protocol
 
-This is the protocol for handing concrete work from a project-manager (PM) bot
-to worker bots and tracking it through completion. The task ledger is the
-canonical state store - DynamoDB for structured state, S3 for narrative content.
-The fleet CLI (`fleetmind task`, `fleetmind narrative`, `fleetmind query`) does
-the heavy lifting so the skill stays focused on coordination logic.
+This is the protocol for handing concrete work from a project-manager (PM) bot to worker bots and tracking it through completion. The task ledger is the canonical state store - DynamoDB for structured state, S3 for narrative content. The fleet CLI (`fleetmind task`, `fleetmind narrative`, `fleetmind query`) does the heavy lifting so the skill stays focused on coordination logic.
 
 > _Hard role boundary:_ Orchestrate only. Never write code, run deploys, or
 > modify infrastructure. If tempted to do the work yourself, the task
@@ -27,8 +23,7 @@ the heavy lifting so the skill stays focused on coordination logic.
 | `escalated` | *(audit-log only - task is past deadline; DDB still shows prior status)* |
 | `blocked` | `blocked` |
 
-The audit log (`memory/active-delegations.md`) is a human-readable supplement;
-DDB is the live source of truth. Always query DDB for programmatic decisions.
+The audit log (`memory/active-delegations.md`) is a human-readable supplement; DDB is the live source of truth. Always query DDB for programmatic decisions.
 
 ## Session boot - PM subscriber startup (mandatory)
 
@@ -56,9 +51,7 @@ fleetmind nats subscribe --mode pm --json \
     done
 ```
 
-This subscriber is the canonical wake path. Workers push `task.*` events;
-the PM bot reacts to them. There is no polling sweep - the `delegation.sweeps`
-schema field was removed in fleetmind 0.8.0-beta.8.
+This subscriber is the canonical wake path. Workers push `task.*` events; the PM bot reacts to them. There is no polling sweep - the `delegation.sweeps` schema field was removed in fleetmind 0.8.0-beta.8.
 
 ---
 
@@ -76,8 +69,7 @@ If any are missing, push back to the human first. Do not delegate vague work.
 
 ### 1. Generate a task ID
 
-8-character lowercase hex. Used to correlate the NATS delegation event, DDB
-record, and S3 narrative.
+8-character lowercase hex. Used to correlate the NATS delegation event, DDB record, and S3 narrative.
 
 ```bash
 TASK_ID=$(python3 -c "import secrets; print(secrets.token_hex(4))")
@@ -103,27 +95,17 @@ fleetmind task create \
   --json
 ```
 
-`fleetmind task create` automatically publishes the `delegation` event to
-`fleetmind.delegation.<worker_id>` when NATS is configured. No separate
-publish step is needed.
+`fleetmind task create` automatically publishes the `delegation` event to `fleetmind.delegation.<worker_id>` when NATS is configured. No separate publish step is needed.
 
-If `task create` exits non-zero with "already exists": regenerate the task ID.
-If it fails with a network/permissions error: log the failure in `memory/active-delegations.md` (field:
-`ledger_write_failed: <reason>`) and retry on the next heartbeat.
+If `task create` exits non-zero with "already exists": regenerate the task ID. If it fails with a network/permissions error: log the failure in `memory/active-delegations.md` (field: `ledger_write_failed: <reason>`) and retry on the next heartbeat.
 
-**Amending task metadata after delegation:** if scope changes post-delegation
-(worker pushback, PM clarification, reassignment), use `fleetmind task update`
-instead of abandoning and recreating - update history is preserved.
+**Amending task metadata after delegation:** if scope changes post-delegation (worker pushback, PM clarification, reassignment), use `fleetmind task update` instead of abandoning and recreating - update history is preserved.
 
 ```bash
 fleetmind task update --task-id <hex> --dod "..." --reason "scope cut after worker review"
 ```
 
-Also accepts `--worker` (reassign) and `--thread` (fix a wrong URL); always pass
-`--reason`. Immutable fields (rejected by `task update`): `task_id`, `status`,
-`created_at`, `created_by`, and all transition timestamps (`accepted_at`,
-`shipped_at`, etc.). Terminal tasks (`merged`, `abandoned`) are frozen - update
-will exit 2 with `TaskConditionError`.
+Also accepts `--worker` (reassign) and `--thread` (fix a wrong URL); always pass `--reason`. Immutable fields (rejected by `task update`): `task_id`, `status`, `created_at`, `created_by`, and all transition timestamps (`accepted_at`, `shipped_at`, etc.). Terminal tasks (`merged`, `abandoned`) are frozen - update will exit 2 with `TaskConditionError`.
 
 **Picking the project slug:**
 - A project is a durable initiative, not a single task. "website-rewrite" is a
@@ -134,24 +116,17 @@ will exit 2 with `TaskConditionError`.
   ```
 - Slug format: lowercase, hyphen-separated, ≤30 chars.
 
-**The `task_s3_key` is deterministic** - computed from the project slug, today's
-UTC date, and task ID. It is stored in DDB at write time. The worker writes to
-that exact path when done; the PM bot can fetch it later without listing S3.
+**The `task_s3_key` is deterministic** - computed from the project slug, today's UTC date, and task ID. It is stored in DDB at write time. The worker writes to that exact path when done; the PM bot can fetch it later without listing S3.
 
 ### 3. Delegation is sent via NATS
 
-`fleetmind task create` (step 2) handles the publish. The worker receives a
-NATS delegation event containing `task_id`, `description`, `definition_of_done`,
-`requestor`, and `tracker_link`. No Slack envelope is posted.
+`fleetmind task create` (step 2) handles the publish. The worker receives a NATS delegation event containing `task_id`, `description`, `definition_of_done`, `requestor`, and `tracker_link`. No Slack envelope is posted.
 
-The worker opens a Slack thread directly with the human requestor - the PM
-bot is not involved in that thread unless the human escalates.
+The worker opens a Slack thread directly with the human requestor - the PM bot is not involved in that thread unless the human escalates.
 
 ### 4. Update the audit log
 
-Append a block to `memory/active-delegations.md` under `## Active`. See
-[references/active-delegations-format.md](references/active-delegations-format.md)
-for the full template.
+Append a block to `memory/active-delegations.md` under `## Active`. See [references/active-delegations-format.md](references/active-delegations-format.md) for the full template.
 
 Minimum fields:
 - `task_id`, `created` (ISO timestamp), `deadline` (created + 10 min)
@@ -172,20 +147,11 @@ Events arrive via the PM subscriber started in § Session boot.
 | `DDB_TERMINAL_WAKE: TASK#<task_id>` | See § DDB Terminal Wake (fallback path) |
 | Heartbeat finds expired deadline | See § Escalation |
 
-**Semantic terminal signals**: ✅ and ⛔ are canonical examples, not literal
-triggers. Read the meaning ("done", "merged", "deployed" = ship; "blocked",
-"stuck", "need X" = blocked). When ambiguous, treat as terminal - missing a
-real ship is worse than a redundant noop.
+**Semantic terminal signals**: ✅ and ⛔ are canonical examples, not literal triggers. Read the meaning ("done", "merged", "deployed" = ship; "blocked", "stuck", "need X" = blocked). When ambiguous, treat as terminal - missing a real ship is worse than a redundant noop.
 
 ### 5a. DDB Terminal Wake
 
-*Idempotency contract: DDB is authoritative.* The audit log is a cache of DDB
-state; when they disagree, DDB wins. The previous pattern - "check audit log
-first; short-circuit if the task is in `## Closed`" - silently dropped
-legitimate re-ships (a re-ship after close, a blocked→shipped retry, or a
-scope-amendment cycle arrives after the task was already closed). The correct
-order is: read DDB first, derive the decision from DDB timestamps, use the
-audit log only for presentation and to find the matching block.
+*Idempotency contract: DDB is authoritative.* The audit log is a cache of DDB state; when they disagree, DDB wins. The previous pattern - "check audit log first; short-circuit if the task is in `## Closed`" - silently dropped legitimate re-ships (a re-ship after close, a blocked→shipped retry, or a scope-amendment cycle arrives after the task was already closed). The correct order is: read DDB first, derive the decision from DDB timestamps, use the audit log only for presentation and to find the matching block.
 
 When `DDB_TERMINAL_WAKE: TASK#<task_id>` arrives:
 
@@ -205,9 +171,7 @@ When `DDB_TERMINAL_WAKE: TASK#<task_id>` arrives:
    TERMINAL_AT=$(printf '%s\n' "$SHIPPED_AT" "$BLOCKED_AT" "$MERGED_AT" "$ABANDONED_AT" \
      | grep -v '^$' | sort | tail -1)
    ```
-   If `fleetmind task get` fails (not found or network error): fall back to
-   audit-log idempotency WITH A WARNING - log the degradation, surface for
-   human investigation, do not guess.
+   If `fleetmind task get` fails (not found or network error): fall back to audit-log idempotency WITH A WARNING - log the degradation, surface for human investigation, do not guess.
 
 3. **Compare `last-handled-terminal-at` from the audit log block against the
    DDB terminal timestamp:**
@@ -248,8 +212,7 @@ When `DDB_TERMINAL_WAKE: TASK#<task_id>` arrives:
      exit 0
    fi
    ```
-   *(Defense-in-depth: the `last-handled-terminal-at` comparison in step 3 is
-   the primary gate; this is a belt-and-suspenders backstop.)*
+   *(Defense-in-depth: the `last-handled-terminal-at` comparison in step 3 is the primary gate; this is a belt-and-suspenders backstop.)*
 
 6. **Read the narrative** (for context in the closeout summary):
    ```bash
@@ -268,8 +231,7 @@ When `DDB_TERMINAL_WAKE: TASK#<task_id>` arrives:
 
 ### 6. Stale task escalation (heartbeat)
 
-Every heartbeat: query DDB directly for live active-delegation state.
-`active-delegations.md` is the audit log, not the source of truth.
+Every heartbeat: query DDB directly for live active-delegation state. `active-delegations.md` is the audit log, not the source of truth.
 
 ```bash
 # Tasks past their deadline
@@ -284,16 +246,13 @@ Every item returned is already past its deadline - escalate each one.
 
 For each stale task: post in the planning thread, update audit log to `escalated`.
 
-**DDB write retry on heartbeat**: if `ledger_write_failed` is set in the audit
-log for a task, retry `fleetmind task create` on this heartbeat.
+**DDB write retry on heartbeat**: if `ledger_write_failed` is set in the audit log for a task, retry `fleetmind task create` on this heartbeat.
 
 Quiet otherwise. No "everything's fine" pings.
 
 ### 6.5. When a worker is blocked but the cause can be resolved
 
-`blocked` is NOT terminal-final - it's a pause state that can resume. When a
-worker reports blocked (NATS block event, or DDB heartbeat sees `status=blocked`), assess whether the cause is something you (or a human in the planning
-thread) can resolve:
+`blocked` is NOT terminal-final - it's a pause state that can resume. When a worker reports blocked (NATS block event, or DDB heartbeat sees `status=blocked`), assess whether the cause is something you (or a human in the planning thread) can resolve:
 
 - *Auth gap, missing credential, missing dependency, infra glitch:* often
   fixable in minutes. Resolve it, then either:
@@ -307,8 +266,7 @@ thread) can resolve:
 - *Scope cut, missing requirement, design ambiguity:* not a transient blocker.
   Treat as terminal blocked; close the loop normally (Step 7).
 
-If you unblock, leave a note in the planning thread audit log explaining what
-changed, so the trail remains for human review.
+If you unblock, leave a note in the planning thread audit log explaining what changed, so the trail remains for human review.
 
 ### 7. Close the loop
 
@@ -353,32 +311,22 @@ On terminal status (shipped or blocked):
    Set `closed_at`. Update `last-handled-terminal-at` to the DDB terminal
    timestamp as the **last** mutation before moving the block to `## Closed`.
 
-**Closeout completion check (MANDATORY before reporting done):** verify each of
-steps 3-7 actually happened in this turn before finishing:
+**Closeout completion check (MANDATORY before reporting done):** verify each of steps 3-7 actually happened in this turn before finishing:
 
 - [ ] Threaded planning-channel post sent (got back a `messageId` from `message(action=send, ...)`).
 - [ ] `active-delegations.md` block has been *moved* (not just edited) from `## Active` to `## Closed` with `Closed at: <iso-8601-utc>`.
 - [ ] DDB status is now `merged` / `abandoned` (via `fleetmind task merge` / `fleetmind task abandon`), or explicitly skipped with reason.
 - [ ] `last-handled-terminal-at` is set to the DDB terminal timestamp in the now-closed block.
 
-If any box is unchecked, do that step now. Posting the planning summary and
-stopping is not closing the loop - it leaves the block in `## Active` and the
-heartbeat watchdog firing forever.
+If any box is unchecked, do that step now. Posting the planning summary and stopping is not closing the loop - it leaves the block in `## Active` and the heartbeat watchdog firing forever.
 
-*Spawn task brief:* Use the canonical template from
-[references/sub-agent-task-templates.md](references/sub-agent-task-templates.md).
-Match the variant to the trigger (a=close-the-loop, b=In-Review, c=signoff,
-d=blocked-handler). Copy verbatim; fill placeholders.
+*Spawn task brief:* Use the canonical template from [references/sub-agent-task-templates.md](references/sub-agent-task-templates.md). Match the variant to the trigger (a=close-the-loop, b=In-Review, c=signoff, d=blocked-handler). Copy verbatim; fill placeholders.
 
-*Self-check before calling `sessions_spawn`:* search the `task` string for the
-literal substring `NO_REPLY`. If it's not there, the template is wrong - abort
-and add it.
+*Self-check before calling `sessions_spawn`:* search the `task` string for the literal substring `NO_REPLY`. If it's not there, the template is wrong - abort and add it.
 
 ### 7a. Sub-agent discipline (NO_REPLY-final-turn)
 
-*This rule is non-negotiable. It applies to **every** sub-agent spawned from
-this skill - close-the-loop handlers, In-Review handoffs, signoff closers,
-blocked-handlers, or any future variant.*
+*This rule is non-negotiable. It applies to **every** sub-agent spawned from this skill - close-the-loop handlers, In-Review handoffs, signoff closers, blocked-handlers, or any future variant.*
 
 > **Hard rule for every spawned sub-agent:** Must end its final turn with the
 > literal token `NO_REPLY` and nothing else. Slack writes are limited to
@@ -390,21 +338,11 @@ blocked-handlers, or any future variant.*
 > recurred multiple times across real delegations; the `NO_REPLY` discipline and
 > literal templates exist specifically to prevent it.
 
-Every sub-agent `task` block in this skill must contain an `## Output
-discipline (READ THIS LAST, OBEY IT FIRST)` section embedding this rule
-verbatim, naming its one allowed Slack write with target + replyTo, and
-ending with the literal `NO_REPLY` requirement - see the fenced blocks in
-[references/sub-agent-task-templates.md](references/sub-agent-task-templates.md)
-for the exact wording to copy. When adding a new variant there, follow its
-§ Maintenance checklist.
+Every sub-agent `task` block in this skill must contain an `## Output discipline (READ THIS LAST, OBEY IT FIRST)` section embedding this rule verbatim, naming its one allowed Slack write with target + replyTo, and ending with the literal `NO_REPLY` requirement - see the fenced blocks in [references/sub-agent-task-templates.md](references/sub-agent-task-templates.md) for the exact wording to copy. When adding a new variant there, follow its § Maintenance checklist.
 
 ## Signoff Watchdog (heartbeat-driven)
 
-Tasks with `lifecycle: requires-human-signoff` sit at DDB `status: shipped`
-until a human approves. Without an explicit watchdog, they stall silently for
-hours - the bot ships, the work is done, but the planning thread never gets
-the final close because no human noticed. The watchdog surfaces them after a
-4h grace period, with a per-task cooldown to avoid spam.
+Tasks with `lifecycle: requires-human-signoff` sit at DDB `status: shipped` until a human approves. Without an explicit watchdog, they stall silently for hours - the bot ships, the work is done, but the planning thread never gets the final close because no human noticed. The watchdog surfaces them after a 4h grace period, with a per-task cooldown to avoid spam.
 
 On each heartbeat, query for overdue in-review tasks:
 
@@ -416,8 +354,7 @@ fleetmind query shipped \
   --json
 ```
 
-For each task returned, post **one** line in the planning channel (top-level,
-NOT in a thread):
+For each task returned, post **one** line in the planning channel (top-level, NOT in a thread):
 
 ```
 Reminder: TASK#<task_id> (<one-liner from definition_of_done>) awaiting sign-off for <Nh>. <link to delegation thread>
@@ -437,10 +374,7 @@ fleetmind task set-nag --task-id "${TASK_ID}"
 
 ## Reconciliation (boot + heartbeat)
 
-DDB drifts from the audit log when sessions die mid-write, when wake signals
-land twice, when a re-ship slips past idempotency, or when a parallel session
-edits the audit log. Reconciliation is a self-healing pass that runs *on session
-boot AND on every heartbeat*.
+DDB drifts from the audit log when sessions die mid-write, when wake signals land twice, when a re-ship slips past idempotency, or when a parallel session edits the audit log. Reconciliation is a self-healing pass that runs *on session boot AND on every heartbeat*.
 
 ### 1. Query DDB for all live and recently-terminal tasks
 
@@ -478,8 +412,7 @@ Gate the post on `drift_count > 0`. If nothing drifted, the heartbeat is silent.
 Reconciled <N> drifted task(s): <comma-separated TASK#ids>.
 ```
 
-Post in the planning channel top-level. Never post per-task narrative - one
-line, all ids. Adoption events count as drift; pure noops do not.
+Post in the planning channel top-level. Never post per-task narrative - one line, all ids. Adoption events count as drift; pure noops do not.
 
 ### 4. Drift banner (silent unless divergence)
 
@@ -513,8 +446,7 @@ fleetmind query merged --limit 20 --json
 fleetmind narrative get --task-id <task_id>
 ```
 
-Scan the `## Learned` sections for patterns relevant to the new task. Name
-specifics in the new delegation when they bear on the work.
+Scan the `## Learned` sections for patterns relevant to the new task. Name specifics in the new delegation when they bear on the work.
 
 ## Abandoning a task (PM bot only)
 
@@ -522,8 +454,7 @@ specifics in the new delegation when they bear on the work.
 fleetmind task abandon --task-id "${TASK_ID}" --project "${PROJECT}"
 ```
 
-Worker bots cannot abandon tasks - they ping the PM bot and the PM bot calls
-`fleetmind task abandon`.
+Worker bots cannot abandon tasks - they ping the PM bot and the PM bot calls `fleetmind task abandon`.
 
 ## Reference files
 
@@ -542,24 +473,11 @@ Load these only when the task you're handling needs them:
   full step-by-step handler for worker self-start notices (§ Inbound Self-Start
   Notices below only has the summary + pointer).
 
-- *[references/CHANGELOG.md](references/CHANGELOG.md)* - full version history
-  for this skill.
-
 ## Inbound Self-Start Notices (from worker bots)
 
-Workers running `worker-self-start` may self-start when a human directly asks
-them to pick up a discrete piece of work, then post a self-start notice
-(containing `"— self-start notice"`, a `Task ID:`, and a `Tracker:` field -
-`"none"` is valid) in this planning channel. No NATS delegation event is
-published for these - the worker is already running.
+Workers running `worker-self-start` may self-start when a human directly asks them to pick up a discrete piece of work, then post a self-start notice (containing `"— self-start notice"`, a `Task ID:`, and a `Tracker:` field - `"none"` is valid) in this planning channel. No NATS delegation event is published for these - the worker is already running.
 
-Run the handler inline (no sub-agent): verify legitimacy, react
-`:white_check_mark:`, resolve the project slug (ask rather than guess),
-check/recover the DDB row idempotently, then log it in
-`memory/active-delegations.md` marked `[self-start]`. Full step-by-step in
-[references/inbound-self-start.md](references/inbound-self-start.md) - this is
-a rare path; do not deduplicate it against `worker-self-start`'s own copy
-(independent skill resolution makes that unsafe).
+Run the handler inline (no sub-agent): verify legitimacy, react `:white_check_mark:`, resolve the project slug (ask rather than guess), check/recover the DDB row idempotently, then log it in `memory/active-delegations.md` marked `[self-start]`. Full step-by-step in [references/inbound-self-start.md](references/inbound-self-start.md) - this is a rare path; do not deduplicate it against `worker-self-start`'s own copy (independent skill resolution makes that unsafe).
 
 ---
 
@@ -579,6 +497,4 @@ a rare path; do not deduplicate it against `worker-self-start`'s own copy
 
 ## Changelog
 
-Full version history moved to
-[references/CHANGELOG.md](references/CHANGELOG.md). Latest: **1.5.0
-(2026-07-15)** - close-the-loop routing by task origin (#ea73f9e4).
+Latest: **1.5.0 (2026-07-15)** - close-the-loop routing by task origin (#ea73f9e4).

@@ -1,16 +1,11 @@
 # Inbound Self-Start Notices (from worker bots) — full handler
 
-Workers running `worker-self-start` may self-start when a human directly asks
-them to pick up a discrete piece of work, then post a self-start notice in
-this planning channel. No specific tracker is required.
+Workers running `worker-self-start` may self-start when a human directly asks them to pick up a discrete piece of work, then post a self-start notice in this planning channel. No specific tracker is required.
 
 > NATS model: no separate delegation channel. Self-start notices arrive as
 > Slack messages here.
 
-**Recognising a self-start notice:** Slack message from a worker bot
-containing `"— self-start notice"` with a `Task ID:` and `Tracker:` field.
-(The `Tracker:` field may be `"none"` if no ticket was referenced — this is
-valid.)
+**Recognising a self-start notice:** Slack message from a worker bot containing `"— self-start notice"` with a `Task ID:` and `Tracker:` field. (The `Tracker:` field may be `"none"` if no ticket was referenced — this is valid.)
 
 **Handler — run inline (no sub-agent needed):**
 

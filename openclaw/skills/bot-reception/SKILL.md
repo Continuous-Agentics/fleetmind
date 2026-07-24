@@ -10,8 +10,7 @@ description: "Worker protocol for NATS delegation receipt: session boot, DDB hea
 
 ### Step 1: Start the NATS subscriber (mandatory)
 
-Before accepting any work, ensure the NATS subscriber is running. Check once
-per session boot; do not re-start if already running.
+Before accepting any work, ensure the NATS subscriber is running. Check once per session boot; do not re-start if already running.
 
 ```bash
 systemctl is-active fleetmind-nats-worker.service 2>/dev/null \
@@ -31,16 +30,13 @@ fleetmind nats subscribe --mode worker --worker-id "$AGENT_ID" --json \
     done
 ```
 
-The subscriber auto-acks the DDB row on receipt (`delegated → accepted`).
-No separate `fleetmind task ack` call is needed.
+The subscriber auto-acks the DDB row on receipt (`delegated → accepted`). No separate `fleetmind task ack` call is needed.
 
 ### Step 2: DDB write-health precheck (mandatory)
 
 Run after subscriber startup, before doing any work.
 
-Why: a worker with a broken DDB write path will receive delegations and
-silently fail to record `accepted`/`shipped`/`blocked`. A no-op precheck
-at boot turns the silent failure into a loud, explicit refusal.
+Why: a worker with a broken DDB write path will receive delegations and silently fail to record `accepted`/`shipped`/`blocked`. A no-op precheck at boot turns the silent failure into a loud, explicit refusal.
 
 ```bash
 ERR=$(fleetmind query pending --limit 1 --json 2>&1 >/dev/null)
@@ -87,16 +83,7 @@ The subscriber emits one JSON line per delegation event:
 
 ### Steps
 
-The first three steps below are **bookkeeping**. **Step 4 (post in Slack) is
-the first thing the human sees.** Do steps 1–3 in any order, but **step 4
-MUST land before you start any task work** — before reading files in the
-target repo, running `gh`, calling external APIs, or doing any LLM-visible
-reasoning about the work itself. The Slack post is how the human knows
-you're alive and on the task; without it, all subsequent activity is
-invisible until you ship, which feels like the bot died. If you find
-yourself about to call a tool whose purpose is to do the work (not to
-post in Slack, not to read DDB), and you haven't posted in step 4 yet,
-**stop and post first**.
+The first three steps below are **bookkeeping**. **Step 4 (post in Slack) is the first thing the human sees.** Do steps 1–3 in any order, but **step 4 MUST land before you start any task work** — before reading files in the target repo, running `gh`, calling external APIs, or doing any LLM-visible reasoning about the work itself. The Slack post is how the human knows you're alive and on the task; without it, all subsequent activity is invisible until you ship, which feels like the bot died. If you find yourself about to call a tool whose purpose is to do the work (not to post in Slack, not to read DDB), and you haven't posted in step 4 yet, **stop and post first**.
 
 1. **Write to `memory/task-queue.md`** under `## In Progress` — crash recovery:
    ```
@@ -113,20 +100,9 @@ post in Slack, not to read DDB), and you haven't posted in step 4 yet,
 
 4. **Post your picked-up announcement in YOUR home channel — BEFORE any task work.**
 
-   **Your home channel** is the Slack channel under your `channels:` block in
-   `fleet.yaml` (and renders into the channel-routing entry of your
-   `openclaw.json`). It is the channel YOU live in — separate from the PM
-   bot's channel where the human pinged. The subscriber may already have
-   posted an instant *"👋 Received delegation"* line there and routed your
-   wake into that fresh thread; check the active session's channel via your
-   slack tool. Your job is to reply IN THAT THREAD with the considered
-   picked-up message below. **Do not post in the PM's delegation thread —
-   that thread lives in the PM's channel and is the PM↔human conversation.**
-   Use the delegation_thread URL only as a back-link in your announcement so
-   the human can trace which conversation triggered this work.
+   **Your home channel** is the Slack channel under your `channels:` block in `fleet.yaml` (and renders into the channel-routing entry of your `openclaw.json`). It is the channel YOU live in — separate from the PM bot's channel where the human pinged. The subscriber may already have posted an instant *"👋 Received delegation"* line there and routed your wake into that fresh thread; check the active session's channel via your slack tool. Your job is to reply IN THAT THREAD with the considered picked-up message below. **Do not post in the PM's delegation thread — that thread lives in the PM's channel and is the PM↔human conversation.** Use the delegation_thread URL only as a back-link in your announcement so the human can trace which conversation triggered this work.
 
-   This is the message the human is waiting for in YOUR channel; do not skip
-   it, defer it, or parallelize it with the work itself.
+   This is the message the human is waiting for in YOUR channel; do not skip it, defer it, or parallelize it with the work itself.
 
    ```
    @<requestor> — picked up [<tracker_id>]: <title>
@@ -139,13 +115,9 @@ post in Slack, not to read DDB), and you haven't posted in step 4 yet,
    Let me know if anything needs clarification before I start.
    ```
 
-   Store the Slack thread `ts` in `memory/task-queue.md` (replace
-   `thread_ts: (pending)` with `thread_ts: <ts>`).
+   Store the Slack thread `ts` in `memory/task-queue.md` (replace `thread_ts: (pending)` with `thread_ts: <ts>`).
 
-   **You may now begin task work.** Steps 5+ below are the work itself.
-   All subsequent activity for this delegation (progress updates, the ship
-   announcement) threads under the SAME root in YOUR home channel — never
-   in the PM's delegation thread.
+   **You may now begin task work.** Steps 5+ below are the work itself. All subsequent activity for this delegation (progress updates, the ship announcement) threads under the SAME root in YOUR home channel — never in the PM's delegation thread.
 
 5. *(Optional)* Read prior task narratives for context:
    ```bash
@@ -175,8 +147,7 @@ fleetmind nats progress \
   --message "PR open at https://github.com/.../pull/42 — awaiting review"
 ```
 
-Also post a brief update in the requestor's Slack thread so they know
-where things stand. Keep it short — one or two sentences.
+Also post a brief update in the requestor's Slack thread so they know where things stand. Keep it short — one or two sentences.
 
 ---
 
@@ -184,13 +155,9 @@ where things stand. Keep it short — one or two sentences.
 
 ### Ship (S3 narrative first, then DDB update)
 
-**Critical ordering**: write S3 before DDB. The DDB update triggers the wake
-signal (DDB Streams → EventBridge Pipe → PM bot wake). Don't fire the signal
-before the narrative is readable.
+**Critical ordering**: write S3 before DDB. The DDB update triggers the wake signal (DDB Streams → EventBridge Pipe → PM bot wake). Don't fire the signal before the narrative is readable.
 
-Write the narrative first, then update DDB. Copy the exact templates from
-[references/narrative-template.md](references/narrative-template.md) - do not
-compose the frontmatter/section headers ad-hoc.
+Write the narrative first, then update DDB. Copy the exact templates from [references/narrative-template.md](references/narrative-template.md) - do not compose the frontmatter/section headers ad-hoc.
 
 ```bash
 fleetmind task ship \
@@ -199,14 +166,11 @@ fleetmind task ship \
   --project <project-slug>     # from the initial 'task get'; saves a GetItem round-trip
 ```
 
-If `fleetmind narrative put` exits with code 2 (S3 failure, local fallback):
-write the local fallback path to `memory/task-queue.md`, surface it as a
-follow-up, and do NOT proceed to the DDB update yet.
+If `fleetmind narrative put` exits with code 2 (S3 failure, local fallback): write the local fallback path to `memory/task-queue.md`, surface it as a follow-up, and do NOT proceed to the DDB update yet.
 
 ### Block (same ordering)
 
-Same S3-then-DDB ordering, using the block template (with `## Need`) from
-[references/narrative-template.md](references/narrative-template.md):
+Same S3-then-DDB ordering, using the block template (with `## Need`) from [references/narrative-template.md](references/narrative-template.md):
 
 ```bash
 fleetmind task block \
@@ -219,8 +183,7 @@ fleetmind task block \
 
 ## Unblock pattern
 
-If you've called `task block` and the blocking condition has since been resolved (transient auth gap
-fixed, missing dep installed, etc.), call `task unblock` to transition back to `accepted` and resume:
+If you've called `task block` and the blocking condition has since been resolved (transient auth gap fixed, missing dep installed, etc.), call `task unblock` to transition back to `accepted` and resume:
 
 ```bash
 fleetmind task unblock --task-id <hex> --worker <your-id> --reason "auth restored"
@@ -228,15 +191,13 @@ fleetmind task unblock --task-id <hex> --worker <your-id> --reason "auth restore
 
 Then proceed with the normal ship pattern (`narrative put` → `task ship`).
 
-If the DoD as written is ambiguous or impossible, you can request the PM update it via `task update`
-rather than blocking. Propose the revised wording in the delegation thread so the PM can run:
+If the DoD as written is ambiguous or impossible, you can request the PM update it via `task update` rather than blocking. Propose the revised wording in the delegation thread so the PM can run:
 
 ```bash
 fleetmind task update --task-id <hex> --dod "..." --reason "clarified after worker review"
 ```
 
-This avoids the overhead of abandoning and recreating the task when only the definition of done
-needs refinement.
+This avoids the overhead of abandoning and recreating the task when only the definition of done needs refinement.
 
 ---
 
@@ -252,9 +213,7 @@ Links: <PR / preview deploy / docs>
 What I didn't do: <scope cuts, gotchas, follow-ups>
 ```
 
-`fleetmind task ship` automatically publishes a `fleetmind.task.<id>.ship`
-NATS event — the PM bot receives it and closes out the DDB lifecycle.
-No separate reply to the PM bot is needed.
+`fleetmind task ship` automatically publishes a `fleetmind.task.<id>.ship` NATS event — the PM bot receives it and closes out the DDB lifecycle. No separate reply to the PM bot is needed.
 
 The "What I didn't do" line is mandatory.
 
@@ -269,8 +228,7 @@ Reason: <what's missing or wrong>
 Need: <what would unblock — info, decision, dep fix, etc.>
 ```
 
-`fleetmind task block` publishes `fleetmind.task.<id>.block` — the PM bot
-receives it automatically.
+`fleetmind task block` publishes `fleetmind.task.<id>.block` — the PM bot receives it automatically.
 
 ## After Completion
 
@@ -342,15 +300,9 @@ One reply only, no repeats, no workarounds.
 
 ## Informal-task ledger (direct human requests)
 
-Not all meaningful work arrives via a PM bot NATS delegation. A human asks
-you a direct question, you open a PR to fix something you noticed, you run a
-non-trivial debug session in a thread — without a TASK# row, the PM bot is blind
-to a real chunk of dev-channel activity.
+Not all meaningful work arrives via a PM bot NATS delegation. A human asks you a direct question, you open a PR to fix something you noticed, you run a non-trivial debug session in a thread — without a TASK# row, the PM bot is blind to a real chunk of dev-channel activity.
 
-**Rule:** any non-trivial work you do outside of a formal delegation still gets a
-TASK# row in DDB and an S3 narrative, with `lifecycle: informal`. The wake
-pipeline fires the same way; the PM bot handles informal-lifecycle terminal
-events the same as delegation terminals.
+**Rule:** any non-trivial work you do outside of a formal delegation still gets a TASK# row in DDB and an S3 narrative, with `lifecycle: informal`. The wake pipeline fires the same way; the PM bot handles informal-lifecycle terminal events the same as delegation terminals.
 
 ### What counts as "non-trivial"
 
@@ -366,8 +318,7 @@ events the same as delegation terminals.
 - Acknowledgements ("yes", "on it", "got it").
 - Reading and not acting.
 
-When ambiguous, err on the side of writing the row — the cost is microscopic;
-the cost of the PM bot being blind is real.
+When ambiguous, err on the side of writing the row — the cost is microscopic; the cost of the PM bot being blind is real.
 
 ### Creating an informal task row
 
@@ -401,29 +352,23 @@ Key differences from a standard delegation row:
   the work (optional for NATS-only fleets).
 - No tracker link by default.
 
-Generate the task ID at the moment work becomes meaningful (first commit, first
-infra write, first significant debug step — not at the start of every reply).
+Generate the task ID at the moment work becomes meaningful (first commit, first infra write, first significant debug step — not at the start of every reply).
 
 ### Completing an informal task
 
-Write the S3 narrative first (per § Ship pattern), then call `fleetmind task ship`.
-The DDB Streams wake fires the same way; the PM bot adopts the row into its audit
-log on next heartbeat via its reconciliation pass.
+Write the S3 narrative first (per § Ship pattern), then call `fleetmind task ship`. The DDB Streams wake fires the same way; the PM bot adopts the row into its audit log on next heartbeat via its reconciliation pass.
 
 ---
 
 ## ACP Session Heuristic
 
-**Inline (no ACP):** single-file edit, 1-2 tool calls, mostly mechanical.
-**Fork ACP session:** 3+ files, iterative work, test-driven loops, large refactors.
+**Inline (no ACP):** single-file edit, 1-2 tool calls, mostly mechanical. **Fork ACP session:** 3+ files, iterative work, test-driven loops, large refactors.
 
 ---
 
 ## Update task-queue.md
 
-On receipt: add to `## In Progress` before starting any work (crash-recovery record).
-Update `thread_ts` once the Slack thread with the requestor is opened.
-On completion/blocked: move to `## Recently Shipped` or `## Blocked` with outcome note.
+On receipt: add to `## In Progress` before starting any work (crash-recovery record). Update `thread_ts` once the Slack thread with the requestor is opened. On completion/blocked: move to `## Recently Shipped` or `## Blocked` with outcome note.
 
 ```
 ## In Progress
@@ -443,11 +388,6 @@ Load these only when the task you're handling needs them:
   exact S3 narrative frontmatter/section templates for ship and block events.
   **Always copy from here; never compose the narrative headers ad-hoc.**
 
-- *[references/CHANGELOG.md](references/CHANGELOG.md)* - full version history
-  for this skill.
-
 ## Changelog
 
-Full version history moved to
-[references/CHANGELOG.md](references/CHANGELOG.md). Latest: **1.6.0
-(2026-07-09)** - tracker-agnostic self-start trigger (#241).
+Latest: **1.6.0 (2026-07-09)** - tracker-agnostic self-start trigger (#241).
