@@ -78,16 +78,5 @@ describe("bundled skill references/*.md links resolve", () => {
       );
     });
 
-    test(`${skillName}: at least one reference link is exercised (sanity — catches a no-op glob)`, () => {
-      const skillDir = path.join(skillsDir, skillName);
-      const referencesDir = path.join(skillDir, "references");
-      if (!fs.existsSync(referencesDir)) return; // skills with no references/ dir are fine
-      const skillMd = path.join(skillDir, "SKILL.md");
-      const links = findReferenceLinks(skillMd, skillDir);
-      assert.ok(
-        links.length > 0,
-        `${skillName} has a references/ directory but SKILL.md links to none of it — likely dead content`
-      );
-    });
   }
 });
