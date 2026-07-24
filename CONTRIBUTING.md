@@ -37,11 +37,10 @@ npm test
 
 ## Compatibility Contract
 
-FleetMind spans three repos:
+FleetMind uses this repository plus a template companion:
 
-- `fleetmind` — CLI, renderer, runtime helpers, bundled skills
+- `fleetmind` — CLI, renderer, runtime helpers, bundled skills, and `infra/terraform` AWS infrastructure module
 - `fleetmind-template` — starter repo and operator docs
-- `terraform-aws-fleetmind` — AWS infrastructure module
 
 If a change affects generated Terraform variables, secret names, bootstrap behavior, push/pull-self, package publishing, or operator docs, update `docs/COMPATIBILITY.md` and coordinate companion PRs in the other repos.
 

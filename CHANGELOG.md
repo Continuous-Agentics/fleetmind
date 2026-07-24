@@ -8,6 +8,7 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ### Changed
 
+- **Consolidate the AWS infrastructure module under `infra/terraform/`.** Mechanically imports `terraform-aws-fleetmind` v1.1.9 without its old Git graph; historical standalone releases remain available.
 - **Remove `terraform workspace` dependency from `fleetmind onboard`.** Step 8 no longer runs `terraform workspace select`/`terraform workspace new`; each fleet now gets an explicit per-fleet backend state key (`fleets/<fleet-name>/terraform.tfstate`) instead of a bare `terraform.tfstate` paired with a CLI workspace. This follows Terraform best practice — fleet-specific state is represented by the backend `key`, not a workspace side channel that's easy to leave on the wrong selection. Existing fleets on CLI workspaces keep working unmodified; see [`terraform-aws-fleetmind`'s migration guide](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/blob/main/docs/MODULE-TROUBLESHOOTING.md#migrating-from-cli-workspaces-to-explicit-backend-keys) to move an existing dogfood fleet's state to an explicit key when convenient. ([#255](https://github.com/Continuous-Agentics/fleetmind/issues/255))
 
 ## [1.0.1] — 2026-07-24
