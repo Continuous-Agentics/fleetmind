@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import chalk from "chalk";
 import { loadFleet } from "../../config/loader.js";
+import { standardWorkspaceBase } from "../../core/model.js";
 import { log } from "../../utils/log.js";
 
 export function registerStatus(program: Command): void {
@@ -37,7 +38,7 @@ Examples:
         console.log("  " + "─".repeat(76));
 
         for (const agent of agents.list) {
-          const workspace = path.join(fleet.targetForAgent(agent).workspace_base, `workspace-${agent.id}`);
+          const workspace = path.join(standardWorkspaceBase(fleet.targetForAgent(agent)), agent.id);
           const wsOk = fs.existsSync(workspace);
           const wsStatus = wsOk ? chalk.green("✓") : chalk.red("✗");
           const role = agent.orchestrator

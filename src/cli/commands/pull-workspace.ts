@@ -21,6 +21,7 @@ import type { Command } from "commander";
 import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { SSMClient, SendCommandCommand, GetCommandInvocationCommand } from "@aws-sdk/client-ssm";
 import { loadFleet } from "../../config/loader.js";
+import { standardWorkspaceBase } from "../../core/model.js";
 import { log } from "../../utils/log.js";
 
 const DEFAULT_INCLUDE = [
@@ -154,7 +155,7 @@ export async function runPullWorkspace(opts: PullWorkspaceOptions): Promise<void
       continue;
     }
     const target = fleet.targetForAgent(agent);
-    const workspaceDir = path.join(target.workspace_base, agentId);
+    const workspaceDir = path.join(standardWorkspaceBase(target), agentId);
     const tmpTarPath = `/tmp/fleetmind-pull-workspace-${agentId}.tar.gz`;
     const s3Key = `deploy-staging/pull/${agentId}/workspace.tar.gz`;
 

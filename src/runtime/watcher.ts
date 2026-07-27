@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Fleet, AgentConfig } from "../config/schema.js";
+import { standardWorkspaceBase } from "../core/model.js";
 import { log } from "../utils/log.js";
 
 export interface SkillUpdate {
@@ -64,10 +65,7 @@ export class SkillsWatcher {
   getInstalledVersions(agentId: string): Record<string, string> {
     const agent = this.fleet.getAgent(agentId);
     if (!agent) return {};
-    const workspace = path.join(
-      this.fleet.targetForAgent(agent).workspace_base,
-      `workspace-${agentId}`
-    );
+    const workspace = path.join(standardWorkspaceBase(this.fleet.targetForAgent(agent)), agentId);
     const skillsDir = path.join(workspace, "skills");
     if (!fs.existsSync(skillsDir)) return {};
 
@@ -125,10 +123,7 @@ export class SkillsWatcher {
       return false;
     }
 
-    const workspace = path.join(
-      this.fleet.targetForAgent(agent).workspace_base,
-      `workspace-${agentId}`
-    );
+    const workspace = path.join(standardWorkspaceBase(this.fleet.targetForAgent(agent)), agentId);
     const dest = path.join(workspace, "skills", skillName);
     const src = this.findSkillSource(skillName);
 

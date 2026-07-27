@@ -197,14 +197,16 @@ export async function provisionAgent(
   dryRun: boolean,
   /** Local base directory for rendered output. Defaults to process.cwd().
    *  Workspace files are written to <localBase>/rendered/workspaces/<agent_id>/.
-   *  workspace_base from fleet config is the EC2-side path; it is NOT used as a
+   *  The on-host standard workspace base (see ../core/model.ts's
+   *  standardWorkspaceBase) is the remote-side path; it is NOT used as a
    *  local mkdir target. */
   localBase: string = process.cwd()
 ): Promise<void> {
   // Local render target: ./rendered/workspaces/<agent_id>/ — consistent with
   // openclaw_json and terraform_vars which both go to ./rendered/.
-  // workspace_base remains the EC2-side path (consumed by user-data and the
-  // future deploy transport); it must NOT be used as a local mkdir target.
+  // The standard workspace base remains the remote-side path (consumed by
+  // user-data and the deploy transport); it must NOT be used as a local
+  // mkdir target.
   const workspace = path.join(localBase, "rendered", "workspaces", agent.id);
 
   if (!dryRun) fs.mkdirSync(workspace, { recursive: true });

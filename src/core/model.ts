@@ -8,6 +8,8 @@
  * here, loudly, at load time rather than deep in a deploy.
  */
 
+import os from "node:os";
+import path from "node:path";
 import type { FleetFile, AgentConfig, TargetConfig } from "../config/schema.js";
 import { NatsConfigSchema } from "../config/schema.js";
 import { TargetIdId, type TargetId } from "./identifiers.js";
@@ -15,6 +17,49 @@ import { TargetIdId, type TargetId } from "./identifiers.js";
 /** A target config with its (branded) map key attached. (Intersection because
  *  TargetConfig is a discriminated union.) */
 export type ResolvedTarget = TargetConfig & { id: TargetId };
+
+/**
+ * The standard, fixed OS-account home for a target. There is no operator
+ * knob for this — every target uses the dedicated `openclaw` account's home
+ * (matching the `OPENCLAW_USER`/`OPENCLAW_HOME` bootstrap convention):
+ *
+ *   - `local`           → `os.homedir()` of the machine running `fleetmind up`
+ *     (the operator's own account is the "openclaw" account for local/dev boxes).
+ *   - `ssh` / `aws-ssm`  → `/home/openclaw` (Linux) or `/Users/openclaw` (macOS),
+ *     selected by `target.os`. This is intentionally not derived from
+ *     `ssh.user`/`aws.runtime_user`: those only select which account runs the
+ *     systemd/launchd services, not where the dedicated `openclaw` account's
+ *     HOME lives.
+ */
+export function standardHomeDir(target: ResolvedTarget): string {
+  if (target.provider === "local") {
+    return os.homedir();
+  }
+  return target.os === "macos" ? "/Users/openclaw" : "/home/openclaw";
+}
+
+/** The fixed `openclaw` OS-account home on a Linux (AWS) host —
+ *  `/home/openclaw`. Used by bot-side code (e.g. `pull-self`'s legacy
+ *  `/etc/fleetmind/agent.env` path) that runs directly on an AWS host and
+ *  therefore already knows its target is Linux, without needing a resolved
+ *  `Fleet`/`ResolvedTarget` in hand. */
+export const STANDARD_AWS_HOME = "/home/openclaw";
+
+/** The fixed per-agent workspace root on a Linux (AWS) host:
+ *  `/home/openclaw/.openclaw/workspace`. */
+export const STANDARD_AWS_WORKSPACE_BASE = `${STANDARD_AWS_HOME}/.openclaw/workspace`;
+
+/**
+ * The fixed, non-configurable per-agent workspace root for a target:
+ * `<standard-home>/.openclaw/workspace`. FleetMind used to let operators
+ * override this via `targets.<id>.workspace_base` in fleet.yaml; that knob
+ * is gone — every target now uses the same standard OpenClaw HOME contract
+ * `up.ts`'s local targets already established, with each agent's workspace
+ * living at `<workspaceBase>/<agent_id>`.
+ */
+export function standardWorkspaceBase(target: ResolvedTarget): string {
+  return path.join(standardHomeDir(target), ".openclaw", "workspace");
+}
 
 /** Fleet config plus resolved accessors. The rest of the codebase consumes
  *  this, not the raw wire object. (Intersection rather than `interface extends`

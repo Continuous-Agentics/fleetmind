@@ -7,6 +7,7 @@ import path from "node:path";
 import { stringify as yamlStringify } from "yaml";
 import type { Fleet, AgentConfig } from "../config/schema.js";
 import { slackChannel } from "../core/channels.js";
+import { standardWorkspaceBase } from "../core/model.js";
 import { modelProvider } from "../core/model-provider.js";
 
 /** An OpenClaw model config object. `fallbacks` is omitted when empty so strict
@@ -108,8 +109,8 @@ export function renderAgentOpenClawJson(
   const slack = slackChannel(agent);
 
   // Agent list — single entry for this agent only.
-  // Workspace base comes from the agent's resolved runtime target.
-  const agentWorkspaceBase = fleet.targetForAgent(agent).workspace_base;
+  // Workspace base is the fixed standard path for the agent's resolved runtime target.
+  const agentWorkspaceBase = standardWorkspaceBase(fleet.targetForAgent(agent));
   const workspace = `${agentWorkspaceBase}/${agent.id}`;
   const agentDir = `${agentWorkspaceBase}/agents/${agent.id}/agent`;
   const agentListEntry = {
@@ -355,7 +356,7 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
   // Agent list
   const agentList = hostAgents.map((agent) => {
     const model = agent.model ?? defaults.model;
-    const agentWorkspaceBase = fleet.targetForAgent(agent).workspace_base;
+    const agentWorkspaceBase = standardWorkspaceBase(fleet.targetForAgent(agent));
     const workspace = `${agentWorkspaceBase}/${agent.id}`;
     const agentDir = `${agentWorkspaceBase}/agents/${agent.id}/agent`;
     return {

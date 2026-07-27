@@ -4,7 +4,8 @@
  * Covers resolveLocalTarget's guards and an end-to-end --no-daemon run that
  * stages config + secrets + workspaces to a temp OpenClaw home, asserting the
  * key invariants: secrets stay as ${VAR} in openclaw.json (values only in a
- * 0600 .env), and each agent's workspace is placed under workspace_base.
+ * 0600 .env), and each agent's workspace is placed under the fixed standard
+ * workspace path (~/.openclaw/workspace/<agent_id> — not operator-configurable).
  */
 
 import assert from "node:assert/strict";
@@ -30,8 +31,8 @@ function fleetWith(targets: Record<string, unknown>, defaultsTarget?: string) {
   );
 }
 
-const localTarget = { provider: "local", os: "macos", service_manager: "launchd", workspace_base: "/tmp/x" };
-const awsTarget = { provider: "aws-ssm", os: "linux", service_manager: "systemd", workspace_base: "/opt/x", aws: { region: "us-west-2" } };
+const localTarget = { provider: "local", os: "macos", service_manager: "launchd" };
+const awsTarget = { provider: "aws-ssm", os: "linux", service_manager: "systemd", aws: { region: "us-west-2" } };
 
 describe("resolveLocalTarget", () => {
   test("returns the single local target", () => {
@@ -53,12 +54,15 @@ describe("resolveLocalTarget", () => {
 describe("runUp --no-daemon (staging)", () => {
   let tmp: string;
   let saved: Record<string, string | undefined>;
-  const vars = ["SOLO_BOT_TOKEN", "SOLO_APP_TOKEN", "ANTHROPIC_API_KEY"];
+  const vars = ["SOLO_BOT_TOKEN", "SOLO_APP_TOKEN", "ANTHROPIC_API_KEY", "HOME"];
 
   beforeEach(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "fm-up-test-"));
     saved = {};
     for (const v of vars) { saved[v] = process.env[v]; process.env[v] = `val-${v}`; }
+    // The standard workspace path is derived from os.homedir(), which reads
+    // $HOME — point it at the temp dir so we can assert against a known path.
+    process.env.HOME = tmp;
   });
   afterEach(() => {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -66,7 +70,7 @@ describe("runUp --no-daemon (staging)", () => {
   });
 
   test("stages openclaw.json (placeholders intact), 0600 .env, and the workspace", async () => {
-    const ws = path.join(tmp, "ws");
+    const ws = path.join(tmp, ".openclaw", "workspace");
     const ochome = path.join(tmp, "ochome");
     const fleetPath = path.join(tmp, "fleet.yaml");
     fs.writeFileSync(fleetPath, `
@@ -77,7 +81,6 @@ targets:
     provider: local
     os: macos
     service_manager: launchd
-    workspace_base: ${ws}
 agents:
   defaults:
     target: box
@@ -97,7 +100,8 @@ agents:
 
     await runUp({ fleet: fleetPath, dryRun: false, daemon: false, openclawHome: ochome });
 
-    // openclaw.json: workspace points under workspace_base; secrets stay as ${VAR}.
+    // openclaw.json: workspace points under the fixed standard workspace
+    // base (~/.openclaw/workspace); secrets stay as ${VAR}.
     const cfg = JSON.parse(fs.readFileSync(path.join(ochome, "openclaw.json"), "utf-8"));
     assert.equal(cfg.agents.list[0].workspace, path.join(ws, "solo"));
     assert.equal(cfg.channels.slack.accounts.solo.botToken, "${SOLO_BOT_TOKEN}");
@@ -109,7 +113,7 @@ agents:
     assert.match(envBody, /SOLO_BOT_TOKEN=val-SOLO_BOT_TOKEN/);
     assert.match(envBody, /ANTHROPIC_API_KEY=val-ANTHROPIC_API_KEY/);
 
-    // workspace placed under workspace_base/<agent>.
+    // workspace placed under the fixed standard workspace base/<agent>.
     assert.ok(fs.existsSync(path.join(ws, "solo", "SOUL.md")));
   });
 });

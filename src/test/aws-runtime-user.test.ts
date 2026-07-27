@@ -11,7 +11,6 @@ describe("AWS runtime user", () => {
       targets: {
         host: {
           provider: "aws-ssm",
-          workspace_base: "/home/openclaw/.openclaw/workspace",
           aws: { region: "us-west-2" },
         },
       },
@@ -28,7 +27,6 @@ describe("AWS runtime user", () => {
       targets: {
         host: {
           provider: "aws-ssm",
-          workspace_base: "/home/openclaw/.openclaw/workspace",
           aws: { region: "us-west-2", runtime_user: "ec2-user" },
         },
       },
@@ -47,7 +45,6 @@ describe("AWS runtime user", () => {
       targets: {
         host: {
           provider: "aws-ssm",
-          workspace_base: "/home/openclaw/.openclaw/workspace",
           aws: { region: "us-west-2", runtime_user: "openclaw;whoami" },
         },
       },

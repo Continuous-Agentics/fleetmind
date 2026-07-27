@@ -25,6 +25,7 @@ import {
 
 import type { ManifestFile, DeployManifest } from "./push-fleet.js";
 import { loadFleet } from "../../config/loader.js";
+import { standardWorkspaceBase, STANDARD_AWS_WORKSPACE_BASE } from "../../core/model.js";
 import { agentArtifactKeys } from "../../deploy/plan.js";
 import { artifactStoreFor } from "../../deploy/factory.js";
 import { serviceManagerFor } from "../../deploy/service.js";
@@ -273,7 +274,6 @@ export function mergeMarkdownSections(
 export interface AgentEnv {
   fleetName: string;
   agentId: string;
-  workspaceBase: string;
 }
 
 export interface FileDiff {
@@ -303,13 +303,13 @@ const AGENT_ENV_PATH = "/etc/fleetmind/agent.env";
 
 /** Parse /etc/fleetmind/agent.env into AgentEnv.
  *
- * `WORKSPACE_BASE` has no silent default — the standard AWS contract is
- * `/home/openclaw/.openclaw/workspace`, but every provisioned host writes its
- * own actual value into this file, so pull-self must use whatever the file
- * says rather than assume a convention. A host bootstrapped before
- * `WORKSPACE_BASE` existed (or with a corrupted/truncated agent.env) fails
- * loudly here instead of silently resolving to a workspace path that may not
- * match what's actually on disk. */
+ * The workspace root is no longer read from this file — there is no
+ * operator/bootstrap-configurable `workspace_base` any more. Every host uses
+ * the fixed standard OpenClaw HOME contract (`~/.openclaw/workspace/<agent_id>`,
+ * see ../../core/model.ts's `standardWorkspaceBase`), so pull-self derives it
+ * from the running user's home rather than trusting a value written at
+ * bootstrap time. A stray `WORKSPACE_BASE=` line from an old bootstrap image
+ * is simply ignored — it's obsolete, not authoritative. */
 export function parseAgentEnv(text: string): AgentEnv {
   const get = (key: string): string => {
     const m = text.match(new RegExp(`^${key}=(.+)$`, "m"));
@@ -317,17 +317,9 @@ export function parseAgentEnv(text: string): AgentEnv {
   };
   const fleetName = get("FLEET_NAME");
   const agentId = get("AGENT_ID");
-  const workspaceBase = get("WORKSPACE_BASE");
   if (!fleetName) throw new Error(`${AGENT_ENV_PATH} is missing FLEET_NAME`);
   if (!agentId) throw new Error(`${AGENT_ENV_PATH} is missing AGENT_ID`);
-  if (!workspaceBase) {
-    throw new Error(
-      `${AGENT_ENV_PATH} is missing WORKSPACE_BASE. This host's bootstrap is out of date — ` +
-      `re-provision it (or add WORKSPACE_BASE=/home/openclaw/.openclaw/workspace to ${AGENT_ENV_PATH} ` +
-      `if you know the actual on-disk workspace root) before running pull-self.`
-    );
-  }
-  return { fleetName, agentId, workspaceBase };
+  return { fleetName, agentId };
 }
 
 /** Default: read /etc/fleetmind/agent.env from disk. */
@@ -956,7 +948,7 @@ export async function runPullSelf(
     const target = fleet.targetForAgent(agent);
     fleetName = fleet.fleet.name;
     agentId = opts.agent;
-    workspaceDir = path.join(target.workspace_base, agentId);
+    workspaceDir = path.join(standardWorkspaceBase(target), agentId);
     const store = artifactStoreFor(fleet, { bucket: `${fleetName}-ledger`, region });
     fetchArtifact = async (key: string) => {
       const buf = await store.get(key);
@@ -972,7 +964,9 @@ export async function runPullSelf(
     const env = opts.agentEnvOverride ?? readEnv();
     fleetName = env.fleetName;
     agentId = env.agentId;
-    workspaceDir = path.join(env.workspaceBase, agentId);
+    // Legacy /etc/fleetmind agent.env path: no configurable workspace_base
+    // any more — every AWS host uses the fixed standard workspace root.
+    workspaceDir = path.join(STANDARD_AWS_WORKSPACE_BASE, agentId);
     const bucket = `${fleetName}-ledger`;
     fetchArtifact = (key: string) => downloadFromS3(bucket, key, region);
     if (opts.userSystemd) {

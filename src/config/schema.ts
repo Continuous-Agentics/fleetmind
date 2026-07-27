@@ -3,11 +3,14 @@
  * Mirrors fleet.yaml structure exactly (the "wire" layer).
  *
  * Security-sensitive identifiers (fleet name, agent/target ids, skill names,
- * NATS subject prefix, workspace base paths) are branded + validated here via
- * the schemas in ../core/identifiers.ts, so anything that survives parsing is
- * already safe to interpolate into paths, shell commands, S3 keys, systemd
- * units, env var names, and NATS subjects. Cross-references (an agent's
- * `target`, channel resolution) are resolved in ../core/model.ts after parse.
+ * NATS subject prefix) are branded + validated here via the schemas in
+ * ../core/identifiers.ts, so anything that survives parsing is already safe
+ * to interpolate into paths, shell commands, S3 keys, systemd units, env var
+ * names, and NATS subjects. Cross-references (an agent's `target`, channel
+ * resolution) are resolved in ../core/model.ts after parse. Per-agent
+ * workspace paths are NOT operator-configurable — every target uses the
+ * fixed standard OpenClaw HOME contract (see ../core/model.ts's
+ * `standardWorkspaceBase`), so there is no `workspace_base` field here.
  */
 
 import { z } from "zod";
@@ -17,7 +20,6 @@ import {
   TargetIdSchema,
   SkillNameSchema,
   NatsSubjectPrefixSchema,
-  WorkspaceBaseSchema,
 } from "../core/identifiers.js";
 import { AWS_RUNTIME_USER_PATTERN, DEFAULT_AWS_RUNTIME_USER } from "../deploy/aws-runtime-user.js";
 
@@ -322,8 +324,6 @@ const TargetCommonSchema = {
   os: z.enum(["linux", "macos"]).default("linux"),
   /** Service supervisor used to (re)start the gateway on this host. */
   service_manager: z.enum(["systemd", "launchd", "none"]).default("systemd"),
-  /** Root directory for agent workspaces on this host. */
-  workspace_base: WorkspaceBaseSchema,
 };
 
 export const AwsSsmTargetSchema = z.object({

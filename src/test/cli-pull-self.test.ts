@@ -55,7 +55,6 @@ import {
 const AGENT_ENV: AgentEnv = {
   fleetName: "test-fleet",
   agentId: "conductor",
-  workspaceBase: "/home/openclaw/.openclaw/workspace",
 };
 
 function makeFile(p: string, size = 1000, sha256 = "aaa"): ManifestFile {
@@ -80,17 +79,23 @@ function buildManifest(agentId: string, files: ManifestFile[], tarSha256 = "abc"
 // ── Tests: parseAgentEnv ──────────────────────────────────────────────────────
 
 describe("parseAgentEnv", () => {
-  test("parses FLEET_NAME, AGENT_ID, and WORKSPACE_BASE", () => {
-    const text = `FLEET_NAME=my-fleet\nAGENT_ID=conductor\nWORKSPACE_BASE=/custom/ws\n`;
+  test("parses FLEET_NAME and AGENT_ID", () => {
+    const text = `FLEET_NAME=my-fleet\nAGENT_ID=conductor\n`;
     const env = parseAgentEnv(text);
     assert.equal(env.fleetName, "my-fleet");
     assert.equal(env.agentId, "conductor");
-    assert.equal(env.workspaceBase, "/custom/ws");
   });
 
-  test("throws when WORKSPACE_BASE is missing (no silent default)", () => {
-    const text = `FLEET_NAME=test-fleet\nAGENT_ID=forge\n`;
-    assert.throws(() => parseAgentEnv(text), /WORKSPACE_BASE/);
+  test("ignores a stray WORKSPACE_BASE line from an old bootstrap image", () => {
+    // workspace_base is no longer configurable/read from agent.env — the
+    // fixed standard workspace path is used unconditionally, so a leftover
+    // WORKSPACE_BASE= line from an obsolete bootstrap image must not surface
+    // anywhere on the parsed AgentEnv.
+    const text = `FLEET_NAME=test-fleet\nAGENT_ID=forge\nWORKSPACE_BASE=/opt/openclaw/workspace\n`;
+    const env = parseAgentEnv(text);
+    assert.equal(env.fleetName, "test-fleet");
+    assert.equal(env.agentId, "forge");
+    assert.ok(!("workspaceBase" in env), "parsed env must not carry a workspaceBase field");
   });
 
   test("throws when FLEET_NAME is missing", () => {
@@ -104,11 +109,10 @@ describe("parseAgentEnv", () => {
   });
 
   test("trims whitespace from values", () => {
-    const text = `FLEET_NAME=  test-fleet  \nAGENT_ID=  forge  \nWORKSPACE_BASE=  /home/openclaw/.openclaw/workspace  \n`;
+    const text = `FLEET_NAME=  test-fleet  \nAGENT_ID=  forge  \n`;
     const env = parseAgentEnv(text);
     assert.equal(env.fleetName, "test-fleet");
     assert.equal(env.agentId, "forge");
-    assert.equal(env.workspaceBase, "/home/openclaw/.openclaw/workspace");
   });
 });
 
@@ -489,7 +493,7 @@ describe("runPullSelf — --apply", () => {
         restart: false,
         force: false,
         showDiffs: false,
-        agentEnvOverride: { ...AGENT_ENV, workspaceBase: tmpDir },
+        agentEnvOverride: AGENT_ENV,
       },
       deps
     ).catch((err: Error) => {
@@ -533,7 +537,7 @@ describe("runPullSelf — --apply", () => {
           restart: false,
           force: false,
           showDiffs: false,
-          agentEnvOverride: { ...AGENT_ENV, workspaceBase: tmpDir },
+          agentEnvOverride: AGENT_ENV,
         },
         deps
       ),

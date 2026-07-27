@@ -6,33 +6,44 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING: `targets.<id>.workspace_base` is no longer a fleet.yaml field.**
+  Every target now uses a single, fixed, non-configurable standard OpenClaw
+  HOME contract for per-agent workspaces — `<home>/.openclaw/workspace/<agent_id>`
+  — matching what `fleetmind up`'s local targets already did:
+  - `local` targets: `~/.openclaw/workspace/<agent_id>` (`os.homedir()` of the
+    machine running `fleetmind up`).
+  - `ssh`/`aws-ssm` targets: `/home/openclaw/.openclaw/workspace/<agent_id>`
+    (or `/Users/openclaw/.openclaw/workspace/<agent_id>` when `os: macos`) —
+    the dedicated `openclaw` OS account's home, independent of
+    `ssh.user`/`aws.runtime_user` (those only select which account runs the
+    systemd/launchd services).
+  `workspace_base:` in an existing `fleet.yaml` is now a schema validation
+  error (Zod rejects the unrecognized field) — delete the line; the fixed
+  path above is used unconditionally. This was previously introduced as a new
+  *default* (see the now-superseded entry this replaces); it is now the only
+  option. `HOME` for the gateway/NATS-subscriber systemd units, the
+  operator-facing `openclaw.json`/`openclaw.base.json`, and each agent's
+  workspace all live under this one OS-account home. This is a CLI/schema-level
+  change only — the `terraform-aws-fleetmind` bootstrap template still writes
+  the old `/opt/openclaw/workspace` path until its companion migration lands
+  (see that repo's `docs/MIGRATIONS.md` for the coordinated cutover).
+- **`WorkspaceBase` branded identifier removed** (`core/identifiers.ts`) —
+  no longer needed now that the path isn't user-supplied input requiring
+  validation.
+
 ### Changed
 
-- **AWS agent hosts standardize on the same HOME layout as local/ssh
-  targets.** The default `workspace_base` for new AWS fleets is now
-  `/home/openclaw/.openclaw/workspace` (previously `/opt/openclaw/workspace`),
-  matching `fleetmind up`'s existing `~/.openclaw` contract for local targets.
-  `HOME` for the gateway/NATS-subscriber systemd units, the operator-facing
-  `openclaw.json`/`openclaw.base.json`, and each agent's workspace all now
-  live under a single OS-account home instead of splitting config-under-home
-  and state-under-`/opt`. This is a CLI/schema-level change only — the
-  `terraform-aws-fleetmind` bootstrap template still writes the old `/opt`
-  path until its companion migration lands (see that repo's
-  `docs/MIGRATIONS.md` for the coordinated cutover). Existing fleets with an
-  explicit `workspace_base:` in `fleet.yaml`/`/etc/fleetmind/agent.env` are
-  unaffected — this only changes the *default* used by `fleetmind init`'s
-  scaffold and the (now-hardfail, previously-silent-`/opt`-fallback)
-  `pull-self` `WORKSPACE_BASE` resolution.
-- **`pull-self`'s `WORKSPACE_BASE` fallback removed.** Previously, if
-  `/etc/fleetmind/agent.env` omitted `WORKSPACE_BASE=`, `pull-self` silently
-  assumed `/opt/openclaw/workspace`. It now fails loudly with a clear message
-  instead of guessing — an out-of-date bootstrap should be re-provisioned
-  (or `WORKSPACE_BASE=` added explicitly), not silently pointed at a
-  possibly-wrong directory.
+- **`pull-self` no longer reads `WORKSPACE_BASE` from `/etc/fleetmind/agent.env`.**
+  The on-host workspace directory is always the fixed standard path
+  (`/home/openclaw/.openclaw/workspace/<agent_id>` on AWS); a stray
+  `WORKSPACE_BASE=` line from an old bootstrap image is ignored rather than
+  trusted.
 - **`fleetmind pull-workspace` no longer hardcodes `/opt/openclaw/workspace`.**
-  It now derives the on-host workspace directory from the agent's resolved
-  `target.workspace_base`, consistent with every other command that reads a
-  workspace path (`pull-self`, `push fleet`, the renderer).
+  It now derives the on-host workspace directory from the fixed standard
+  path for the agent's resolved target, consistent with every other command
+  that reads a workspace path (`pull-self`, `push fleet`, the renderer).
 
 ## [1.0.2] — 2026-07-27
 

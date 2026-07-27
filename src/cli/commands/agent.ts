@@ -12,6 +12,7 @@ import { gatewaySecretName } from "../../core/secret-names.js";
 import { log } from "../../utils/log.js";
 import { lookupInstanceId } from "./pull-workspace.js";
 import { buildAwsRuntimeUserCommand } from "../../deploy/aws-runtime-user.js";
+import { standardWorkspaceBase } from "../../core/model.js";
 
 const UNRESOLVED_GATEWAY_AUTH_PREFIX = "__FLEETMIND_UNRESOLVED_GATEWAY_AUTH__:";
 
@@ -74,7 +75,7 @@ Examples:
           process.exit(1);
         }
 
-        const workspace = path.join(fleet.targetForAgent(a).workspace_base, `workspace-${a.id}`);
+        const workspace = path.join(standardWorkspaceBase(fleet.targetForAgent(a)), a.id);
         const wsExists = fs.existsSync(workspace);
         const model = a.model ?? fleet.agents.defaults.model;
         const skills = a.skills.map((s) => s.name + (s.version ? `@${s.version}` : "")).join(", ") || "—";
@@ -174,7 +175,7 @@ Examples:
           if (target.provider !== "aws-ssm") {
             throw new Error(`agent connect requires an aws-ssm target; '${agentId}' uses ${target.provider}`);
           }
-          const agentWorkspaceBase = target.workspace_base;
+          const agentWorkspaceBase = standardWorkspaceBase(target);
           preflightResult = await runPreflight(
             instanceId,
             agentId,
@@ -312,11 +313,9 @@ async function runPreflight(
   // privilege escalation — it's the same access they had before, just
   // proxied through the wrapper for ergonomics.
   //
-  // Path derived from the agent's resolved target.workspace_base (a
-  // target-configurable value, not a fixed convention — the AWS bootstrap
-  // default is /home/openclaw/.openclaw/workspace, matching the standard
-  // OpenClaw HOME layout; other targets may use a different base), with the
-  // per-agent dir appended:
+  // Path derived from the agent's fixed standard workspace base (see
+  // ../../core/model.ts's standardWorkspaceBase — not operator-configurable),
+  // with the per-agent dir appended:
   //   <workspaceBase>/<agent_id>/.openclaw/openclaw.json
   // SSM Run Command runs as root by default. User-systemd diagnostics and the
   // dashboard run as the configured runtime user with its XDG/DBus bus.

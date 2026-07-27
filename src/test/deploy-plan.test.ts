@@ -29,7 +29,6 @@ function makeFleet(opts: { deployBucket?: string } = {}): Fleet {
         provider: "aws-ssm",
         os: "linux",
         service_manager: "systemd",
-        workspace_base: "/home/ec2-user/.openclaw",
         aws: { region: "us-west-2" },
       },
     },

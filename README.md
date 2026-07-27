@@ -68,13 +68,15 @@ FleetMind renders the derived tfvars and per-agent workspaces; the Terraform
 module provisions EC2, IAM, SSM, Secrets Manager, S3, DynamoDB, and optional
 NATS infrastructure.
 
-AWS workspaces default to `/home/openclaw/.openclaw/workspace/<agent>` — the
-standard OpenClaw HOME layout (`/home/openclaw` is both the OS account home
-and the gateway's own `HOME`, with `.openclaw/openclaw.json` + the workspace
-living under it, exactly like a local/ssh target). The runtime gateway and its
-companion services use user-systemd under the `openclaw` account; FleetMind's
-SSM deploy, rollback, diagnostics, and dashboard commands set the required
-XDG/DBus session environment automatically. For a compatible legacy host, set
+AWS workspaces always live at `/home/openclaw/.openclaw/workspace/<agent>` —
+the fixed, non-configurable standard OpenClaw HOME layout (`/home/openclaw` is
+both the OS account home and the gateway's own `HOME`, with
+`.openclaw/openclaw.json` + the workspace living under it, exactly like a
+local/ssh target). There is no `workspace_base` setting — every target uses
+this contract. The runtime gateway and its companion services use
+user-systemd under the `openclaw` account; FleetMind's SSM deploy, rollback,
+diagnostics, and dashboard commands set the required XDG/DBus session
+environment automatically. For a compatible legacy host, set
 `targets.<id>.aws.runtime_user: ec2-user` explicitly.
 
 An SSM operator should enter the configured runtime account with
