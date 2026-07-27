@@ -12,8 +12,8 @@ Use compatible versions across all three. Version drift usually shows up as miss
 
 | Component | Version / baseline |
 |---|---|
-| FleetMind CLI | `1.0.0` |
-| `terraform-aws-fleetmind` | `v1.1.5` |
+| FleetMind CLI | `1.0.2` |
+| `terraform-aws-fleetmind` | `main` at or after [`e80207e`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/commit/e80207e1e5de43f2e6175663f13ca2c4bc598322) (#47) |
 | `fleetmind-template` | `main` at or after the v1 docs audit |
 | OpenClaw runtime | `2026.7.1` or newer |
 | Node.js | `22` recommended |
@@ -23,6 +23,7 @@ Use compatible versions across all three. Version drift usually shows up as miss
 
 | FleetMind CLI | `terraform-aws-fleetmind` | `fleetmind-template` baseline | Compatibility notes |
 |---|---|---|---|
+| `1.0.2` | `main` at or after [`e80207e`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/commit/e80207e1e5de43f2e6175663f13ca2c4bc598322) (#47) | `main` at or after the v1 docs audit | Runs AWS OpenClaw operations through the `openclaw` runtime-user's user-systemd session; onboarding hands SSM operators the module's `ocalias`/`oc*` shortcuts; drops the `terraform workspace` dependency from `fleetmind onboard` |
 | `1.0.0` | `v1.1.5` | `main` at or after the v1 docs audit | v1.0 public release baseline: public npm path, MIT license metadata, guided Terraform onboarding, no-delegation deploy-staging IAM fix |
 | `0.10.4` | `v1.1.5` | `main` at or after the v1 docs audit | Public npm smoke-test baseline; npm metadata was published before MIT license metadata landed |
 | `0.10.1` | `v1.1.0` | `main` at or after the v1 docs audit | Initial public npm path, guided Terraform onboarding, usable `agent connect` gateway token output |
@@ -36,10 +37,10 @@ Use compatible versions across all three. Version drift usually shows up as miss
 
 - Upgrade the template/module pins before applying a newer FleetMind CLI to a fleet.
 - The concise AWS runtime-account handoff (`sudo -iu openclaw`, then `ocalias`
-  and the `oc*` shortcuts) requires
-  [`terraform-aws-fleetmind` PR #47](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/pull/47)
-  or a release that includes it. Keep the module pin on the existing baseline
-  until that prerequisite is available; the aliases are not guaranteed before it.
+  and the `oc*` shortcuts) requires a `terraform-aws-fleetmind` pin at or after
+  [#47](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/pull/47).
+  Keep the module pin on the existing baseline until that prerequisite is
+  available; the aliases are not guaranteed before it.
 - Run `fleetmind render --check` before `terraform plan`.
 - Read the FleetMind `CHANGELOG.md` entry for the target version; schema-affecting releases call out required module/template changes.
 - Use exact `fleetmind_version` pins in `workspaces/<workspace>.tfvars`; do not use `latest` for EC2 bootstrap.

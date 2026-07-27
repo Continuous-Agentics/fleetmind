@@ -296,7 +296,7 @@ function anyAgentNeedsGithubApp(agents: { github_access?: boolean }[]): boolean 
 
 /**
  * AWS-only post-onboarding handoff. The aliases are installed by
- * terraform-aws-fleetmind PR #47 (module baseline). `runtimeUsers` is the
+ * terraform-aws-fleetmind's module baseline (see #47). `runtimeUsers` is the
  * distinct, resolved set of `targets.<id>.aws.runtime_user` values actually
  * in use by this fleet's aws-ssm targets — never a hardcoded default — so
  * operators get concrete, copy-pasteable commands instead of a placeholder

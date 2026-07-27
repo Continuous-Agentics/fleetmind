@@ -6,6 +6,8 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-07-27
+
 ### Changed
 
 - **Run AWS OpenClaw operations through the configured user-systemd session.**
@@ -13,11 +15,22 @@ All notable changes to fleetmind are documented in this file. Format follows
   override for legacy accounts), use XDG/DBus-aware user-systemd commands for
   deploys, rollbacks, restarts, diagnostics, dashboards, and automation
   documents, and seed AWS workspaces at `/opt/openclaw/workspace/<agent>`.
-  Once `terraform-aws-fleetmind` is pinned to [PR #47](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/pull/47)
-  or its release, onboarding hands SSM operators to `sudo -iu openclaw` and the
-  module-installed `ocalias`/`oc*` shortcuts instead of a raw XDG/DBus command.
+  Onboarding now hands SSM operators to `sudo -iu openclaw` and the
+  module-installed `ocalias`/`oc*` shortcuts (from `terraform-aws-fleetmind`
+  [#47](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/pull/47))
+  instead of a raw XDG/DBus command.
 
-- **Remove `terraform workspace` dependency from `fleetmind onboard`.** Step 8 no longer runs `terraform workspace select`/`terraform workspace new`; each fleet now gets an explicit per-fleet backend state key (`fleets/<fleet-name>/terraform.tfstate`) instead of a bare `terraform.tfstate` paired with a CLI workspace. This follows Terraform best practice — fleet-specific state is represented by the backend `key`, not a workspace side channel that's easy to leave on the wrong selection. Existing fleets on CLI workspaces keep working unmodified; see [`terraform-aws-fleetmind`'s migration guide](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/blob/main/docs/MODULE-TROUBLESHOOTING.md#migrating-from-cli-workspaces-to-explicit-backend-keys) to move an existing dogfood fleet's state to an explicit key when convenient. ([#255](https://github.com/Continuous-Agentics/fleetmind/issues/255))
+- **Remove `terraform workspace` dependency from `fleetmind onboard`.** Step 8
+  no longer runs `terraform workspace select`/`terraform workspace new`; each
+  fleet now gets an explicit per-fleet backend state key
+  (`fleets/<fleet-name>/terraform.tfstate`) instead of a bare
+  `terraform.tfstate` paired with a CLI workspace. This follows Terraform best
+  practice — fleet-specific state is represented by the backend `key`, not a
+  workspace side channel that's easy to leave on the wrong selection. Existing
+  fleets on CLI workspaces keep working unmodified; see
+  [`terraform-aws-fleetmind`'s migration guide](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/blob/main/docs/MODULE-TROUBLESHOOTING.md#migrating-from-cli-workspaces-to-explicit-backend-keys)
+  to move an existing dogfood fleet's state to an explicit key when
+  convenient. ([#255](https://github.com/Continuous-Agentics/fleetmind/issues/255))
 
 ## [1.0.1] — 2026-07-24
 

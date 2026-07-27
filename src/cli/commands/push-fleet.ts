@@ -547,11 +547,11 @@ History:
   Last 5 deployments are kept per agent.
 
 Upgrade behaviour:
-  When --upgrade-cli is set, the upgrade and workspace sync run as a single
-  SSM RunCommand with && sequencing:
-    sudo fleetmind self-upgrade <flag> --apply && sudo -H -u <runtime-user> env XDG_RUNTIME_DIR=/run/user/$(id -u <runtime-user>) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u <runtime-user>)/bus fleetmind pull-self --apply --user-systemd
-  The && operator ensures pull-self never runs on a stale binary if the upgrade
-  fails. Monitor the command output with:
+  When --upgrade-cli is set, each instance runs a single SSM RunCommand that
+  self-upgrades the fleetmind binary, then re-runs pull-self in the runtime
+  account's user-systemd session. The two steps are chained with && so
+  pull-self never runs on a stale binary if the upgrade fails. Monitor the
+  command output with:
     aws ssm get-command-invocation --command-id <id> --instance-id <id> --region <region>
 
 Examples:

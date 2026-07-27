@@ -74,13 +74,12 @@ account; FleetMind's SSM deploy, rollback, diagnostics, and dashboard commands
 set the required XDG/DBus session environment automatically. For a compatible
 legacy host, set `targets.<id>.aws.runtime_user: ec2-user` explicitly.
 
-After pinning [`terraform-aws-fleetmind` PR #47](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/pull/47)
-or a release that contains it, an SSM operator should enter the configured
-runtime account with `sudo -iu openclaw` (substitute the runtime-user override
-when set), then run `ocalias`. The module-provided shortcuts include `ocstatus`,
-`oclog`, and `octail` for the gateway plus `ocnatsstatus`, `ocnatslog`, and
-`ocnatstail` for its NATS subscriber. Do not rely on those shortcuts before the
-module pin includes PR #47.
+An SSM operator should enter the configured runtime account with
+`sudo -iu openclaw` (substitute the runtime-user override when set), then run
+`ocalias`. The module-provided shortcuts include `ocstatus`, `oclog`, and
+`octail` for the gateway plus `ocnatsstatus`, `ocnatslog`, and `ocnatstail` for
+its NATS subscriber. These require a `terraform-aws-fleetmind` pin at or after
+[#47](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/pull/47).
 
 ## Architecture
 
