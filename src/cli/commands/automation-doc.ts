@@ -29,6 +29,7 @@ import {
   DocumentAlreadyExists,
 } from "@aws-sdk/client-ssm";
 import { log } from "../../utils/log.js";
+import { DEFAULT_AWS_RUNTIME_USER } from "../../deploy/aws-runtime-user.js";
 
 // ── Document definition ───────────────────────────────────────────────────────
 
@@ -39,10 +40,11 @@ import { log } from "../../utils/log.js";
  *   1. UpgradeIfNeeded — runs 'sudo fleetmind self-upgrade <flag> --apply'
  *      when UpgradeFlag is non-empty. set -euo pipefail ensures a failed
  *      upgrade exits non-zero; onFailure: Abort prevents step 2 from running.
- *   2. SyncWorkspace — runs 'sudo -u ec2-user fleetmind pull-self <args>'.
+ *   2. SyncWorkspace — runs pull-self as the configured runtime user with its
+ *      XDG/DBus user-systemd session.
  *      Only reached if step 1 succeeded (or was skipped).
  */
-export function buildDocumentContent(): string {
+export function buildDocumentContent(runtimeUser = DEFAULT_AWS_RUNTIME_USER): string {
   const doc = {
     schemaVersion: "0.3",
     description:
@@ -66,6 +68,12 @@ export function buildDocumentContent(): string {
         description:
           "Arguments for 'fleetmind pull-self', e.g. '--apply --restart --region us-west-2'.",
         default: "--apply",
+      },
+      RuntimeUser: {
+        type: "String",
+        description: "Linux account that owns the OpenClaw user-systemd services.",
+        default: runtimeUser,
+        allowedPattern: "^[a-z_][a-z0-9_-]{0,31}$",
       },
     },
     mainSteps: [
@@ -109,8 +117,10 @@ export function buildDocumentContent(): string {
             commands: [
               "#!/bin/bash",
               "set -euo pipefail",
-              "echo \"Running: sudo -u ec2-user fleetmind pull-self {{ PullSelfArgs }}\"",
-              "sudo -u ec2-user fleetmind pull-self {{ PullSelfArgs }}",
+              "RUNTIME_USER='{{ RuntimeUser }}'",
+              "RUNTIME_UID=$(id -u \"$RUNTIME_USER\")",
+              "echo \"Running FleetMind pull-self as $RUNTIME_USER through systemd --user\"",
+              "sudo -H -u \"$RUNTIME_USER\" env XDG_RUNTIME_DIR=\"/run/user/$RUNTIME_UID\" DBUS_SESSION_BUS_ADDRESS=\"unix:path=/run/user/$RUNTIME_UID/bus\" fleetmind pull-self {{ PullSelfArgs }} --user-systemd",
             ],
           },
         },

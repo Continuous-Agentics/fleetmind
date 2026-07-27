@@ -45,6 +45,10 @@ describe("fleetmind init template", () => {
     const target = fleet.targetForAgent(conductor!);
     assert.equal(target.id, "conductor-host");
     assert.equal(target.provider, "aws-ssm");
+    if (target.provider === "aws-ssm") {
+      assert.equal(target.workspace_base, "/opt/openclaw/workspace");
+      assert.equal(target.aws.runtime_user, "openclaw");
+    }
 
     // v2 channels (not the v1 agent-level `slack:` block).
     assert.equal(conductor!.channels.length, 1);

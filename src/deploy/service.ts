@@ -23,8 +23,8 @@ export interface ServiceManager {
   restartNatsSubscriber(agentId: string): void;
 }
 
-/** systemd (Linux / EC2). Runs via `sudo systemctl` — the gateway runs as a
- *  system service. */
+/** systemd (Linux / EC2). Runs via `sudo systemctl` — retained for existing
+ * non-AWS and system-service hosts. */
 export class SystemdServiceManager implements ServiceManager {
   restartGateway(agentId: string): void {
     execFileSync("sudo", ["systemctl", "restart", `openclaw-${agentId}`], { stdio: "inherit" });
@@ -39,6 +39,24 @@ export class SystemdServiceManager implements ServiceManager {
       execFileSync("sudo", ["systemctl", "restart", `fleetmind-nats-${agentId}`], { stdio: "inherit" });
     } catch {
       // Service may not exist on all hosts (e.g. PM bots without a NATS unit).
+      process.stderr.write(`[pull-self] fleetmind-nats-${agentId} not found or failed to restart — skipping\n`);
+    }
+  }
+}
+
+/** systemd user services. The caller must already be the runtime user and set
+ * XDG_RUNTIME_DIR plus DBUS_SESSION_BUS_ADDRESS; AWS SSM command builders do
+ * this before invoking `fleetmind pull-self --user-systemd`. */
+export class UserSystemdServiceManager implements ServiceManager {
+  restartGateway(agentId: string): void {
+    execFileSync("systemctl", ["--user", "restart", `openclaw-${agentId}`], { stdio: "inherit" });
+  }
+
+  restartNatsSubscriber(agentId: string): void {
+    try {
+      execFileSync("systemctl", ["--user", "reset-failed", `fleetmind-nats-${agentId}`], { stdio: "inherit" });
+      execFileSync("systemctl", ["--user", "restart", `fleetmind-nats-${agentId}`], { stdio: "inherit" });
+    } catch {
       process.stderr.write(`[pull-self] fleetmind-nats-${agentId} not found or failed to restart — skipping\n`);
     }
   }
@@ -88,10 +106,10 @@ export class NoneServiceManager implements ServiceManager {
 }
 
 /** Select the ServiceManager for a service-manager kind. */
-export function serviceManagerFor(kind: ServiceManagerKind): ServiceManager {
+export function serviceManagerFor(kind: ServiceManagerKind, userSystemd = false): ServiceManager {
   switch (kind) {
     case "systemd":
-      return new SystemdServiceManager();
+      return userSystemd ? new UserSystemdServiceManager() : new SystemdServiceManager();
     case "launchd":
       return new LaunchdServiceManager();
     case "none":

@@ -68,6 +68,19 @@ FleetMind renders the derived tfvars and per-agent workspaces; the Terraform
 module provisions EC2, IAM, SSM, Secrets Manager, S3, DynamoDB, and optional
 NATS infrastructure.
 
+AWS workspaces default to `/opt/openclaw/workspace/<agent>`. The runtime
+gateway and its companion services use user-systemd under the `openclaw`
+account; FleetMind's SSM deploy, rollback, diagnostics, and dashboard commands
+set the required XDG/DBus session environment automatically. For a compatible
+legacy host, set `targets.<id>.aws.runtime_user: ec2-user` explicitly.
+
+An SSM operator should enter the configured runtime account with
+`sudo -iu openclaw` (substitute the runtime-user override when set), then run
+`ocalias`. The module-provided shortcuts include `ocstatus`, `oclog`, and
+`octail` for the gateway plus `ocnatsstatus`, `ocnatslog`, and `ocnatstail` for
+its NATS subscriber. These require a `terraform-aws-fleetmind` pin at or after
+[#47](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/pull/47).
+
 ## Architecture
 
 *One EC2 instance per agent. One OpenClaw gateway per EC2.* fleetmind renders per-agent workspaces from `fleet.yaml` and pushes each to its respective host. Agents coordinate over Slack threads, the optional delegation task ledger, and a shared DynamoDB ContextStore — never via shared process state.

@@ -358,7 +358,16 @@ export async function runPushFleet(
       if (!opts.noApply) {
         const instanceId = await resolver.resolveHost(agentId);
         if (instanceId) {
-          const cmd = buildPullSelfCommand({ provider, restart: opts.restart, region, agentId, fleetPath });
+          const agent = fleet.getAgent(agentId)!;
+          const target = fleet.targetForAgent(agent);
+          const cmd = buildPullSelfCommand({
+            provider,
+            restart: opts.restart,
+            region,
+            agentId,
+            fleetPath,
+            runtimeUser: target.provider === "aws-ssm" ? target.aws.runtime_user : undefined,
+          });
           const cmdId = await runner.run(instanceId, [cmd]);
           log.ok(`  ${agentId}: rollback SSM command sent → ${cmdId}`);
           results.push({ agent_id: agentId, status: "pushed", ssm_command_id: cmdId });
@@ -452,7 +461,15 @@ export async function runPushFleet(
             // stale binary if the upgrade fails.
             commands.push(buildUpgradeCommand(opts.upgradeCli));
           }
-          commands.push(buildPullSelfCommand({ provider, restart: opts.restart, region, agentId, fleetPath }));
+          const target = fleet.targetForAgent(agent);
+          commands.push(buildPullSelfCommand({
+            provider,
+            restart: opts.restart,
+            region,
+            agentId,
+            fleetPath,
+            runtimeUser: target.provider === "aws-ssm" ? target.aws.runtime_user : undefined,
+          }));
 
           const label = opts.upgradeCli ? 'upgrade + pull-self' : 'pull-self';
           log.step(`    sending ${label} command to ${instanceId}...`);
@@ -530,11 +547,11 @@ History:
   Last 5 deployments are kept per agent.
 
 Upgrade behaviour:
-  When --upgrade-cli is set, the upgrade and workspace sync run as a single
-  SSM RunCommand with && sequencing:
-    sudo fleetmind self-upgrade <flag> --apply && sudo -u ec2-user fleetmind pull-self --apply
-  The && operator ensures pull-self never runs on a stale binary if the upgrade
-  fails. Monitor the command output with:
+  When --upgrade-cli is set, each instance runs a single SSM RunCommand that
+  self-upgrades the fleetmind binary, then re-runs pull-self in the runtime
+  account's user-systemd session. The two steps are chained with && so
+  pull-self never runs on a stale binary if the upgrade fails. Monitor the
+  command output with:
     aws ssm get-command-invocation --command-id <id> --instance-id <id> --region <region>
 
 Examples:

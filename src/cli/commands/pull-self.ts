@@ -896,6 +896,9 @@ export interface PullSelfOptions {
   showDiffs: boolean;
   showDiffsFilter?: string;
   showDiffsFull?: boolean;
+  /** Use systemd --user for restarts. AWS SSM invokes this after setting the
+   * runtime user's XDG and DBus session environment. */
+  userSystemd?: boolean;
   /** Override agent env (for testing). */
   agentEnvOverride?: AgentEnv;
   /** Local/ssh path: the agent id to apply, paired with `fleet`. When set,
@@ -945,7 +948,7 @@ export async function runPullSelf(
       if (!buf) throw new Error(`Artifact not found in store: ${key}`);
       return buf;
     };
-    const sm = serviceManagerFor(target.service_manager);
+    const sm = serviceManagerFor(target.service_manager, opts.userSystemd);
     restart = () => {
       sm.restartGateway(agentId);
       sm.restartNatsSubscriber(agentId);
@@ -957,7 +960,15 @@ export async function runPullSelf(
     workspaceDir = path.join(env.workspaceBase, agentId);
     const bucket = `${fleetName}-ledger`;
     fetchArtifact = (key: string) => downloadFromS3(bucket, key, region);
-    restart = () => restartGateway(agentId);
+    if (opts.userSystemd) {
+      const sm = serviceManagerFor("systemd", true);
+      restart = () => {
+        sm.restartGateway(agentId);
+        sm.restartNatsSubscriber(agentId);
+      };
+    } else {
+      restart = () => restartGateway(agentId);
+    }
   }
 
   log.info(`\nfleetmind pull-self — ${agentId} (fleet: ${fleetName})`);
@@ -1078,6 +1089,7 @@ export function registerPullSelf(program: Command): void {
     .option("--force", "Apply even if no changes detected", false)
     .option("--show-diffs [file]", "Show per-file unified diffs for modified files. Optionally filter to a specific file path.")
     .option("--full", "Show full diffs without line cap (use with --show-diffs)", false)
+    .option("--user-systemd", "Restart through systemd --user (used by AWS SSM runtime-user commands)", false)
     .addHelpText('after', `
 Diff display:
   Default output shows git-stat-style (+added -removed) line counts per file.
@@ -1111,6 +1123,7 @@ Examples:
       force: boolean;
       showDiffs?: string | boolean;
       full: boolean;
+      userSystemd: boolean;
     }) => {
       try {
         const showDiffsFilter = typeof opts.showDiffs === 'string' ? opts.showDiffs : undefined;
@@ -1125,6 +1138,7 @@ Examples:
           showDiffs: !!opts.showDiffs,
           showDiffsFilter,
           showDiffsFull: opts.full,
+          userSystemd: opts.userSystemd,
         });
 
         if (changed && !applied && !opts.dryRun) {

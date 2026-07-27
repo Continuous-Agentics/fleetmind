@@ -11,6 +11,7 @@ import {
   serviceManagerFor,
   defaultServiceManagerKind,
   SystemdServiceManager,
+  UserSystemdServiceManager,
   LaunchdServiceManager,
   NoneServiceManager,
 } from "../deploy/service.js";
@@ -18,6 +19,7 @@ import {
 describe("serviceManagerFor", () => {
   it("maps each kind to its adapter", () => {
     assert.ok(serviceManagerFor("systemd") instanceof SystemdServiceManager);
+    assert.ok(serviceManagerFor("systemd", true) instanceof UserSystemdServiceManager);
     assert.ok(serviceManagerFor("launchd") instanceof LaunchdServiceManager);
     assert.ok(serviceManagerFor("none") instanceof NoneServiceManager);
   });
