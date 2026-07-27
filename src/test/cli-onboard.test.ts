@@ -39,18 +39,18 @@ import type { PushFleetResult } from "../cli/commands/push-fleet.js";
 
 // ── Mock builders ─────────────────────────────────────────────────────────────
 
-test("AWS verification handoff uses PR #47 aliases and preserves runtime-user overrides", () => {
+test("AWS verification handoff renders concrete aliases for the default runtime user", () => {
   assert.equal(
-    formatAwsVerificationHandoff(),
+    formatAwsVerificationHandoff(["openclaw"]),
     [
       "  Check that both bots are running:",
       "",
       "  \x1b[36mterraform output ssm_connect\x1b[0m",
       "  (then paste the SSM command for each agent)",
       "",
-      "  After pinning terraform-aws-fleetmind PR #47 (or a release containing it):",
+      "  Then, per the runtime account(s) provisioned by this fleet's targets:",
+      "",
       "  \x1b[36msudo -iu openclaw\x1b[0m",
-      "  (use targets.<id>.aws.runtime_user when overridden)",
       "  \x1b[36mocalias\x1b[0m   # list shortcuts",
       "  \x1b[36mocstatus\x1b[0m  # gateway status",
       "  \x1b[36moclog\x1b[0m     # recent gateway logs",
@@ -58,6 +58,19 @@ test("AWS verification handoff uses PR #47 aliases and preserves runtime-user ov
       "  \x1b[36mocnatsstatus | ocnatslog | ocnatstail\x1b[0m  # NATS subscriber (when enabled)",
     ].join("\n"),
   );
+});
+
+test("AWS verification handoff renders one block per distinct overridden runtime user", () => {
+  const output = formatAwsVerificationHandoff(["openclaw", "ec2-user"]);
+  assert.match(output, /sudo -iu openclaw/);
+  assert.match(output, /sudo -iu ec2-user/);
+  // One alias block per runtime user, not a single placeholder note.
+  assert.equal(output.match(/ocstatus/g)?.length, 2);
+});
+
+test("AWS verification handoff falls back to the default runtime user when none resolve", () => {
+  const output = formatAwsVerificationHandoff([]);
+  assert.match(output, /sudo -iu openclaw/);
 });
 
 /**

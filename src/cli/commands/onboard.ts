@@ -65,6 +65,7 @@ import {
 } from "@aws-sdk/client-ssm";
 import { runPushFleet } from "./push-fleet.js";
 import { resolveTerraformVarsPath, writeOutputs } from "../../runtime/renderer.js";
+import { DEFAULT_AWS_RUNTIME_USER } from "../../deploy/aws-runtime-user.js";
 import { provisionFleet } from "../../runtime/provisioner.js";
 
 // ── Terminal helpers ──────────────────────────────────────────────────────────
@@ -295,25 +296,34 @@ function anyAgentNeedsGithubApp(agents: { github_access?: boolean }[]): boolean 
 
 /**
  * AWS-only post-onboarding handoff. The aliases are installed by
- * terraform-aws-fleetmind PR #47, so keep that prerequisite explicit rather
- * than presenting a raw user-manager command that operators must copy.
+ * terraform-aws-fleetmind PR #47 (module baseline). `runtimeUsers` is the
+ * distinct, resolved set of `targets.<id>.aws.runtime_user` values actually
+ * in use by this fleet's aws-ssm targets — never a hardcoded default — so
+ * operators get concrete, copy-pasteable commands instead of a placeholder
+ * they have to translate themselves.
  */
-export function formatAwsVerificationHandoff(): string {
-  return [
+export function formatAwsVerificationHandoff(runtimeUsers: string[]): string {
+  const users = runtimeUsers.length > 0 ? runtimeUsers : [DEFAULT_AWS_RUNTIME_USER];
+  const lines = [
     "  Check that both bots are running:",
     "",
     "  \x1b[36mterraform output ssm_connect\x1b[0m",
     "  (then paste the SSM command for each agent)",
     "",
-    "  After pinning terraform-aws-fleetmind PR #47 (or a release containing it):",
-    "  \x1b[36msudo -iu openclaw\x1b[0m",
-    "  (use targets.<id>.aws.runtime_user when overridden)",
-    "  \x1b[36mocalias\x1b[0m   # list shortcuts",
-    "  \x1b[36mocstatus\x1b[0m  # gateway status",
-    "  \x1b[36moclog\x1b[0m     # recent gateway logs",
-    "  \x1b[36moctail\x1b[0m    # follow gateway logs",
-    "  \x1b[36mocnatsstatus | ocnatslog | ocnatstail\x1b[0m  # NATS subscriber (when enabled)",
-  ].join("\n");
+    "  Then, per the runtime account(s) provisioned by this fleet's targets:",
+  ];
+  for (const user of users) {
+    lines.push(
+      "",
+      `  \x1b[36msudo -iu ${user}\x1b[0m`,
+      "  \x1b[36mocalias\x1b[0m   # list shortcuts",
+      "  \x1b[36mocstatus\x1b[0m  # gateway status",
+      "  \x1b[36moclog\x1b[0m     # recent gateway logs",
+      "  \x1b[36moctail\x1b[0m    # follow gateway logs",
+      "  \x1b[36mocnatsstatus | ocnatslog | ocnatstail\x1b[0m  # NATS subscriber (when enabled)",
+    );
+  }
+  return lines.join("\n");
 }
 
 function createTerraformDeps(s3: S3Client, dynamodb: DynamoDBClient, sts: STSClient): TerraformDeps {
@@ -1222,7 +1232,13 @@ export async function runOnboard(
 
   // ── Step 12: Verify ──────────────────────────────────────────────────────────
   header("Step 12 / 12 — Verify");
-  console.log(`${formatAwsVerificationHandoff()}\n`);
+  const awsRuntimeUsers = [...new Set(
+    agents
+      .map((agent) => fleet.targetForAgent(agent))
+      .filter((target) => target.provider === "aws-ssm")
+      .map((target) => target.aws.runtime_user),
+  )];
+  console.log(`${formatAwsVerificationHandoff(awsRuntimeUsers)}\n`);
 
   console.log("\x1b[32m\x1b[1m🎉 Onboarding complete!\x1b[0m");
   console.log(`  Fleet \x1b[1m${fleetName}\x1b[0m is deployed. Your bots should be online in Slack shortly.\n`);
