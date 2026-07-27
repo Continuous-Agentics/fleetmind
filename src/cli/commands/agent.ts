@@ -312,9 +312,11 @@ async function runPreflight(
   // privilege escalation — it's the same access they had before, just
   // proxied through the wrapper for ergonomics.
   //
-  // Path derived from fleet.yaml's agents.defaults.workspace_base (typically
-  // /opt/openclaw/workspace per the fleetmind agent_bootstrap.sh.tpl), with
-  // the per-agent dir appended:
+  // Path derived from the agent's resolved target.workspace_base (a
+  // target-configurable value, not a fixed convention — the AWS bootstrap
+  // default is /home/openclaw/.openclaw/workspace, matching the standard
+  // OpenClaw HOME layout; other targets may use a different base), with the
+  // per-agent dir appended:
   //   <workspaceBase>/<agent_id>/.openclaw/openclaw.json
   // SSM Run Command runs as root by default. User-systemd diagnostics and the
   // dashboard run as the configured runtime user with its XDG/DBus bus.

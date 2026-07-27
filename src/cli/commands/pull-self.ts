@@ -301,7 +301,15 @@ export interface PullSelfDeps {
 
 const AGENT_ENV_PATH = "/etc/fleetmind/agent.env";
 
-/** Parse /etc/fleetmind/agent.env into AgentEnv. */
+/** Parse /etc/fleetmind/agent.env into AgentEnv.
+ *
+ * `WORKSPACE_BASE` has no silent default — the standard AWS contract is
+ * `/home/openclaw/.openclaw/workspace`, but every provisioned host writes its
+ * own actual value into this file, so pull-self must use whatever the file
+ * says rather than assume a convention. A host bootstrapped before
+ * `WORKSPACE_BASE` existed (or with a corrupted/truncated agent.env) fails
+ * loudly here instead of silently resolving to a workspace path that may not
+ * match what's actually on disk. */
 export function parseAgentEnv(text: string): AgentEnv {
   const get = (key: string): string => {
     const m = text.match(new RegExp(`^${key}=(.+)$`, "m"));
@@ -309,9 +317,16 @@ export function parseAgentEnv(text: string): AgentEnv {
   };
   const fleetName = get("FLEET_NAME");
   const agentId = get("AGENT_ID");
-  const workspaceBase = get("WORKSPACE_BASE") || "/opt/openclaw/workspace";
+  const workspaceBase = get("WORKSPACE_BASE");
   if (!fleetName) throw new Error(`${AGENT_ENV_PATH} is missing FLEET_NAME`);
   if (!agentId) throw new Error(`${AGENT_ENV_PATH} is missing AGENT_ID`);
+  if (!workspaceBase) {
+    throw new Error(
+      `${AGENT_ENV_PATH} is missing WORKSPACE_BASE. This host's bootstrap is out of date — ` +
+      `re-provision it (or add WORKSPACE_BASE=/home/openclaw/.openclaw/workspace to ${AGENT_ENV_PATH} ` +
+      `if you know the actual on-disk workspace root) before running pull-self.`
+    );
+  }
   return { fleetName, agentId, workspaceBase };
 }
 

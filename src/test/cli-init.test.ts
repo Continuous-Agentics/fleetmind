@@ -46,7 +46,7 @@ describe("fleetmind init template", () => {
     assert.equal(target.id, "conductor-host");
     assert.equal(target.provider, "aws-ssm");
     if (target.provider === "aws-ssm") {
-      assert.equal(target.workspace_base, "/opt/openclaw/workspace");
+      assert.equal(target.workspace_base, "/home/openclaw/.openclaw/workspace");
       assert.equal(target.aws.runtime_user, "openclaw");
     }
 

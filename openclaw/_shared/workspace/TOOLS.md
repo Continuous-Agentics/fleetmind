@@ -9,7 +9,7 @@ unique to your setup.
 | What | Path |
 |------|------|
 | Code / repos / builds | `/opt/work/{{ID}}/` |
-| OpenClaw workspace (config, memory, skills) | `/opt/openclaw/workspace/{{ID}}/` |
+| OpenClaw workspace (config, memory, skills) | `/home/openclaw/.openclaw/workspace/{{ID}}/` |
 
 Create the work directory on first use: `mkdir -p /opt/work/{{ID}}/`
 

@@ -37,7 +37,7 @@ import type { Fleet, AgentConfig } from "../config/schema.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
-const EC2_WORKSPACE_BASE = "/opt/openclaw/workspace";
+const EC2_WORKSPACE_BASE = "/home/openclaw/.openclaw/workspace";
 
 const TEST_TARGET_ID = "ec2-host";
 
@@ -166,7 +166,7 @@ describe("deploy local-render-path regression", () => {
   // ── Bug 1: no absolute workspace_base path used locally ───────────────────
 
   test("provisionAgent writes to localBase/rendered/workspaces/<id>/, not to workspace_base", async () => {
-    const fleet = makeFleet(); // workspace_base = /opt/openclaw/workspace
+    const fleet = makeFleet(); // workspace_base = /home/openclaw/.openclaw/workspace
     const agent = makeConductorAgent();
 
     await provisionAgent(fleet, agent, false, tmpDir);
@@ -186,7 +186,7 @@ describe("deploy local-render-path regression", () => {
 
   test("provisionAgent does not try to mkdir an absolute path from workspace_base", async () => {
     // This is the core regression: if provisionAgent tried to mkdir
-    // /opt/openclaw/workspace/... it would throw EACCES. Using a temp dir as
+    // /home/openclaw/.openclaw/workspace/... it would throw EACCES. Using a temp dir as
     // localBase means the mkdirSync is always within a writable location.
     const fleet = makeFleet("/some/absolute/ec2/path");
     const agent = makeForgeAgent();
@@ -255,7 +255,7 @@ describe("deploy local-render-path regression", () => {
   // ── workspace_base preserved in rendered openclaw.json (EC2-side) ─────────
 
   test("renderOpenClawJson uses workspace_base/<id> (no prefix) for EC2-side workspace path", () => {
-    const fleet = makeFleet("/opt/openclaw/workspace");
+    const fleet = makeFleet("/home/openclaw/.openclaw/workspace");
     fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
 
     const json = renderOpenClawJson(fleet) as {
@@ -266,7 +266,7 @@ describe("deploy local-render-path regression", () => {
       // EC2 workspace path must be workspace_base/<agent_id>
       assert.equal(
         entry.workspace,
-        `/opt/openclaw/workspace/${entry.id}`,
+        `/home/openclaw/.openclaw/workspace/${entry.id}`,
         `EC2-side workspace for ${entry.id} must be workspace_base/<id> (no prefix)`
       );
 

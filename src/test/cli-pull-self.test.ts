@@ -55,7 +55,7 @@ import {
 const AGENT_ENV: AgentEnv = {
   fleetName: "test-fleet",
   agentId: "conductor",
-  workspaceBase: "/opt/openclaw/workspace",
+  workspaceBase: "/home/openclaw/.openclaw/workspace",
 };
 
 function makeFile(p: string, size = 1000, sha256 = "aaa"): ManifestFile {
@@ -88,10 +88,9 @@ describe("parseAgentEnv", () => {
     assert.equal(env.workspaceBase, "/custom/ws");
   });
 
-  test("defaults WORKSPACE_BASE to /opt/openclaw/workspace when absent", () => {
+  test("throws when WORKSPACE_BASE is missing (no silent default)", () => {
     const text = `FLEET_NAME=test-fleet\nAGENT_ID=forge\n`;
-    const env = parseAgentEnv(text);
-    assert.equal(env.workspaceBase, "/opt/openclaw/workspace");
+    assert.throws(() => parseAgentEnv(text), /WORKSPACE_BASE/);
   });
 
   test("throws when FLEET_NAME is missing", () => {
@@ -105,10 +104,11 @@ describe("parseAgentEnv", () => {
   });
 
   test("trims whitespace from values", () => {
-    const text = `FLEET_NAME=  test-fleet  \nAGENT_ID=  forge  \n`;
+    const text = `FLEET_NAME=  test-fleet  \nAGENT_ID=  forge  \nWORKSPACE_BASE=  /home/openclaw/.openclaw/workspace  \n`;
     const env = parseAgentEnv(text);
     assert.equal(env.fleetName, "test-fleet");
     assert.equal(env.agentId, "forge");
+    assert.equal(env.workspaceBase, "/home/openclaw/.openclaw/workspace");
   });
 });
 

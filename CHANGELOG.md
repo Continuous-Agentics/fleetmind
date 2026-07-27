@@ -6,6 +6,34 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **AWS agent hosts standardize on the same HOME layout as local/ssh
+  targets.** The default `workspace_base` for new AWS fleets is now
+  `/home/openclaw/.openclaw/workspace` (previously `/opt/openclaw/workspace`),
+  matching `fleetmind up`'s existing `~/.openclaw` contract for local targets.
+  `HOME` for the gateway/NATS-subscriber systemd units, the operator-facing
+  `openclaw.json`/`openclaw.base.json`, and each agent's workspace all now
+  live under a single OS-account home instead of splitting config-under-home
+  and state-under-`/opt`. This is a CLI/schema-level change only — the
+  `terraform-aws-fleetmind` bootstrap template still writes the old `/opt`
+  path until its companion migration lands (see that repo's
+  `docs/MIGRATIONS.md` for the coordinated cutover). Existing fleets with an
+  explicit `workspace_base:` in `fleet.yaml`/`/etc/fleetmind/agent.env` are
+  unaffected — this only changes the *default* used by `fleetmind init`'s
+  scaffold and the (now-hardfail, previously-silent-`/opt`-fallback)
+  `pull-self` `WORKSPACE_BASE` resolution.
+- **`pull-self`'s `WORKSPACE_BASE` fallback removed.** Previously, if
+  `/etc/fleetmind/agent.env` omitted `WORKSPACE_BASE=`, `pull-self` silently
+  assumed `/opt/openclaw/workspace`. It now fails loudly with a clear message
+  instead of guessing — an out-of-date bootstrap should be re-provisioned
+  (or `WORKSPACE_BASE=` added explicitly), not silently pointed at a
+  possibly-wrong directory.
+- **`fleetmind pull-workspace` no longer hardcodes `/opt/openclaw/workspace`.**
+  It now derives the on-host workspace directory from the agent's resolved
+  `target.workspace_base`, consistent with every other command that reads a
+  workspace path (`pull-self`, `push fleet`, the renderer).
+
 ## [1.0.2] — 2026-07-27
 
 ### Changed

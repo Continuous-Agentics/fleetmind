@@ -90,7 +90,7 @@ describe("NatsSubjectPrefix", () => {
 });
 
 describe("WorkspaceBase", () => {
-  for (const ok of ["/home/ec2-user/.openclaw", "/Users/openclaw/.openclaw", "/opt/openclaw/workspace"]) {
+  for (const ok of ["/home/ec2-user/.openclaw", "/Users/openclaw/.openclaw", "/opt/openclaw/workspace", "/home/openclaw/.openclaw/workspace"]) {
     it(`accepts ${ok}`, () => assert.ok(WorkspaceBaseId.is(ok)));
   }
   for (const bad of [

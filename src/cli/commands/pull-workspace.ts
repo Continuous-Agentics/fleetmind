@@ -148,7 +148,13 @@ export async function runPullWorkspace(opts: PullWorkspaceOptions): Promise<void
       continue;
     }
 
-    const workspaceDir = `/opt/openclaw/workspace/${agentId}`;
+    const agent = fleet.getAgent(agentId);
+    if (!agent) {
+      log.warn(`  ${agentId}: not found in fleet — skipping`);
+      continue;
+    }
+    const target = fleet.targetForAgent(agent);
+    const workspaceDir = path.join(target.workspace_base, agentId);
     const tmpTarPath = `/tmp/fleetmind-pull-workspace-${agentId}.tar.gz`;
     const s3Key = `deploy-staging/pull/${agentId}/workspace.tar.gz`;
 
