@@ -34,7 +34,6 @@ targets:
     provider: aws-ssm
     os: linux
     service_manager: systemd
-    workspace_base: /opt/openclaw/workspace
     aws:
       region: us-west-2          # edit to your region
       # runtime_user: openclaw   # default; set ec2-user only for legacy hosts
@@ -43,7 +42,6 @@ targets:
   #   provider: ssh
   #   os: macos
   #   service_manager: launchd
-  #   workspace_base: /Users/openclaw/.openclaw
   #   ssh:
   #     host: mac-lab-1.local
   #     user: openclaw
@@ -52,7 +50,6 @@ targets:
   #   provider: local
   #   os: macos
   #   service_manager: launchd
-  #   workspace_base: ~/.openclaw
 
 agents:
   defaults:

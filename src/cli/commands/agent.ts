@@ -1,7 +1,6 @@
 import { Command } from "commander";
 import fs from "node:fs";
 import net from "node:net";
-import path from "node:path";
 import { spawn } from "node:child_process";
 import chalk from "chalk";
 import { SSMClient, SendCommandCommand, GetCommandInvocationCommand } from "@aws-sdk/client-ssm";
@@ -12,6 +11,7 @@ import { gatewaySecretName } from "../../core/secret-names.js";
 import { log } from "../../utils/log.js";
 import { lookupInstanceId } from "./pull-workspace.js";
 import { buildAwsRuntimeUserCommand } from "../../deploy/aws-runtime-user.js";
+import { standardWorkspaceBase, standardConfigDir } from "../../core/model.js";
 
 const UNRESOLVED_GATEWAY_AUTH_PREFIX = "__FLEETMIND_UNRESOLVED_GATEWAY_AUTH__:";
 
@@ -74,7 +74,7 @@ Examples:
           process.exit(1);
         }
 
-        const workspace = path.join(fleet.targetForAgent(a).workspace_base, `workspace-${a.id}`);
+        const workspace = standardWorkspaceBase(fleet.targetForAgent(a));
         const wsExists = fs.existsSync(workspace);
         const model = a.model ?? fleet.agents.defaults.model;
         const skills = a.skills.map((s) => s.name + (s.version ? `@${s.version}` : "")).join(", ") || "—";
@@ -174,12 +174,12 @@ Examples:
           if (target.provider !== "aws-ssm") {
             throw new Error(`agent connect requires an aws-ssm target; '${agentId}' uses ${target.provider}`);
           }
-          const agentWorkspaceBase = target.workspace_base;
+          const agentConfigDir = standardConfigDir(target);
           preflightResult = await runPreflight(
             instanceId,
             agentId,
             region,
-            agentWorkspaceBase,
+            agentConfigDir,
             target.aws.runtime_user,
           );
           if (preflightResult.authMode === "token" && gatewayAuthSecret) {
@@ -297,7 +297,7 @@ async function runPreflight(
   instanceId: string,
   agentId: string,
   region: string,
-  workspaceBase: string,
+  configDir: string,
   runtimeUser: string,
 ): Promise<PreflightResult> {
   log.bold(`Pre-flight diagnostics...`);
@@ -312,13 +312,14 @@ async function runPreflight(
   // privilege escalation — it's the same access they had before, just
   // proxied through the wrapper for ergonomics.
   //
-  // Path derived from fleet.yaml's agents.defaults.workspace_base (typically
-  // /opt/openclaw/workspace per the fleetmind agent_bootstrap.sh.tpl), with
-  // the per-agent dir appended:
-  //   <workspaceBase>/<agent_id>/.openclaw/openclaw.json
+  // Path derived from the agent's fixed standard config dir (see
+  // ../../core/model.ts's standardConfigDir — not operator-configurable).
+  // This is a SIBLING of the workspace directory, not a subdirectory inside
+  // it — openclaw.json always lives at <home>/.openclaw/openclaw.json,
+  // regardless of where the agent's workspace is rooted.
   // SSM Run Command runs as root by default. User-systemd diagnostics and the
   // dashboard run as the configured runtime user with its XDG/DBus bus.
-  const configFile = `${workspaceBase}/${agentId}/.openclaw/openclaw.json`;
+  const configFile = `${configDir}/openclaw.json`;
   const envFile = `/run/openclaw-${agentId}.env`;
   const commands = [
     `set +e`,

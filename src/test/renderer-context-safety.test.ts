@@ -13,7 +13,6 @@ function makeFleet(): Fleet {
           provider: "local",
           os: "macos",
           service_manager: "launchd",
-          workspace_base: "/Users/oc/.openclaw",
         },
       },
       agents: {

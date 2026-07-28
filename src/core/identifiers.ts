@@ -39,9 +39,6 @@ export type SkillName = Brand<string, "SkillName">;
 /** NATS subject prefix. Dot-separated subject tokens with no wildcards. */
 export type NatsSubjectPrefix = Brand<string, "NatsSubjectPrefix">;
 
-/** Absolute, traversal-free workspace base path on a target host. */
-export type WorkspaceBase = Brand<string, "WorkspaceBase">;
-
 // ── Validators ───────────────────────────────────────────────────────────────
 // Each returns a human-readable error message, or null when the value is valid.
 
@@ -92,14 +89,6 @@ function validateNatsSubjectPrefix(v: string): string | null {
   return null;
 }
 
-function validateWorkspaceBase(v: string): string | null {
-  if (!v.startsWith("/")) return "must be an absolute path (start with '/')";
-  if (v.includes("\0")) return "must not contain null bytes";
-  if (/\s$/.test(v)) return "must not have trailing whitespace";
-  if (v.split("/").includes("..")) return "must not contain '..' segments (path traversal)";
-  return null;
-}
-
 // ── Identifier kind factory ──────────────────────────────────────────────────
 
 export interface IdentifierKind<B extends string> {
@@ -147,10 +136,6 @@ export const NatsSubjectPrefixId = defineIdentifier<"NatsSubjectPrefix">(
   "NATS subject prefix",
   validateNatsSubjectPrefix
 );
-export const WorkspaceBaseId = defineIdentifier<"WorkspaceBase">(
-  "workspace base path",
-  validateWorkspaceBase
-);
 
 // Zod schemas for use in the wire schema (validate + brand at parse time).
 export const FleetNameSchema = FleetNameId.schema;
@@ -158,7 +143,6 @@ export const AgentIdSchema = AgentIdId.schema;
 export const TargetIdSchema = TargetIdId.schema;
 export const SkillNameSchema = SkillNameId.schema;
 export const NatsSubjectPrefixSchema = NatsSubjectPrefixId.schema;
-export const WorkspaceBaseSchema = WorkspaceBaseId.schema;
 
 // ── Convention helpers ────────────────────────────────────────────────────────
 

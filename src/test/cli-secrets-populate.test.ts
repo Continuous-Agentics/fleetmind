@@ -1087,7 +1087,7 @@ describe("materializeHostEnv", () => {
       FleetSchema.parse({
         fleet: { name: "demo" },
         targets: {
-          box: { provider: "local", os: "macos", service_manager: "launchd", workspace_base: "/Users/oc/.openclaw" },
+          box: { provider: "local", os: "macos", service_manager: "launchd" },
         },
         agents: {
           defaults: { target: "box", model: "anthropic/claude-sonnet-4-6" },

@@ -13,11 +13,10 @@ import { agentsForTarget, renderHostOpenClawJson } from "../runtime/renderer.js"
 
 /** Two hosts: conductor + pixel on mac-1, forge on mac-2. */
 function makeFleet(): Fleet {
-  const localTarget = (workspaceBase: string) => ({
+  const localTarget = () => ({
     provider: "local",
     os: "macos",
     service_manager: "launchd",
-    workspace_base: workspaceBase,
   });
   const slack = (id: string) => ({
     provider: "slack",
@@ -29,8 +28,8 @@ function makeFleet(): Fleet {
     FleetSchema.parse({
       fleet: { name: "demo-fleet" },
       targets: {
-        "mac-1": localTarget("/Users/openclaw/.openclaw"),
-        "mac-2": localTarget("/Users/openclaw/.openclaw"),
+        "mac-1": localTarget(),
+        "mac-2": localTarget(),
       },
       agents: {
         list: [

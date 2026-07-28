@@ -13,7 +13,6 @@ import {
   AgentIdId,
   SkillNameId,
   NatsSubjectPrefixId,
-  WorkspaceBaseId,
   agentEnvPrefix,
 } from "../core/identifiers.js";
 
@@ -86,20 +85,6 @@ describe("NatsSubjectPrefix", () => {
     "trailing.", // empty trailing token
   ]) {
     it(`rejects ${JSON.stringify(bad)}`, () => assert.equal(NatsSubjectPrefixId.is(bad), false));
-  }
-});
-
-describe("WorkspaceBase", () => {
-  for (const ok of ["/home/ec2-user/.openclaw", "/Users/openclaw/.openclaw", "/opt/openclaw/workspace"]) {
-    it(`accepts ${ok}`, () => assert.ok(WorkspaceBaseId.is(ok)));
-  }
-  for (const bad of [
-    "relative/path", // not absolute
-    "~/.openclaw", // not absolute
-    "/home/../etc", // traversal segment
-    "/trailing ", // trailing whitespace
-  ]) {
-    it(`rejects ${JSON.stringify(bad)}`, () => assert.equal(WorkspaceBaseId.is(bad), false));
   }
 });
 

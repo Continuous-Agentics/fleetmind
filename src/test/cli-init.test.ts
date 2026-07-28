@@ -3,10 +3,9 @@
  *
  * The v1→v2 clean break broke init silently: it scaffolded a fleet.yaml that
  * could no longer load (no `targets:`, agent-level `slack:` instead of
- * `channels:`, `workspace_base` on agents.defaults). tsc can't catch that — the
- * template is a string. This test renders the real template and round-trips it
- * through loadFleet/normalizeFleet so a freshly-init'd fleet is guaranteed to
- * load.
+ * `channels:`). tsc can't catch that — the template is a string. This test
+ * renders the real template and round-trips it through loadFleet/normalizeFleet
+ * so a freshly-init'd fleet is guaranteed to load.
  */
 
 import assert from "node:assert/strict";
@@ -17,6 +16,7 @@ import { test, describe, beforeEach, afterEach } from "node:test";
 
 import { renderInitTemplate } from "../cli/commands/init.js";
 import { loadFleet } from "../config/loader.js";
+import { standardWorkspaceBase } from "../core/model.js";
 import { computeFleetSkillGaps } from "../runtime/skills-manifest.js";
 
 let tmpDir: string;
@@ -46,7 +46,8 @@ describe("fleetmind init template", () => {
     assert.equal(target.id, "conductor-host");
     assert.equal(target.provider, "aws-ssm");
     if (target.provider === "aws-ssm") {
-      assert.equal(target.workspace_base, "/opt/openclaw/workspace");
+      // workspace_base is not a fleet.yaml field — the standard path is fixed.
+      assert.equal(standardWorkspaceBase(target), "/home/openclaw/.openclaw/workspace");
       assert.equal(target.aws.runtime_user, "openclaw");
     }
 

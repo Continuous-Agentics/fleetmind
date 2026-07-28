@@ -338,7 +338,6 @@ ${delegationYaml}
 targets:
   test-host:
     provider: local
-    workspace_base: /home/openclaw/.openclaw
 agents:
   defaults:
     model: anthropic/claude-sonnet-4-6

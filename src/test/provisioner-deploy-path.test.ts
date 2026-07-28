@@ -1,8 +1,8 @@
 /**
  * Regression tests for the fleetmind deploy local-render-path bugs.
  *
- * Bug 1: Provisioner used workspace_base (EC2-side absolute path) as the local
- *   mkdir target, causing EACCES on macOS/non-root machines:
+ * Bug 1: Provisioner used the on-host workspace root (EC2-side absolute path)
+ *   as the local mkdir target, causing EACCES on macOS/non-root machines:
  *     EACCES: permission denied, mkdir '/opt/openclaw/workspace/workspace-conductor'
  *
  * Bug 2: Per-agent dir had spurious "workspace-" prefix ("workspace-conductor")
@@ -10,10 +10,11 @@
  *
  * These tests verify:
  *   1. Local render writes to <localBase>/rendered/workspaces/<agent_id>/ — never
- *      to an absolute path from workspace_base.
+ *      to the on-host absolute workspace path.
  *   2. No "workspace-" prefix anywhere in local output.
- *   3. workspace_base from fleet.yaml is preserved in the rendered openclaw.json
- *      (for the agent gateway to use on EC2).
+ *   3. The fixed standard workspace path (not operator-configurable — there is
+ *      no `workspace_base` field any more) is what's rendered into
+ *      openclaw.json for the agent gateway to use on EC2.
  *   4. deploy does not try to mkdir an absolute path on the operator's machine.
  *   5. Per-agent openclaw.json slices (renderAgentOpenClawJson) contain only the
  *      named agent's entries for agents.list, bindings, Slack accounts, and a2a allow.
@@ -37,18 +38,19 @@ import type { Fleet, AgentConfig } from "../config/schema.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
-const EC2_WORKSPACE_BASE = "/opt/openclaw/workspace";
+// Fixed standard workspace path for aws-ssm/linux targets — not
+// operator-configurable (see ../core/model.ts's standardWorkspaceBase).
+const EC2_WORKSPACE_BASE = "/home/openclaw/.openclaw/workspace";
 
 const TEST_TARGET_ID = "ec2-host";
 
-/** Minimal Fleet with an EC2-style target (absolute workspace_base path). */
-function makeFleet(workspaceBase = EC2_WORKSPACE_BASE): Fleet {
+/** Minimal Fleet with an EC2-style (aws-ssm/linux) target. */
+function makeFleet(): Fleet {
   const target = {
     id: TEST_TARGET_ID,
     provider: "aws-ssm",
     os: "linux",
     service_manager: "systemd",
-    workspace_base: workspaceBase,
     aws: { region: "us-west-2" },
   };
   return {
@@ -163,10 +165,10 @@ describe("deploy local-render-path regression", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  // ── Bug 1: no absolute workspace_base path used locally ───────────────────
+  // ── Bug 1: no absolute on-host workspace path used locally ─────────────────
 
-  test("provisionAgent writes to localBase/rendered/workspaces/<id>/, not to workspace_base", async () => {
-    const fleet = makeFleet(); // workspace_base = /opt/openclaw/workspace
+  test("provisionAgent writes to localBase/rendered/workspaces/<id>/, not to the on-host workspace path", async () => {
+    const fleet = makeFleet(); // on-host workspace path = /home/openclaw/.openclaw/workspace
     const agent = makeConductorAgent();
 
     await provisionAgent(fleet, agent, false, tmpDir);
@@ -174,9 +176,10 @@ describe("deploy local-render-path regression", () => {
     const expectedWorkspace = path.join(tmpDir, "rendered", "workspaces", "conductor");
     assert.ok(fs.existsSync(expectedWorkspace), `workspace dir should exist at ${expectedWorkspace}`);
 
-    // The agent's dir must NOT have been created inside workspace_base on this machine.
-    // (Checking the agent subpath, not workspace_base itself, so the test is resilient
-    // to workspace_base pre-existing — e.g. when run on an agent EC2.)
+    // The agent's dir must NOT have been created inside the on-host workspace
+    // path on this machine. (Checking the agent subpath, not the base itself,
+    // so the test is resilient to that base pre-existing — e.g. when run on
+    // an agent EC2.)
     const wrongAgentDir = path.join(EC2_WORKSPACE_BASE, agent.id);
     assert.ok(
       !fs.existsSync(wrongAgentDir),
@@ -184,17 +187,17 @@ describe("deploy local-render-path regression", () => {
     );
   });
 
-  test("provisionAgent does not try to mkdir an absolute path from workspace_base", async () => {
+  test("provisionAgent does not try to mkdir the on-host absolute workspace path", async () => {
     // This is the core regression: if provisionAgent tried to mkdir
-    // /opt/openclaw/workspace/... it would throw EACCES. Using a temp dir as
+    // /home/openclaw/.openclaw/workspace/... it would throw EACCES. Using a temp dir as
     // localBase means the mkdirSync is always within a writable location.
-    const fleet = makeFleet("/some/absolute/ec2/path");
+    const fleet = makeFleet();
     const agent = makeForgeAgent();
 
     // Must not throw — previously this would EACCES on a non-root machine.
     await assert.doesNotReject(
       () => provisionAgent(fleet, agent, false, tmpDir),
-      "provisionAgent must not throw even when workspace_base is an unwritable absolute path"
+      "provisionAgent must not throw even though the on-host workspace path is unwritable here"
     );
   });
 
@@ -252,10 +255,10 @@ describe("deploy local-render-path regression", () => {
     assert.ok(!fs.existsSync(path.join(ws, "PATCHES.md")), "PATCHES.md must not be written to workspace");
   });
 
-  // ── workspace_base preserved in rendered openclaw.json (EC2-side) ─────────
+  // ── fixed standard workspace path rendered into openclaw.json (EC2-side) ──
 
-  test("renderOpenClawJson uses workspace_base/<id> (no prefix) for EC2-side workspace path", () => {
-    const fleet = makeFleet("/opt/openclaw/workspace");
+  test("renderOpenClawJson uses the fixed standard workspace path (no per-agent subdir) for EC2-side workspace path", () => {
+    const fleet = makeFleet();
     fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
 
     const json = renderOpenClawJson(fleet) as {
@@ -263,24 +266,22 @@ describe("deploy local-render-path regression", () => {
     };
 
     for (const entry of json.agents.list) {
-      // EC2 workspace path must be workspace_base/<agent_id>
+      // EC2 workspace path must be exactly <standard-workspace-base> — no per-agent subdir.
       assert.equal(
         entry.workspace,
-        `/opt/openclaw/workspace/${entry.id}`,
-        `EC2-side workspace for ${entry.id} must be workspace_base/<id> (no prefix)`
-      );
-
-      // Must NOT have the spurious "workspace-" prefix.
-      assert.ok(
-        !entry.workspace.includes("workspace-"),
-        `EC2 workspace path must not contain "workspace-" prefix: got ${entry.workspace}`
+        EC2_WORKSPACE_BASE,
+        `EC2-side workspace for ${entry.id} must be the flat standard base (no /<id> suffix)`
       );
     }
   });
 
-  test("renderOpenClawJson preserves workspace_base from fleet.yaml for EC2 consumption", () => {
-    const customBase = "/home/ec2-user/.openclaw";
-    const fleet = makeFleet(customBase);
+  test("renderOpenClawJson is unaffected by a stray workspace_base field — the schema rejects it", () => {
+    // workspace_base is no longer a recognized target field. A stray value
+    // (e.g. left over from an un-migrated fleet.yaml) is silently stripped by
+    // Zod rather than changing the rendered path — the fixed standard path
+    // always wins.
+    const fleet = makeFleet();
+    (fleet.targets[TEST_TARGET_ID] as unknown as Record<string, unknown>).workspace_base = "/home/ec2-user/.openclaw";
     fleet.agents.list = [makeConductorAgent()];
 
     const json = renderOpenClawJson(fleet) as {
@@ -289,8 +290,8 @@ describe("deploy local-render-path regression", () => {
 
     assert.equal(
       json.agents.list[0]!.workspace,
-      `${customBase}/conductor`,
-      "workspace_base from fleet.yaml must be preserved in openclaw.json"
+      EC2_WORKSPACE_BASE,
+      "a stray workspace_base value on the resolved target must not change the rendered path"
     );
   });
 

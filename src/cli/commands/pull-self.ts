@@ -24,7 +24,14 @@ import {
 } from "@aws-sdk/client-s3";
 
 import type { ManifestFile, DeployManifest } from "./push-fleet.js";
+import { CONFIG_STAGING_PREFIX } from "./push-fleet.js";
 import { loadFleet } from "../../config/loader.js";
+import {
+  standardWorkspaceBase,
+  standardConfigDir,
+  STANDARD_AWS_WORKSPACE_BASE,
+  STANDARD_AWS_CONFIG_DIR,
+} from "../../core/model.js";
 import { agentArtifactKeys } from "../../deploy/plan.js";
 import { artifactStoreFor } from "../../deploy/factory.js";
 import { serviceManagerFor } from "../../deploy/service.js";
@@ -273,7 +280,6 @@ export function mergeMarkdownSections(
 export interface AgentEnv {
   fleetName: string;
   agentId: string;
-  workspaceBase: string;
 }
 
 export interface FileDiff {
@@ -289,10 +295,11 @@ export interface PullSelfDeps {
   readAgentEnv?: () => AgentEnv;
   /** Download file from S3, return Buffer. */
   downloadFromS3?: (bucket: string, key: string, region: string) => Promise<Buffer>;
-  /** Compute manifest of current workspace directory. */
-  computeCurrentManifest?: (workspaceDir: string) => ManifestFile[];
-  /** Apply a diff from stagingDir into workspaceDir. */
-  applyChanges?: (stagingDir: string, workspaceDir: string, diff: FileDiff) => void;
+  /** Compute manifest of current workspace directory + config dir (a sibling
+   *  of the workspace, not nested inside it — see `computeHostManifest`). */
+  computeCurrentManifest?: (workspaceDir: string, configDir: string) => ManifestFile[];
+  /** Apply a diff from stagingDir into workspaceDir/configDir. */
+  applyChanges?: (stagingDir: string, workspaceDir: string, diff: FileDiff, configDir: string) => void;
   /** Restart the gateway systemd unit. */
   restartGateway?: (agentId: string) => void;
 }
@@ -301,7 +308,15 @@ export interface PullSelfDeps {
 
 const AGENT_ENV_PATH = "/etc/fleetmind/agent.env";
 
-/** Parse /etc/fleetmind/agent.env into AgentEnv. */
+/** Parse /etc/fleetmind/agent.env into AgentEnv.
+ *
+ * The workspace root is no longer read from this file — there is no
+ * operator/bootstrap-configurable `workspace_base` any more. Every host uses
+ * the fixed standard OpenClaw HOME contract (`~/.openclaw/workspace`,
+ * see ../../core/model.ts's `standardWorkspaceBase`). Fleet-aware calls derive
+ * it from the resolved target; the legacy on-host path uses the fixed AWS
+ * standard home. A stray `WORKSPACE_BASE=` line from an old bootstrap image
+ * is simply ignored — it's obsolete, not authoritative. */
 export function parseAgentEnv(text: string): AgentEnv {
   const get = (key: string): string => {
     const m = text.match(new RegExp(`^${key}=(.+)$`, "m"));
@@ -309,10 +324,9 @@ export function parseAgentEnv(text: string): AgentEnv {
   };
   const fleetName = get("FLEET_NAME");
   const agentId = get("AGENT_ID");
-  const workspaceBase = get("WORKSPACE_BASE") || "/opt/openclaw/workspace";
   if (!fleetName) throw new Error(`${AGENT_ENV_PATH} is missing FLEET_NAME`);
   if (!agentId) throw new Error(`${AGENT_ENV_PATH} is missing AGENT_ID`);
-  return { fleetName, agentId, workspaceBase };
+  return { fleetName, agentId };
 }
 
 /** Default: read /etc/fleetmind/agent.env from disk. */
@@ -357,6 +371,46 @@ export function computeWorkspaceManifest(workspaceDir: string): ManifestFile[] {
 
   if (fs.existsSync(workspaceDir)) walk(workspaceDir);
   return results.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
+ * Compute the manifest entries for the two operator-shipped OpenClaw config
+ * files that live in the canonical config directory (`<home>/.openclaw` — a
+ * SIBLING of the workspace, see ../../core/model.ts's `standardConfigDir`),
+ * NOT inside the workspace tree. Only these two named files are considered
+ * — `configDir` also holds a large amount of unrelated OpenClaw runtime
+ * state (sessions, credentials, plugin state, etc.) that pull-self must
+ * never touch or manifest.
+ *
+ * Returned paths are prefixed with `CONFIG_STAGING_PREFIX/` to match the
+ * tarball's manifest shape built by `buildStagingDir` in push-fleet.ts, so
+ * `computeDiff` compares like-for-like paths regardless of where each side
+ * of the diff physically lives on disk.
+ */
+export function computeConfigManifest(configDir: string): ManifestFile[] {
+  const results: ManifestFile[] = [];
+  for (const name of ["openclaw.json", "openclaw.base.json"]) {
+    const abs = path.join(configDir, name);
+    if (!fs.existsSync(abs)) continue;
+    const stat = fs.statSync(abs);
+    if (!stat.isFile()) continue;
+    const content = fs.readFileSync(abs);
+    const sha256 = crypto.createHash("sha256").update(content).digest("hex");
+    const mode = parseInt((stat.mode & 0o777).toString(8), 10);
+    results.push({ path: `${CONFIG_STAGING_PREFIX}/${name}`, size: stat.size, sha256, mode });
+  }
+  return results;
+}
+
+/**
+ * Compute the full "current state" manifest pull-self diffs against:
+ * workspace files plus the two config-dir files, using the config dir's
+ * canonical location (a sibling of the workspace, not nested inside it).
+ */
+export function computeHostManifest(workspaceDir: string, configDir: string): ManifestFile[] {
+  return [...computeWorkspaceManifest(workspaceDir), ...computeConfigManifest(configDir)].sort(
+    (a, b) => a.path.localeCompare(b.path)
+  );
 }
 
 /** Compute diff between current and incoming file manifests. */
@@ -534,7 +588,8 @@ export function showFileDiffs(
   workspaceDir: string,
   modified: { incoming: ManifestFile; currentSize: number }[],
   filter?: string,
-  full?: boolean
+  full?: boolean,
+  configDir: string = path.join(path.dirname(workspaceDir), ".openclaw")
 ): void {
   const MAX_LINES_PER_FILE = 200;
 
@@ -551,7 +606,7 @@ export function showFileDiffs(
   }
 
   for (const { incoming } of targets) {
-    const currentPath = path.join(workspaceDir, incoming.path);
+    const currentPath = resolveDestPath(incoming.path, workspaceDir, configDir);
     const stagingPath = path.join(stagingDir, incoming.path);
     if (!fs.existsSync(currentPath) || !fs.existsSync(stagingPath)) continue;
 
@@ -652,7 +707,12 @@ function diffObjects(
  *
  * incoming = new rendered config from tarball
  * live     = current on-disk config (may have operator patches)
- * base     = what fleetmind last rendered (.openclaw/openclaw.base.json)
+ * base     = what fleetmind last rendered (<configDir>/openclaw.base.json)
+ *
+ * `configDir` is the canonical OpenClaw config/state directory
+ * (<home>/.openclaw — see ../../core/model.ts's `standardConfigDir`), a
+ * SIBLING of the workspace directory, NOT a subdirectory inside it. Both
+ * openclaw.json and openclaw.base.json live directly under `configDir`.
  *
  * Operator patches (live keys that differ from base) are preserved on top
  * of the incoming rendered config. If no base exists (first push), incoming
@@ -662,11 +722,11 @@ function diffObjects(
 export function mergeOpenClawConfig(
   incomingPath: string,
   livePath: string,
-  workspaceDir: string
+  configDir: string
 ): Record<string, unknown> {
   const incoming = JSON.parse(fs.readFileSync(incomingPath, 'utf-8')) as Record<string, unknown>;
 
-  const basePath = path.join(workspaceDir, '.openclaw', 'openclaw.base.json');
+  const basePath = path.join(configDir, 'openclaw.base.json');
   if (!fs.existsSync(basePath) || !fs.existsSync(livePath)) {
     return incoming;
   }
@@ -730,7 +790,25 @@ export function mergeOpenClawConfig(
 }
 
 /**
- * Apply diff: copy added/modified from staging to workspace.
+ * Compute the on-disk destination path for a manifest entry.
+ *
+ * Config-staging entries (`CONFIG_STAGING_PREFIX/openclaw.json` and
+ * `CONFIG_STAGING_PREFIX/openclaw.base.json`) route to `configDir` — the
+ * canonical OpenClaw config/state directory (<home>/.openclaw, a SIBLING of
+ * the workspace, not a subdirectory of it). Everything else routes to
+ * `workspaceDir` as before.
+ */
+function resolveDestPath(relPath: string, workspaceDir: string, configDir: string): string {
+  const prefix = `${CONFIG_STAGING_PREFIX}/`;
+  if (relPath.startsWith(prefix)) {
+    return path.join(configDir, relPath.slice(prefix.length));
+  }
+  return path.join(workspaceDir, relPath);
+}
+
+/**
+ * Apply diff: copy added/modified from staging to workspace (or, for the two
+ * operator-shipped OpenClaw config files, to the canonical config directory).
  * Uses atomic .new → rename for modified files.
  *
  * Deletions are intentionally skipped — pull-self only manages files
@@ -742,15 +820,24 @@ export function mergeOpenClawConfig(
  * the deleted list by computeDiff before it ever reaches here, and is also
  * skipped in the modified loop — providing an explicit, named safety net
  * that survives future changes to deletion or update behaviour.
+ *
+ * `configDir` defaults to `<workspaceDir>/../.openclaw` is NOT assumed —
+ * callers must pass the resolved canonical config directory (see
+ * ../../core/model.ts's `standardConfigDir`); it is a sibling of
+ * `workspaceDir`, never a path nested inside it.
  */
 export function applyDiff(
   stagingDir: string,
   workspaceDir: string,
-  diff: FileDiff
+  diff: FileDiff,
+  configDir: string = path.join(path.dirname(workspaceDir), ".openclaw")
 ): void {
   // Defensive guard: even if a protected path slips past computeDiff (e.g.
   // direct applyDiff call in tests or future refactors), never delete it.
+  // Config-staging entries are never workspace-relative agent-owned state,
+  // so they never need (or get) protected-path filtering here.
   const safeDeleted = diff.deleted.filter((f) => {
+    if (f.path.startsWith(`${CONFIG_STAGING_PREFIX}/`)) return true;
     if (isProtectedPath(f.path)) {
       log.dim(`  ⚠ protected: ${f.path} (skipped — agent-owned, never deleted)`);
       return false;
@@ -761,46 +848,49 @@ export function applyDiff(
   // Apply added files
   for (const f of safeDiff.added) {
     const src = path.join(stagingDir, f.path);
-    const dest = path.join(workspaceDir, f.path);
+    const dest = resolveDestPath(f.path, workspaceDir, configDir);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.copyFileSync(src, dest);
     log.info(`  + ${f.path}`);
   }
 
-  // Apply modified files — atomic rename for all except .openclaw/openclaw.json
+  // Apply modified files — atomic rename for all except the config-staging
+  // openclaw.json entry
   for (const { incoming } of safeDiff.modified) {
     const src = path.join(stagingDir, incoming.path);
-    const dest = path.join(workspaceDir, incoming.path);
+    const dest = resolveDestPath(incoming.path, workspaceDir, configDir);
 
     // openclaw.json is operator-shipped (rendered by fleetmind). It MUST be
     // updated on every push via three-way merge so workspace/agentDir and
     // other renderer-managed fields stay current. Handle it BEFORE the
-    // protected-path check: .openclaw/ is protected to guard agent-owned
-    // runtime state (sessions, plugin state, cron) but NOT the two operator-
-    // shipped files that live there.
-    if (incoming.path === ".openclaw/openclaw.json") {
+    // protected-path check: it lives under CONFIG_STAGING_PREFIX/ in the
+    // tarball (deploying to the canonical config dir, a sibling of the
+    // workspace) — not under the workspace's own .openclaw/, which IS
+    // protected because it holds agent-owned runtime state (sessions,
+    // plugin state, cron).
+    if (incoming.path === `${CONFIG_STAGING_PREFIX}/openclaw.json`) {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       // Three-way merge: incoming (rendered) + (live - base) = merged.
       // Operator patches applied via 'openclaw config patch' survive pushes.
-      const merged = mergeOpenClawConfig(src, dest, workspaceDir);
+      const merged = mergeOpenClawConfig(src, dest, configDir);
       if (merged._patched) {
-        log.dim(`    ℹ live config patches preserved (see .openclaw/openclaw.base.json for base)`);
+        log.dim(`    ℹ live config patches preserved (see ${path.join(configDir, "openclaw.base.json")} for base)`);
         delete (merged as Record<string, unknown>)._patched;
       }
       fs.writeFileSync(dest, JSON.stringify(merged, null, 2));
-      log.info(`  ~ ${incoming.path}`);
+      log.info(`  ~ ${incoming.path} → ${dest}`);
       continue;
     }
 
     // openclaw.base.json is the render snapshot used as the three-way-merge
     // baseline. Always update it so the next push has an accurate baseline.
-    // Also exempt from the protected-path check for the same reason.
-    if (incoming.path === ".openclaw/openclaw.base.json") {
+    // Also deploys to the canonical config dir, same reasoning as above.
+    if (incoming.path === `${CONFIG_STAGING_PREFIX}/openclaw.base.json`) {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       const tmp = `${dest}.new`;
       fs.copyFileSync(src, tmp);
       fs.renameSync(tmp, dest);
-      log.info(`  ~ ${incoming.path}`);
+      log.info(`  ~ ${incoming.path} → ${dest}`);
       continue;
     }
 
@@ -918,7 +1008,7 @@ export async function runPullSelf(
 ): Promise<{ changed: boolean; applied: boolean; diff: FileDiff }> {
   const readEnv = deps.readAgentEnv ?? readAgentEnvFromDisk;
   const downloadFromS3 = deps.downloadFromS3 ?? defaultDownloadFromS3;
-  const computeCurrentManifest = deps.computeCurrentManifest ?? computeWorkspaceManifest;
+  const computeCurrentManifest = deps.computeCurrentManifest ?? computeHostManifest;
   const applyChangesImpl = deps.applyChanges ?? applyDiff;
   const restartGateway = deps.restartGateway ?? defaultRestartGateway;
 
@@ -927,9 +1017,16 @@ export async function runPullSelf(
   // Step 1: Resolve identity, the artifact source, and how to restart — by
   // deploy target. New path: --fleet/--agent (local/ssh) loads the fleet to
   // learn its target. Legacy path: /etc/fleetmind agent.env + the S3 ledger.
+  //
+  // workspaceDir and configDir are SIBLINGS on disk (<home>/.openclaw/workspace
+  // and <home>/.openclaw respectively) — configDir is never nested inside
+  // workspaceDir. openclaw.json/openclaw.base.json deploy under configDir, the
+  // same directory OpenClaw itself reads its config from and the same one the
+  // Terraform systemd unit's ConditionPathExists= gate checks.
   let fleetName: string;
   let agentId: string;
   let workspaceDir: string;
+  let configDir: string;
   let fetchArtifact: (key: string) => Promise<Buffer>;
   let restart: () => void;
 
@@ -941,7 +1038,8 @@ export async function runPullSelf(
     const target = fleet.targetForAgent(agent);
     fleetName = fleet.fleet.name;
     agentId = opts.agent;
-    workspaceDir = path.join(target.workspace_base, agentId);
+    workspaceDir = standardWorkspaceBase(target);
+    configDir = standardConfigDir(target);
     const store = artifactStoreFor(fleet, { bucket: `${fleetName}-ledger`, region });
     fetchArtifact = async (key: string) => {
       const buf = await store.get(key);
@@ -957,7 +1055,11 @@ export async function runPullSelf(
     const env = opts.agentEnvOverride ?? readEnv();
     fleetName = env.fleetName;
     agentId = env.agentId;
-    workspaceDir = path.join(env.workspaceBase, agentId);
+    // Legacy /etc/fleetmind agent.env path: no configurable workspace_base
+    // any more — every AWS host uses the fixed standard workspace root and
+    // the fixed standard (sibling) config dir.
+    workspaceDir = STANDARD_AWS_WORKSPACE_BASE;
+    configDir = STANDARD_AWS_CONFIG_DIR;
     const bucket = `${fleetName}-ledger`;
     fetchArtifact = (key: string) => downloadFromS3(bucket, key, region);
     if (opts.userSystemd) {
@@ -973,9 +1075,9 @@ export async function runPullSelf(
 
   log.info(`\nfleetmind pull-self — ${agentId} (fleet: ${fleetName})`);
 
-  // Step 2: Compute current workspace manifest
+  // Step 2: Compute current workspace + config-dir manifest
   log.step("Computing current workspace manifest...");
-  const currentFiles = computeCurrentManifest(workspaceDir);
+  const currentFiles = computeCurrentManifest(workspaceDir, configDir);
   log.dim(`  ${currentFiles.length} files in current workspace`);
 
   // Step 3: Fetch the incoming manifest from the artifact store
@@ -1034,12 +1136,12 @@ export async function runPullSelf(
 
   // Show per-file diffs if --show-diffs
   if (opts.showDiffs && diff.modified.length > 0) {
-    showFileDiffs(stagingDir, workspaceDir, diff.modified, opts.showDiffsFilter, opts.showDiffsFull);
+    showFileDiffs(stagingDir, workspaceDir, diff.modified, opts.showDiffsFilter, opts.showDiffsFull, configDir);
   }
 
   // Step 9: Apply diff
   log.step("Applying changes...");
-  applyChangesImpl(stagingDir, workspaceDir, diff);
+  applyChangesImpl(stagingDir, workspaceDir, diff, configDir);
 
   // Cleanup
   fs.rmSync(stagingDir, { recursive: true, force: true });

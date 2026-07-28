@@ -6,6 +6,45 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING: `targets.<id>.workspace_base` is no longer a fleet.yaml field.**
+  Every target now uses a single, fixed, non-configurable standard OpenClaw
+  HOME contract for workspaces — `<home>/.openclaw/workspace` — matching the
+  one-agent-per-host model:
+  - `local` targets: `~/.openclaw/workspace` (`os.homedir()` of the machine
+    running `fleetmind up`).
+  - `ssh`/`aws-ssm` targets: `/home/openclaw/.openclaw/workspace`
+    (or `/Users/openclaw/.openclaw/workspace` when `os: macos`) —
+    the dedicated `openclaw` OS account's home, independent of
+    `ssh.user`/`aws.runtime_user` (those only select which account runs the
+    systemd/launchd services).
+  `workspace_base:` in an existing `fleet.yaml` is now a schema validation
+  error (Zod rejects the unrecognized field) — delete the line; the fixed
+  path above is used unconditionally. This was previously introduced as a new
+  *default* (see the now-superseded entry this replaces); it is now the only
+  option. `HOME` for the gateway/NATS-subscriber systemd units, the
+  operator-facing `openclaw.json`/`openclaw.base.json`, and the agent
+  workspace all live under this one OS-account home. This is a CLI/schema-level
+  change only — the `terraform-aws-fleetmind` bootstrap template still writes
+  the old `/opt/openclaw/workspace` path until its companion migration lands
+  (see that repo's `docs/MIGRATIONS.md` for the coordinated cutover).
+- **`WorkspaceBase` branded identifier removed** (`core/identifiers.ts`) —
+  no longer needed now that the path isn't user-supplied input requiring
+  validation.
+
+### Changed
+
+- **`pull-self` no longer reads `WORKSPACE_BASE` from `/etc/fleetmind/agent.env`.**
+  The on-host workspace directory is always the fixed standard path
+  (`/home/openclaw/.openclaw/workspace` on AWS); a stray
+  `WORKSPACE_BASE=` line from an old bootstrap image is ignored rather than
+  trusted.
+- **`fleetmind pull-workspace` no longer hardcodes `/opt/openclaw/workspace`.**
+  It now derives the on-host workspace directory from the fixed standard
+  path for the agent's resolved target, consistent with every other command
+  that reads a workspace path (`pull-self`, `push fleet`, the renderer).
+
 ## [1.0.2] — 2026-07-27
 
 ### Changed

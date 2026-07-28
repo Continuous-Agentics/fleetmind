@@ -152,9 +152,24 @@ export function formatBytes(bytes: number): string {
 }
 
 /**
+ * Staging-tarball path prefix for the two operator-shipped OpenClaw config
+ * files (`openclaw.json` / `openclaw.base.json`). On the target host these
+ * deploy under the canonical OpenClaw config/state directory
+ * (`<home>/.openclaw/`, see ../../core/model.ts's `standardConfigDir`) — a
+ * SIBLING of the workspace directory (`<home>/.openclaw/workspace/`), not a
+ * subdirectory inside it. Staging them under this distinct, workspace-shaped
+ * prefix (rather than reusing the literal `.openclaw/` name, which inside the
+ * *workspace* tree means agent-owned runtime state — see PROTECTED_PATHS in
+ * pull-self.ts) keeps the tarball's manifest paths unambiguous: pull-self
+ * routes anything under this prefix to the config dir, and everything else to
+ * the workspace dir.
+ */
+export const CONFIG_STAGING_PREFIX = ".openclaw-config";
+
+/**
  * Build a staging directory for the tarball.
- * Copies workspace files + .openclaw/openclaw.json into a flat staging area.
- * Returns the staging dir path.
+ * Copies workspace files + the two operator-shipped OpenClaw config files
+ * into a flat staging area. Returns the staging dir path.
  */
 export function buildStagingDir(
   agentId: string,
@@ -171,15 +186,18 @@ export function buildStagingDir(
     copyDirSync(renderedWorkspaceDir, staging);
   }
 
-  // Copy openclaw.json into .openclaw/ AND a .openclaw/openclaw.base.json snapshot.
-  // pull-self uses the base to compute (live - base) = operator config patches,
-  // then merges those patches on top of the incoming rendered config so live
-  // config changes (e.g. from 'openclaw config patch' in chat) survive pushes.
+  // Stage openclaw.json under CONFIG_STAGING_PREFIX/ AND a
+  // CONFIG_STAGING_PREFIX/openclaw.base.json snapshot. pull-self uses the
+  // base to compute (live - base) = operator config patches, then merges
+  // those patches on top of the incoming rendered config so live config
+  // changes (e.g. from 'openclaw config patch' in chat) survive pushes.
+  // These deploy to the canonical config dir (<home>/.openclaw/), NOT into
+  // the workspace — see CONFIG_STAGING_PREFIX above.
   if (fs.existsSync(renderedOcJsonPath)) {
-    const oclawDir = path.join(staging, ".openclaw");
-    fs.mkdirSync(oclawDir, { recursive: true });
-    fs.copyFileSync(renderedOcJsonPath, path.join(oclawDir, "openclaw.json"));
-    fs.copyFileSync(renderedOcJsonPath, path.join(oclawDir, "openclaw.base.json"));
+    const configStagingDir = path.join(staging, CONFIG_STAGING_PREFIX);
+    fs.mkdirSync(configStagingDir, { recursive: true });
+    fs.copyFileSync(renderedOcJsonPath, path.join(configStagingDir, "openclaw.json"));
+    fs.copyFileSync(renderedOcJsonPath, path.join(configStagingDir, "openclaw.base.json"));
   }
 
   return staging;

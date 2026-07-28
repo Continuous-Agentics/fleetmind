@@ -33,7 +33,7 @@ function makeFleet(skillsLocal?: string): Fleet {
   return {
     fleet: { name: "test-fleet", version: "1.0.0", client: "", description: "" },
     agents: {
-      defaults: { model: "anthropic/claude-haiku-4", workspace_base: "/tmp", plugins: [] },
+      defaults: { model: "anthropic/claude-haiku-4", plugins: [] },
       list: [],
     },
     skills_repo: { url: "", branch: "main", poll_interval: "60s", local: skillsLocal },

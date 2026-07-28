@@ -26,6 +26,7 @@ import {
   buildManifest,
   computeFileManifests,
   buildStagingDir,
+  CONFIG_STAGING_PREFIX,
   formatBytes,
   runPushFleet,
   sha256File,
@@ -75,7 +76,6 @@ targets:
     provider: aws-ssm
     os: linux
     service_manager: systemd
-    workspace_base: /opt/openclaw/workspace
     aws:
       region: us-west-2
 agents:
@@ -292,16 +292,23 @@ describe("buildStagingDir", () => {
     fs.rmSync(staging, { recursive: true, force: true });
   });
 
-  test("copies openclaw.json into .openclaw/ subdirectory", () => {
+  test("copies openclaw.json into CONFIG_STAGING_PREFIX/ (deploys to configDir, a workspace sibling — not .openclaw/)", () => {
     const staging = buildStagingDir(
       "conductor",
       path.join(tmpDir, "ws"),
       path.join(tmpDir, "oc", "openclaw.json"),
       tmpDir
     );
-    const ocJson = path.join(staging, ".openclaw", "openclaw.json");
+    const ocJson = path.join(staging, CONFIG_STAGING_PREFIX, "openclaw.json");
     assert.ok(fs.existsSync(ocJson));
     assert.equal(fs.readFileSync(ocJson, "utf-8"), '{"test":true}');
+    // Must NOT be staged under a workspace-shaped .openclaw/ path — that
+    // prefix means agent-owned runtime state inside the workspace tree, and
+    // pull-self's PROTECTED_PATHS guard would refuse to touch it there.
+    assert.ok(
+      !fs.existsSync(path.join(staging, ".openclaw", "openclaw.json")),
+      "openclaw.json must not be staged under .openclaw/ (workspace-shaped, protected) — use CONFIG_STAGING_PREFIX/"
+    );
     fs.rmSync(staging, { recursive: true, force: true });
   });
 });

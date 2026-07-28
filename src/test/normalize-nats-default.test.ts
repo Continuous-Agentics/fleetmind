@@ -17,7 +17,7 @@ import { FleetSchema } from "../config/schema.js";
 import { normalizeFleet } from "../core/model.js";
 
 const TARGETS = {
-  box: { provider: "local", os: "macos", service_manager: "launchd", workspace_base: "/Users/oc/.openclaw" },
+  box: { provider: "local", os: "macos", service_manager: "launchd" },
 } as const;
 
 const AGENTS = {

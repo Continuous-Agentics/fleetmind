@@ -6,7 +6,7 @@
  * to its `local` target (OpenClaw's native multi-agent model). FleetMind owns
  * config + secrets + workspaces; OpenClaw owns the daemon:
  *
- *   1. provision each agent's workspace (skills, persona) → <workspace_base>/<id>
+ *   1. provision each agent's workspace (skills, persona) → ~/.openclaw/workspace
  *   2. render the host's openclaw.json → ~/.openclaw/openclaw.json
  *   3. resolve secrets → ~/.openclaw/.env (chmod 600; OpenClaw substitutes them)
  *   4. check Node + openclaw, then delegate the daemon to `openclaw onboard
@@ -24,16 +24,12 @@ import { execFileSync } from "node:child_process";
 import type { Command } from "commander";
 import { loadFleet } from "../../config/loader.js";
 import type { Fleet, ResolvedTarget } from "../../core/model.js";
+import { standardWorkspaceBase } from "../../core/model.js";
 import { injectSecrets } from "../../utils/secrets.js";
 import { renderHostOpenClawJson, agentsForTarget } from "../../runtime/renderer.js";
 import { provisionFleet } from "../../runtime/provisioner.js";
 import { materializeHostEnv } from "./populate.js";
 import { log } from "../../utils/log.js";
-
-/** Expand a leading `~/` to the user's home directory. */
-function expandTilde(p: string): string {
-  return p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p;
-}
 
 /**
  * The single `local` target a `fleetmind up` runs against. Errors loudly when
@@ -57,7 +53,7 @@ export function resolveLocalTarget(fleet: Fleet): ResolvedTarget {
   return locals[0]!;
 }
 
-/** Place each host agent's provisioned workspace at <workspace_base>/<id>.
+/** Place each host agent's provisioned workspace at <standard-workspace-base>.
  *  Provisions to a temp staging dir (provisionFleet's fixed layout) then copies
  *  only this host's agents into place. */
 async function stageWorkspaces(
@@ -72,11 +68,10 @@ async function stageWorkspaces(
     if (dryRun) return;
     for (const id of agentIds) {
       const src = path.join(staging, "rendered", "workspaces", id);
-      const dest = path.join(workspaceBase, id);
       if (!fs.existsSync(src)) continue;
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.cpSync(src, dest, { recursive: true });
-      log.ok(`workspace → ${dest}`);
+      fs.mkdirSync(path.dirname(workspaceBase), { recursive: true });
+      fs.cpSync(src, workspaceBase, { recursive: true });
+      log.ok(`workspace → ${workspaceBase}`);
     }
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });
@@ -139,7 +134,7 @@ export async function runUp(opts: UpOptions): Promise<void> {
   if (hostAgents.length === 0) {
     throw new Error(`No agents are assigned to local target "${target.id}".`);
   }
-  const workspaceBase = expandTilde(target.workspace_base);
+  const workspaceBase = standardWorkspaceBase(target);
   const openclawHome = opts.openclawHome ?? path.join(os.homedir(), ".openclaw");
 
   log.info(
@@ -148,7 +143,7 @@ export async function runUp(opts: UpOptions): Promise<void> {
   );
   if (opts.dryRun) log.warn("Dry run — no files written, daemon untouched.\n");
 
-  // 1. Workspaces → <workspace_base>/<id>
+  // 1. Workspaces → <standard-workspace-base>/<id>
   await stageWorkspaces(fleet, hostAgents.map((a) => a.id), workspaceBase, opts.dryRun);
 
   // 2 + 3. Config + secrets (skipped on dry-run)
