@@ -136,7 +136,14 @@ export async function runPullWorkspace(opts: PullWorkspaceOptions): Promise<void
   for (const agentId of targetIds) {
     log.step(`Pulling workspace for ${agentId}...`);
 
-    // Look up instance
+    const agent = fleet.getAgent(agentId);
+    if (!agent) {
+      log.warn(`  ${agentId}: not found in fleet — skipping`);
+      continue;
+    }
+
+    // Look up the instance only after confirming the requested agent belongs
+    // to this fleet, avoiding an unnecessary AWS call for a skipped ID.
     let instanceId: string | null = null;
     try {
       instanceId = await lookupInstanceId(fleetName, agentId, region);
@@ -149,13 +156,10 @@ export async function runPullWorkspace(opts: PullWorkspaceOptions): Promise<void
       continue;
     }
 
-    const agent = fleet.getAgent(agentId);
-    if (!agent) {
-      log.warn(`  ${agentId}: not found in fleet — skipping`);
-      continue;
-    }
     const target = fleet.targetForAgent(agent);
-    const workspaceDir = standardWorkspaceBase(target);
+    // This path is executed on the remote host via SSM. Use POSIX separators
+    // even when the FleetMind CLI itself runs on Windows.
+    const workspaceDir = path.posix.join(standardWorkspaceBase(target));
     const tmpTarPath = `/tmp/fleetmind-pull-workspace-${agentId}.tar.gz`;
     const s3Key = `deploy-staging/pull/${agentId}/workspace.tar.gz`;
 

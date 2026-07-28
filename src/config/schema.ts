@@ -338,7 +338,7 @@ export const AwsSsmTargetSchema = z.object({
       .regex(AWS_RUNTIME_USER_PATTERN, "must be a safe Linux username")
       .default(DEFAULT_AWS_RUNTIME_USER),
   }),
-});
+}).strict();
 
 export const SshTargetSchema = z.object({
   provider: z.literal("ssh"),
@@ -350,12 +350,12 @@ export const SshTargetSchema = z.object({
     /** Path to a private key for auth. Falls back to the SSH agent when unset. */
     identity_file: z.string().optional(),
   }),
-});
+}).strict();
 
 export const LocalTargetSchema = z.object({
   provider: z.literal("local"),
   ...TargetCommonSchema,
-});
+}).strict();
 
 export const TargetSchema = z.discriminatedUnion("provider", [
   AwsSsmTargetSchema,
