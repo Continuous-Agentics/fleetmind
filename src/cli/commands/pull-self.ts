@@ -306,9 +306,9 @@ const AGENT_ENV_PATH = "/etc/fleetmind/agent.env";
  * The workspace root is no longer read from this file — there is no
  * operator/bootstrap-configurable `workspace_base` any more. Every host uses
  * the fixed standard OpenClaw HOME contract (`~/.openclaw/workspace`,
- * see ../../core/model.ts's `standardWorkspaceBase`), so pull-self derives it
- * from the running user's home rather than trusting a value written at
- * bootstrap time. A stray `WORKSPACE_BASE=` line from an old bootstrap image
+ * see ../../core/model.ts's `standardWorkspaceBase`). Fleet-aware calls derive
+ * it from the resolved target; the legacy on-host path uses the fixed AWS
+ * standard home. A stray `WORKSPACE_BASE=` line from an old bootstrap image
  * is simply ignored — it's obsolete, not authoritative. */
 export function parseAgentEnv(text: string): AgentEnv {
   const get = (key: string): string => {

@@ -96,7 +96,7 @@ operator and files placed there can be wiped on a `pull-self` run.
 | Purpose | Path |
 |---------|------|
 | Code / repos / builds | `/opt/work/{{ID}}/` |
-| OpenClaw workspace (config, memory, skills) | `/home/openclaw/.openclaw/workspace/{{ID}}/` |
+| OpenClaw workspace (config, memory, skills) | `/home/openclaw/.openclaw/workspace/` |
 
 When cloning a repo, running a build, or storing any artefacts:
 

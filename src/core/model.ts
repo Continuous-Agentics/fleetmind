@@ -57,7 +57,10 @@ export const STANDARD_AWS_WORKSPACE_BASE = `${STANDARD_AWS_HOME}/.openclaw/works
  * with the workspace living directly at this path (one agent per host).
  */
 export function standardWorkspaceBase(target: ResolvedTarget): string {
-  return path.join(standardHomeDir(target), ".openclaw", "workspace");
+  const home = standardHomeDir(target);
+  return target.provider === "local"
+    ? path.join(home, ".openclaw", "workspace")
+    : path.posix.join(home, ".openclaw", "workspace");
 }
 
 /** Fleet config plus resolved accessors. The rest of the codebase consumes
