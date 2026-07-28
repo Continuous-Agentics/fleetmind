@@ -10,12 +10,12 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 - **BREAKING: `targets.<id>.workspace_base` is no longer a fleet.yaml field.**
   Every target now uses a single, fixed, non-configurable standard OpenClaw
-  HOME contract for per-agent workspaces — `<home>/.openclaw/workspace/<agent_id>`
-  — matching what `fleetmind up`'s local targets already did:
-  - `local` targets: `~/.openclaw/workspace/<agent_id>` (`os.homedir()` of the
-    machine running `fleetmind up`).
-  - `ssh`/`aws-ssm` targets: `/home/openclaw/.openclaw/workspace/<agent_id>`
-    (or `/Users/openclaw/.openclaw/workspace/<agent_id>` when `os: macos`) —
+  HOME contract for workspaces — `<home>/.openclaw/workspace` — matching the
+  one-agent-per-host model:
+  - `local` targets: `~/.openclaw/workspace` (`os.homedir()` of the machine
+    running `fleetmind up`).
+  - `ssh`/`aws-ssm` targets: `/home/openclaw/.openclaw/workspace`
+    (or `/Users/openclaw/.openclaw/workspace` when `os: macos`) —
     the dedicated `openclaw` OS account's home, independent of
     `ssh.user`/`aws.runtime_user` (those only select which account runs the
     systemd/launchd services).
@@ -24,7 +24,7 @@ All notable changes to fleetmind are documented in this file. Format follows
   path above is used unconditionally. This was previously introduced as a new
   *default* (see the now-superseded entry this replaces); it is now the only
   option. `HOME` for the gateway/NATS-subscriber systemd units, the
-  operator-facing `openclaw.json`/`openclaw.base.json`, and each agent's
+  operator-facing `openclaw.json`/`openclaw.base.json`, and the agent
   workspace all live under this one OS-account home. This is a CLI/schema-level
   change only — the `terraform-aws-fleetmind` bootstrap template still writes
   the old `/opt/openclaw/workspace` path until its companion migration lands
@@ -37,7 +37,7 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 - **`pull-self` no longer reads `WORKSPACE_BASE` from `/etc/fleetmind/agent.env`.**
   The on-host workspace directory is always the fixed standard path
-  (`/home/openclaw/.openclaw/workspace/<agent_id>` on AWS); a stray
+  (`/home/openclaw/.openclaw/workspace` on AWS); a stray
   `WORKSPACE_BASE=` line from an old bootstrap image is ignored rather than
   trusted.
 - **`fleetmind pull-workspace` no longer hardcodes `/opt/openclaw/workspace`.**

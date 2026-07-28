@@ -305,7 +305,7 @@ const AGENT_ENV_PATH = "/etc/fleetmind/agent.env";
  *
  * The workspace root is no longer read from this file — there is no
  * operator/bootstrap-configurable `workspace_base` any more. Every host uses
- * the fixed standard OpenClaw HOME contract (`~/.openclaw/workspace/<agent_id>`,
+ * the fixed standard OpenClaw HOME contract (`~/.openclaw/workspace`,
  * see ../../core/model.ts's `standardWorkspaceBase`), so pull-self derives it
  * from the running user's home rather than trusting a value written at
  * bootstrap time. A stray `WORKSPACE_BASE=` line from an old bootstrap image
@@ -948,7 +948,7 @@ export async function runPullSelf(
     const target = fleet.targetForAgent(agent);
     fleetName = fleet.fleet.name;
     agentId = opts.agent;
-    workspaceDir = path.join(standardWorkspaceBase(target), agentId);
+    workspaceDir = standardWorkspaceBase(target);
     const store = artifactStoreFor(fleet, { bucket: `${fleetName}-ledger`, region });
     fetchArtifact = async (key: string) => {
       const buf = await store.get(key);
@@ -966,7 +966,7 @@ export async function runPullSelf(
     agentId = env.agentId;
     // Legacy /etc/fleetmind agent.env path: no configurable workspace_base
     // any more — every AWS host uses the fixed standard workspace root.
-    workspaceDir = path.join(STANDARD_AWS_WORKSPACE_BASE, agentId);
+    workspaceDir = STANDARD_AWS_WORKSPACE_BASE;
     const bucket = `${fleetName}-ledger`;
     fetchArtifact = (key: string) => downloadFromS3(bucket, key, region);
     if (opts.userSystemd) {

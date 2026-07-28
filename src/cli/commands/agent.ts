@@ -1,7 +1,6 @@
 import { Command } from "commander";
 import fs from "node:fs";
 import net from "node:net";
-import path from "node:path";
 import { spawn } from "node:child_process";
 import chalk from "chalk";
 import { SSMClient, SendCommandCommand, GetCommandInvocationCommand } from "@aws-sdk/client-ssm";
@@ -75,7 +74,7 @@ Examples:
           process.exit(1);
         }
 
-        const workspace = path.join(standardWorkspaceBase(fleet.targetForAgent(a)), a.id);
+        const workspace = standardWorkspaceBase(fleet.targetForAgent(a));
         const wsExists = fs.existsSync(workspace);
         const model = a.model ?? fleet.agents.defaults.model;
         const skills = a.skills.map((s) => s.name + (s.version ? `@${s.version}` : "")).join(", ") || "—";
@@ -314,12 +313,10 @@ async function runPreflight(
   // proxied through the wrapper for ergonomics.
   //
   // Path derived from the agent's fixed standard workspace base (see
-  // ../../core/model.ts's standardWorkspaceBase — not operator-configurable),
-  // with the per-agent dir appended:
-  //   <workspaceBase>/<agent_id>/.openclaw/openclaw.json
+  // ../../core/model.ts's standardWorkspaceBase — not operator-configurable).
   // SSM Run Command runs as root by default. User-systemd diagnostics and the
   // dashboard run as the configured runtime user with its XDG/DBus bus.
-  const configFile = `${workspaceBase}/${agentId}/.openclaw/openclaw.json`;
+  const configFile = `${workspaceBase}/.openclaw/openclaw.json`;
   const envFile = `/run/openclaw-${agentId}.env`;
   const commands = [
     `set +e`,

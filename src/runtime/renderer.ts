@@ -111,8 +111,8 @@ export function renderAgentOpenClawJson(
   // Agent list — single entry for this agent only.
   // Workspace base is the fixed standard path for the agent's resolved runtime target.
   const agentWorkspaceBase = standardWorkspaceBase(fleet.targetForAgent(agent));
-  const workspace = `${agentWorkspaceBase}/${agent.id}`;
-  const agentDir = `${agentWorkspaceBase}/agents/${agent.id}/agent`;
+  const workspace = agentWorkspaceBase;
+  const agentDir = `${agentWorkspaceBase}/agent`;
   const agentListEntry = {
     id: agent.id,
     name: agent.name,
@@ -357,8 +357,8 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
   const agentList = hostAgents.map((agent) => {
     const model = agent.model ?? defaults.model;
     const agentWorkspaceBase = standardWorkspaceBase(fleet.targetForAgent(agent));
-    const workspace = `${agentWorkspaceBase}/${agent.id}`;
-    const agentDir = `${agentWorkspaceBase}/agents/${agent.id}/agent`;
+    const workspace = agentWorkspaceBase;
+    const agentDir = `${agentWorkspaceBase}/agent`;
     return {
       id: agent.id,
       name: agent.name,

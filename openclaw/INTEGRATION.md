@@ -70,8 +70,8 @@ and blast-radius properties.
 `fleet.yaml` defines agents; `fleetmind deploy` materialises one workspace
 directory per agent and pushes it to that agent's EC2 host. The workspace
 root is fixed (not operator-configurable) at
-`/home/openclaw/.openclaw/workspace/<agent_id>/` — e.g. conductor's workspace
-is `/home/openclaw/.openclaw/workspace/conductor/`. Each contains:
+`/home/openclaw/.openclaw/workspace/` (one workspace per host, matching the
+one-agent-per-host contract). Each contains:
 
 ```
 workspace/

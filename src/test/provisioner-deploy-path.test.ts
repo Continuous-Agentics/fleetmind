@@ -257,7 +257,7 @@ describe("deploy local-render-path regression", () => {
 
   // ── fixed standard workspace path rendered into openclaw.json (EC2-side) ──
 
-  test("renderOpenClawJson uses the fixed standard workspace path/<id> (no prefix) for EC2-side workspace path", () => {
+  test("renderOpenClawJson uses the fixed standard workspace path (no per-agent subdir) for EC2-side workspace path", () => {
     const fleet = makeFleet();
     fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
 
@@ -266,17 +266,11 @@ describe("deploy local-render-path regression", () => {
     };
 
     for (const entry of json.agents.list) {
-      // EC2 workspace path must be <standard-workspace-base>/<agent_id>
+      // EC2 workspace path must be exactly <standard-workspace-base> — no per-agent subdir.
       assert.equal(
         entry.workspace,
-        `${EC2_WORKSPACE_BASE}/${entry.id}`,
-        `EC2-side workspace for ${entry.id} must be <standard-base>/<id> (no prefix)`
-      );
-
-      // Must NOT have the spurious "workspace-" prefix.
-      assert.ok(
-        !entry.workspace.includes("workspace-"),
-        `EC2 workspace path must not contain "workspace-" prefix: got ${entry.workspace}`
+        EC2_WORKSPACE_BASE,
+        `EC2-side workspace for ${entry.id} must be the flat standard base (no /<id> suffix)`
       );
     }
   });
@@ -296,7 +290,7 @@ describe("deploy local-render-path regression", () => {
 
     assert.equal(
       json.agents.list[0]!.workspace,
-      `${EC2_WORKSPACE_BASE}/conductor`,
+      EC2_WORKSPACE_BASE,
       "a stray workspace_base value on the resolved target must not change the rendered path"
     );
   });

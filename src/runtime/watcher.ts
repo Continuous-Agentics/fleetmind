@@ -65,7 +65,7 @@ export class SkillsWatcher {
   getInstalledVersions(agentId: string): Record<string, string> {
     const agent = this.fleet.getAgent(agentId);
     if (!agent) return {};
-    const workspace = path.join(standardWorkspaceBase(this.fleet.targetForAgent(agent)), agentId);
+    const workspace = standardWorkspaceBase(this.fleet.targetForAgent(agent));
     const skillsDir = path.join(workspace, "skills");
     if (!fs.existsSync(skillsDir)) return {};
 
@@ -123,7 +123,7 @@ export class SkillsWatcher {
       return false;
     }
 
-    const workspace = path.join(standardWorkspaceBase(this.fleet.targetForAgent(agent)), agentId);
+    const workspace = standardWorkspaceBase(this.fleet.targetForAgent(agent));
     const dest = path.join(workspace, "skills", skillName);
     const src = this.findSkillSource(skillName);
 

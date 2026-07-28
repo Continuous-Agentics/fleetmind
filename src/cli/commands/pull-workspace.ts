@@ -155,7 +155,7 @@ export async function runPullWorkspace(opts: PullWorkspaceOptions): Promise<void
       continue;
     }
     const target = fleet.targetForAgent(agent);
-    const workspaceDir = path.join(standardWorkspaceBase(target), agentId);
+    const workspaceDir = standardWorkspaceBase(target);
     const tmpTarPath = `/tmp/fleetmind-pull-workspace-${agentId}.tar.gz`;
     const s3Key = `deploy-staging/pull/${agentId}/workspace.tar.gz`;
 

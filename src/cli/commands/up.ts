@@ -6,7 +6,7 @@
  * to its `local` target (OpenClaw's native multi-agent model). FleetMind owns
  * config + secrets + workspaces; OpenClaw owns the daemon:
  *
- *   1. provision each agent's workspace (skills, persona) → ~/.openclaw/workspace/<id>
+ *   1. provision each agent's workspace (skills, persona) → ~/.openclaw/workspace
  *   2. render the host's openclaw.json → ~/.openclaw/openclaw.json
  *   3. resolve secrets → ~/.openclaw/.env (chmod 600; OpenClaw substitutes them)
  *   4. check Node + openclaw, then delegate the daemon to `openclaw onboard
@@ -53,7 +53,7 @@ export function resolveLocalTarget(fleet: Fleet): ResolvedTarget {
   return locals[0]!;
 }
 
-/** Place each host agent's provisioned workspace at <standard-workspace-base>/<id>.
+/** Place each host agent's provisioned workspace at <standard-workspace-base>.
  *  Provisions to a temp staging dir (provisionFleet's fixed layout) then copies
  *  only this host's agents into place. */
 async function stageWorkspaces(
@@ -68,11 +68,10 @@ async function stageWorkspaces(
     if (dryRun) return;
     for (const id of agentIds) {
       const src = path.join(staging, "rendered", "workspaces", id);
-      const dest = path.join(workspaceBase, id);
       if (!fs.existsSync(src)) continue;
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.cpSync(src, dest, { recursive: true });
-      log.ok(`workspace → ${dest}`);
+      fs.mkdirSync(path.dirname(workspaceBase), { recursive: true });
+      fs.cpSync(src, workspaceBase, { recursive: true });
+      log.ok(`workspace → ${workspaceBase}`);
     }
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });

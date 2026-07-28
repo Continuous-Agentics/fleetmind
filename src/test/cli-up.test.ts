@@ -5,7 +5,7 @@
  * stages config + secrets + workspaces to a temp OpenClaw home, asserting the
  * key invariants: secrets stay as ${VAR} in openclaw.json (values only in a
  * 0600 .env), and each agent's workspace is placed under the fixed standard
- * workspace path (~/.openclaw/workspace/<agent_id> — not operator-configurable).
+ * workspace path (~/.openclaw/workspace — not operator-configurable).
  */
 
 import assert from "node:assert/strict";
@@ -100,10 +100,10 @@ agents:
 
     await runUp({ fleet: fleetPath, dryRun: false, daemon: false, openclawHome: ochome });
 
-    // openclaw.json: workspace points under the fixed standard workspace
+    // openclaw.json: workspace points to the fixed standard workspace
     // base (~/.openclaw/workspace); secrets stay as ${VAR}.
     const cfg = JSON.parse(fs.readFileSync(path.join(ochome, "openclaw.json"), "utf-8"));
-    assert.equal(cfg.agents.list[0].workspace, path.join(ws, "solo"));
+    assert.equal(cfg.agents.list[0].workspace, ws);
     assert.equal(cfg.channels.slack.accounts.solo.botToken, "${SOLO_BOT_TOKEN}");
 
     // .env: 0600, values resolved (incl. the derived ANTHROPIC_API_KEY).
@@ -113,7 +113,7 @@ agents:
     assert.match(envBody, /SOLO_BOT_TOKEN=val-SOLO_BOT_TOKEN/);
     assert.match(envBody, /ANTHROPIC_API_KEY=val-ANTHROPIC_API_KEY/);
 
-    // workspace placed under the fixed standard workspace base/<agent>.
-    assert.ok(fs.existsSync(path.join(ws, "solo", "SOUL.md")));
+    // workspace placed at the fixed standard workspace base (no per-agent subdir).
+    assert.ok(fs.existsSync(path.join(ws, "SOUL.md")));
   });
 });

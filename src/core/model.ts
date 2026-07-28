@@ -50,12 +50,11 @@ export const STANDARD_AWS_HOME = "/home/openclaw";
 export const STANDARD_AWS_WORKSPACE_BASE = `${STANDARD_AWS_HOME}/.openclaw/workspace`;
 
 /**
- * The fixed, non-configurable per-agent workspace root for a target:
+ * The fixed, non-configurable workspace root for a target:
  * `<standard-home>/.openclaw/workspace`. FleetMind used to let operators
  * override this via `targets.<id>.workspace_base` in fleet.yaml; that knob
  * is gone — every target now uses the same standard OpenClaw HOME contract
- * `up.ts`'s local targets already established, with each agent's workspace
- * living at `<workspaceBase>/<agent_id>`.
+ * with the workspace living directly at this path (one agent per host).
  */
 export function standardWorkspaceBase(target: ResolvedTarget): string {
   return path.join(standardHomeDir(target), ".openclaw", "workspace");
