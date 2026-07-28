@@ -6,6 +6,8 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [1.0.3-beta.0] — 2026-07-28
+
 ### Removed
 
 - **BREAKING: `targets.<id>.workspace_base` is no longer a fleet.yaml field.**
