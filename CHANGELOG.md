@@ -6,12 +6,16 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-07-29
+
+### Added
+
+- Consolidate the AWS Terraform implementation into FleetMind under `infra/terraform`, with a state-preserving `module "fleetmind"` wrapper, Terraform CI, examples, tests, and migration documentation.
+
 ### Fixed
 
 - Bootstrap agents with the supported Node.js 24 runtime through NodeSource and reject unsupported `node_version` values before apply.
 - Hand ownership of the complete `/home/openclaw/.openclaw` state tree to the runtime user before the Slack plugin install, preventing root-owned plugin and npm state.
-
-## [1.0.3-beta.0] — 2026-07-28
 
 ### Removed
 
