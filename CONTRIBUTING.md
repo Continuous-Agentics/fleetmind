@@ -102,7 +102,7 @@ The release flow is intentionally gated:
 1. A `v*` tag creates a draft GitHub Release.
 2. The release maintainer publishes the GitHub Release when ready.
 3. The `publish.yml` workflow publishes to npm via trusted publishing.
-4. The workflow is guarded so only GitHub actor `ggettert` can publish.
+4. The workflow is guarded so only GitHub actors `ggettert` and `wren-on-ca[bot]` can create the draft release.
 
 Before tagging:
 
