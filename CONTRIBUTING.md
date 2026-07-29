@@ -1,6 +1,6 @@
 # Contributing to FleetMind
 
-Thank you for your interest in contributing. This document covers local setup, test expectations, pull request conventions, and release rules for the FleetMind CLI.
+Thank you for your interest in contributing. This document covers local setup, test expectations, pull request conventions, and release rules for FleetMind's CLI and Terraform infrastructure.
 
 ## Dev Setup
 
@@ -35,13 +35,25 @@ npm test
 - Add regression tests for renderer/schema/onboard behavior when changing `fleet.yaml`, generated tfvars, workspace layout, or bootstrapping assumptions.
 - Do not hardcode the total test count in docs; say the full suite passes.
 
+### Terraform infrastructure
+
+Terraform implementation is under `infra/terraform`, with the state-preserving embedded module in `infra/terraform/modules/fleetmind`. Do not apply it to a real AWS account unless the PR calls for a live smoke test.
+
+Before opening a Terraform PR, run:
+
+```bash
+terraform fmt -check -recursive infra/terraform examples/terraform
+terraform -chdir=infra/terraform init -backend=false
+terraform -chdir=infra/terraform validate
+bash tests/terraform/run.sh
+python3 tests/terraform/test_agent_bootstrap_render.py
+```
+
+For changes to IAM, bootstrap, SSM, Secrets Manager, S3, DynamoDB, or Cloud Map, include a live-smoke-test note or explain why validation-only evidence is sufficient. Keep examples, variables, outputs, and documentation aligned. Never include Terraform state, account identifiers, tokens, credentials, or customer-identifying secret names in shared logs.
+
 ## Compatibility Contract
 
-FleetMind spans three repos:
-
-- `fleetmind` — CLI, renderer, runtime helpers, bundled skills
-- `fleetmind-template` — starter repo and operator docs
-- `terraform-aws-fleetmind` — AWS infrastructure module
+FleetMind contains its CLI, renderer, runtime helpers, bundled skills, and AWS Terraform implementation. `fleetmind-template` remains an optional starter repo and must pin a released FleetMind Terraform source.
 
 If a change affects generated Terraform variables, secret names, bootstrap behavior, push/pull-self, package publishing, or operator docs, update `docs/COMPATIBILITY.md` and coordinate companion PRs in the other repos.
 
@@ -90,7 +102,7 @@ The release flow is intentionally gated:
 1. A `v*` tag creates a draft GitHub Release.
 2. The release maintainer publishes the GitHub Release when ready.
 3. The `publish.yml` workflow publishes to npm via trusted publishing.
-4. The workflow is guarded so only GitHub actor `ggettert` can publish.
+4. The workflow is guarded so only GitHub actors `ggettert` and `wren-on-ca[bot]` can create the draft release.
 
 Before tagging:
 

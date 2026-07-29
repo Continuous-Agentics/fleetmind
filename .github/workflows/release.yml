@@ -12,7 +12,7 @@ jobs:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: github.actor == 'ggettert'
+    if: github.actor == 'ggettert' || github.actor == 'wren-on-ca[bot]'
     permissions:
       contents: write
 

@@ -4,7 +4,33 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'openclaw/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - '.github/workflows/ci.yml'
+      - 'README.md'
+      - 'LICENSE'
+      - 'docs/WHERE.md'
+      - 'docs/protocol.md'
+      - 'docs/integration/delegation.md'
   pull_request:
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'openclaw/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - '.github/workflows/ci.yml'
+      - 'README.md'
+      - 'LICENSE'
+      - 'docs/WHERE.md'
+      - 'docs/protocol.md'
+      - 'docs/integration/delegation.md'
 
 jobs:
   build-and-test:

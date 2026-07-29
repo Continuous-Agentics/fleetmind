@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Security fixes target the latest public npm release of `@continuous-agentics/fleetmind` and current `main`.
+Security fixes target the latest public npm release of `@continuous-agentics/fleetmind`, current `main`, and the Terraform infrastructure under `infra/terraform`.
 
 ## Reporting a Vulnerability
 
@@ -16,4 +16,3 @@ Report privately to the maintainers through an agreed private channel. Include:
 - any logs or screenshots with secrets redacted
 
 We will acknowledge receipt, assess severity, and coordinate a fix before public disclosure.
-
