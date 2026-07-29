@@ -4,38 +4,52 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'src/**'
-      - 'test/**'
-      - 'openclaw/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'tsconfig.json'
-      - '.github/workflows/ci.yml'
-      - 'README.md'
-      - 'LICENSE'
-      - 'docs/WHERE.md'
-      - 'docs/protocol.md'
-      - 'docs/integration/delegation.md'
   pull_request:
-    paths:
-      - 'src/**'
-      - 'test/**'
-      - 'openclaw/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'tsconfig.json'
-      - '.github/workflows/ci.yml'
-      - 'README.md'
-      - 'LICENSE'
-      - 'docs/WHERE.md'
-      - 'docs/protocol.md'
-      - 'docs/integration/delegation.md'
+
+permissions:
+  contents: read
 
 jobs:
+  changes:
+    name: Detect CI-relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      node: ${{ steps.filter.outputs.node }}
+      shell: ${{ steps.filter.outputs.shell }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            node:
+              - 'src/**'
+              - 'test/**'
+              - 'openclaw/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig.json'
+              - '.github/workflows/ci.yml'
+              - 'README.md'
+              - 'LICENSE'
+              - 'docs/WHERE.md'
+              - 'docs/protocol.md'
+              - 'docs/integration/delegation.md'
+            shell:
+              - 'infra/scripts/**'
+              - '.github/workflows/ci.yml'
+
   build-and-test:
     name: Build & Test
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.node == 'true'
 
     steps:
       - name: Checkout
@@ -137,6 +151,8 @@ jobs:
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.shell == 'true'
 
     steps:
       - name: Checkout
