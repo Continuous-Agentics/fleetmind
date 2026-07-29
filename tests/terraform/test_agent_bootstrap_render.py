@@ -24,7 +24,7 @@ def render() -> str:
         "fleet_name": "test-fleet",
         "agent_id": "worker",
         "openclaw_version": "latest",
-        "node_version": "22",
+        "node_version": "24",
         "aws_region": "us-west-2",
         "fleetmind_version": "latest",
         "fleetmind_package": "@continuous-agentics/fleetmind",
@@ -97,6 +97,8 @@ def main() -> int:
         'install -d -o "$OPENCLAW_USER" -g "$OPENCLAW_USER" -m 0700 "$OPENCLAW_HOME/.config/fleetmind"',
         'chmod 0700 "$OPENCLAW_HOME/.config/fleetmind"',
         "echo \"[bootstrap] npm $(npm --version) available on $RUNTIME_PATH\"",
+        'curl -fsSL "https://rpm.nodesource.com/setup_${NODE_VERSION}.x" | bash -',
+        "dnf install -y nodejs",
         "npm install -g \"$OPENCLAW_PKG\"",
         'HOOKS_CURRENT=$(aws secretsmanager get-secret-value',
         'if [ -z "$HOOKS_CURRENT" ] || echo "$HOOKS_CURRENT" | grep -q "PENDING_BOOTSTRAP"; then',
@@ -113,6 +115,12 @@ def main() -> int:
         raise AssertionError("Rendered bootstrap must not reference the legacy /opt/openclaw workspace path")
     if "WORKSPACE_BASE=\"" in rendered:
         raise AssertionError("Rendered bootstrap must not derive a separate WORKSPACE_BASE (one agent per host)")
+    state_handoff = 'chown -R "$OPENCLAW_USER:$OPENCLAW_USER" "$OPENCLAW_HOME/.openclaw"'
+    plugin_install = 'runuser -u "$OPENCLAW_USER" -- env HOME="$OPENCLAW_HOME" PATH="$RUNTIME_PATH" openclaw plugins install @openclaw/slack --force'
+    require(rendered, state_handoff)
+    require(rendered, 'chmod 0700 "$OPENCLAW_HOME/.openclaw"')
+    if rendered.index(state_handoff) > rendered.index(plugin_install):
+        raise AssertionError("OpenClaw state ownership must be handed off before plugin installation")
     hooks_section = section(rendered, "# ── STAGE 7c", "# ── Secret fetch helper")
     if hooks_section.count("openssl rand -hex 32") != 1 or "HOOKS_CURRENT" not in hooks_section:
         raise AssertionError("Hooks token generation must be guarded by the existing secret value")

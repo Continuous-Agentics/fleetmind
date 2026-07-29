@@ -71,9 +71,14 @@ variable "openclaw_version" {
 }
 
 variable "node_version" {
-  description = "Node.js major version (installed from the NodeSource RPM repository)."
+  description = "Node.js major version (installed from the NodeSource RPM repository). Only version 24 is supported."
   type        = string
-  default     = "22"
+  default     = "24"
+
+  validation {
+    condition     = var.node_version == "24"
+    error_message = "node_version must be the exact string \"24\"."
+  }
 }
 
 variable "fleetmind_version" {

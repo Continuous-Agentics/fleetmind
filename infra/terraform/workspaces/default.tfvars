@@ -23,7 +23,7 @@ agent_instance_types = {
 
 # ── Software pins ───────────────────────────────────────────────────────────
 openclaw_version  = "latest"
-node_version      = "22"
+node_version      = "24"
 fleetmind_version = "0.10.4"
 
 # ── Delegation substrate ────────────────────────────────────────────────────
