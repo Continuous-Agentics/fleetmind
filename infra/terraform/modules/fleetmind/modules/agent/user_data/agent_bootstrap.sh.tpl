@@ -12,7 +12,7 @@ set -euo pipefail
 #   fleet_name       – fleet namespace (used for SecretsManager paths)
 #   agent_id         – unique agent identifier (matches fleet.yaml id)
 #   openclaw_version – npm version to install ("latest" or pinned)
-#   node_version     – Node.js major version (e.g. "22")
+#   node_version     – Node.js major version (currently "24")
 #   aws_region       – AWS region for SecretsManager calls
 # =============================================================================
 
@@ -133,8 +133,12 @@ fleetmind --version
 # Workspace lives on the EC2 root volume. Persistent state belongs in the
 # shared substrates (task-ledger DDB, context-store DDB, narratives S3).
 echo "[bootstrap] STAGE 7: workspace mkdir starting at $(date)"
+# Creating the workspace as root can also create the `.openclaw` state root.
+# Hand the complete private state tree to the runtime account before any
+# unprivileged OpenClaw command creates plugin or npm state beneath it.
 mkdir -p "$WORKSPACE_DIR"
-chown -R "$OPENCLAW_USER:$OPENCLAW_USER" "$WORKSPACE_DIR"
+chown -R "$OPENCLAW_USER:$OPENCLAW_USER" "$OPENCLAW_HOME/.openclaw"
+chmod 0700 "$OPENCLAW_HOME/.openclaw"
 echo "[bootstrap] Workspace dir: $WORKSPACE_DIR (root volume)"
 
 echo "[bootstrap] STAGE 7a: @openclaw/slack plugin install starting at $(date)"

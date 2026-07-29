@@ -52,8 +52,13 @@ variable "openclaw_version" {
 }
 
 variable "node_version" {
-  description = "Node.js major version for the bootstrap script (nvm install)."
+  description = "Node.js major version for the bootstrap script. Only version 24 is supported."
   type        = string
+
+  validation {
+    condition     = var.node_version == "24"
+    error_message = "node_version must be the exact string \"24\"."
+  }
 }
 
 variable "fleetmind_version" {
