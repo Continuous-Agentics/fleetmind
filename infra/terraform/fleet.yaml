@@ -1,0 +1,187 @@
+# fleet.yaml — operator-edited declaration of the bots in this fleet.
+#
+# Used by `fleetmind render` to produce workspaces/<workspace>.derived.tfvars
+# (fleet_name, agent_names, agent_orchestrators, agent_providers).
+# Workspace = Terraform workspace name (`terraform workspace new <name>`).
+#
+# Delegation transport: NATS. Each agent runs a fleetmind-nats-<agent>.service
+# subscriber. Add a `delegation.nats` block (see docs/SETUP-A-FLEET.md §NATS
+# transport) to enable the push-based wake path.
+#
+# Below is a minimal 2-bot example: one PM (Conductor) and one worker (Forge).
+# Edit names, models, channels, and personas before your first apply.
+
+fleet:
+  # The fleet name namespaces ALL AWS resources (tables, S3 buckets, IAM roles,
+  # secrets, EC2 Name tags). S3 buckets are globally unique — either pick a
+  # fleet name that's unlikely to collide (e.g. include your account ID or org
+  # short-name) or you'll get a BucketAlreadyExists error on terraform apply.
+  # Convention: <org>-<purpose>-<account_id> works well.
+  name: my-fleet
+  version: "0.1.0"
+  description: "Starter fleet from fleetmind-template."
+
+skills_repo:
+  local: ./skills # fleet-local skills directory (see skills/README.md)
+
+secrets:
+  provider: env # secrets read from environment variables at render time
+
+# ── Targets (runtime hosts) ───────────────────────────────────────────────────
+# Where each agent runs, how to reach it, and how its gateway is (re)started.
+# Agents reference a target by id (see `target:` on each agent below). This
+# template deploys to AWS EC2 — one host per agent — reached via SSM. The
+# `provider` discriminates the host type and selects its block:
+#   aws-ssm → EC2 reached via SSM (requires aws.region)
+#   ssh     → Mac mini / bare metal / VMware guest (requires ssh.host, ssh.user)
+#   local   → the operator machine (no cloud; dev / single-box deploys)
+#
+# workspace_base is the path on each host where agent workspaces live; the
+# renderer writes it into every agent's openclaw.json `workspace` field. For the
+# AWS path it MUST match WORKSPACE_BASE in the FleetMind Terraform bootstrap.
+targets:
+  conductor-host:
+    provider: aws-ssm
+    os: linux
+    service_manager: systemd
+    workspace_base: /home/openclaw/.openclaw/workspace
+    aws:
+      region: us-west-2
+  forge-host:
+    provider: aws-ssm
+    os: linux
+    service_manager: systemd
+    workspace_base: /home/openclaw/.openclaw/workspace
+    aws:
+      region: us-west-2
+  # To run on a Mac mini / bare metal instead, point an agent at an ssh target:
+  # mac-lab-1:
+  #   provider: ssh
+  #   os: macos
+  #   service_manager: launchd
+  #   workspace_base: /Users/openclaw/.openclaw
+  #   ssh:
+  #     host: mac-lab-1.local
+  #     user: openclaw
+
+# ContextStore — shared cross-agent KV state. Must match the table the
+# terraform-aws-fleetmind module provisions (default name: "fleetmind-<fleet>").
+context:
+  provider: dynamodb
+  region: us-west-2
+  # table: fleetmind-my-fleet   # defaults to fleetmind-<fleet.name>; usually no need to override
+
+delegation:
+  enabled: true
+  aws_region: us-west-2
+  # table_name + s3_bucket must match what Terraform creates. The module's
+  # default naming is "<fleet>-tasks" and "<fleet>-ledger" — update both lines
+  # below when you change fleet.name above.
+  table_name: my-fleet-tasks
+  s3_bucket: my-fleet-ledger
+  # ── NATS transport ─────────────────────────────────────────────────────
+  # Agents use NATS (Cloud Map discovery) for inter-bot messaging — the
+  # server is provisioned by var.nats_enabled in terraform-aws-fleetmind
+  # (defaults true). Fleetmind ≥0.8.0-beta.2 auto-defaults `nats: {}` when
+  # delegation.enabled is true, so no entry is needed here for the standard
+  # path. Uncomment + extend only to override (custom subject_prefix, creds
+  # file, explicit server URLs, etc.).
+  # nats:
+  #   subject_prefix: my-fleet
+  #   # servers: ["nats://nats.my-fleet.internal:4222"]   # default derived from fleet name
+
+agents:
+  defaults:
+    # FleetMind is provider-neutral: `model` is a "provider/model" string and
+    # OpenClaw makes the call. Change the prefix (openai/…, google/…) to switch
+    # providers; `fleetmind secrets populate` then stages that provider's key.
+    model: anthropic/claude-sonnet-4-6
+    plugins:
+      - anthropic
+    params:
+      cacheRetention: "short" # Default: 5-min ephemeral cache on all agents
+    models:
+      anthropic/claude-sonnet-4-6:
+        params:
+          cacheRetention: "long" # 1-hour TTL for interactive Sonnet sessions
+    # Optional fleet-wide failover chain OpenClaw tries when `model` fails. Each
+    # agent inherits this unless it sets its own `fallback_models` ([] = strict).
+    # fallback_models:
+    #   - openai/gpt-4o
+
+  list:
+    # ── PM bot ───────────────────────────────────────────────────────────────
+    - id: conductor
+      name: Conductor
+      emoji: 🛏️
+      role: pm
+      orchestrator: true
+      target: conductor-host
+      model: anthropic/claude-sonnet-4-6 # PMs get a bit more horsepower
+      # REQUIRED. Lowercase model-provider tokens this agent needs API keys for.
+      # Drives per-provider Secrets Manager secrets at
+      # <fleet>/agents/conductor/providers/<provider>. Multi-provider agents
+      # list multiple entries (e.g. [anthropic, openai]).
+      providers: [anthropic]
+      description: "PM bot for my-fleet."
+      persona:
+        soul: |
+          You are Conductor, the project-manager bot for my-fleet. You
+          delegate tasks to worker bots via the bot-delegation skill and
+          close the loop on every assignment.
+      channels:
+        - provider: slack
+          account_id: conductor
+          # bot_user_id is auto-populated by `fleetmind slack discover` once the
+          # bot tokens are in Secrets Manager (or env). Leave as REPLACE_ME until
+          # then.
+          bot_user_id: "U_REPLACE_ME"
+          channels: ["C_REPLACE_ME"] # PM's home + delegation channel IDs
+          bot_token: "${CONDUCTOR_BOT_TOKEN}"
+          app_token: "${CONDUCTOR_APP_TOKEN}"
+          background_color: "#2C3E50"
+          long_description: >
+            Conductor is the project-manager bot for my-fleet. Delegates tasks
+            to worker bots and tracks them in the fleet's task ledger.
+      skills:
+        - name: bot-delegation
+          source: fleetmind
+      agent_to_agent:
+        can_send_to: [forge]
+      delegation:
+        worker_bots: [forge]
+        # The close-the-loop wake is NATS-push: Forge's NATS subscriber
+        # publishes `task.shipped` / `task.blocked` on close, which wakes
+        # Conductor on the delegation thread. No polling sweep is needed
+        # (and the `delegation.sweeps` field was removed in
+        # fleetmind 0.8.0-beta.8).
+
+    # ── Worker bot ───────────────────────────────────────────────────────────
+    - id: forge
+      name: Forge
+      emoji: 🔧
+      role: worker
+      orchestrator: false
+      target: forge-host
+      # REQUIRED. See conductor above for the convention.
+      providers: [anthropic]
+      description: "Worker bot for my-fleet (generic)."
+      persona:
+        soul: |
+          You are Forge, a worker bot in my-fleet. You pick up tasks from
+          Conductor via the bot-reception skill, do them, and report back.
+      channels:
+        - provider: slack
+          account_id: forge
+          # bot_user_id is auto-populated by `fleetmind slack discover` (see PM bot above).
+          bot_user_id: "U_REPLACE_ME"
+          channels: ["C_REPLACE_ME"]
+          bot_token: "${FORGE_BOT_TOKEN}"
+          app_token: "${FORGE_APP_TOKEN}"
+          background_color: "#1ABC9C"
+          long_description: >
+            Forge is a worker bot in my-fleet. Receives tasks from the PM
+            and ships them back through the ledger.
+      skills:
+        - name: bot-reception
+          source: fleetmind

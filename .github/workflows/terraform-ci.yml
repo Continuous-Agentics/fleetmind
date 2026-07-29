@@ -1,0 +1,133 @@
+name: Terraform CI
+
+on:
+  pull_request:
+    paths:
+      - 'infra/terraform/**'
+      - 'examples/terraform/**'
+      - 'tests/terraform/**'
+      - 'docs/terraform/**'
+      - '.github/workflows/terraform-ci.yml'
+      - '.terraform-docs.yml'
+      - '.terraform-version'
+      - '.tflint.hcl'
+  push:
+    branches:
+      - main
+    paths:
+      - 'infra/terraform/**'
+      - 'examples/terraform/**'
+      - 'tests/terraform/**'
+      - 'docs/terraform/**'
+      - '.github/workflows/terraform-ci.yml'
+      - '.terraform-docs.yml'
+      - '.terraform-version'
+      - '.tflint.hcl'
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: fmt-validate-lint-security
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          # The wrapper does not forward stdin to `terraform console`; the
+          # rendered-bootstrap test supplies a templatefile expression on stdin.
+          terraform_wrapper: false
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive infra/terraform examples/terraform
+
+      # Docs checks must run before any `terraform init`. terraform-docs
+      # resolves the provider table from a local .terraform.lock.hcl / plugin
+      # cache when one is present (e.g. "5.100.0") instead of the raw
+      # required_providers constraint committed to README.md (e.g. "~> 5.0"),
+      # so running init first produces a spurious "Uncommitted change(s)"
+      # failure even when the committed docs are correct.
+      - name: Terraform Docs Check (root)
+        uses: terraform-docs/gh-actions@v1.4.1
+        with:
+          working-dir: infra/terraform/modules/fleetmind
+          config-file: ../../../../.terraform-docs.yml
+          output-file: ../../../../docs/terraform/README.md
+          output-method: inject
+          git-push: "false"
+          fail-on-diff: "true"
+
+      - name: Terraform Docs Check (basic example)
+        uses: terraform-docs/gh-actions@v1.4.1
+        with:
+          working-dir: examples/terraform/basic
+          config-file: ../../../.terraform-docs.yml
+          output-file: README.md
+          output-method: inject
+          git-push: "false"
+          fail-on-diff: "true"
+
+      - name: Terraform Docs Check (existing VPC example)
+        uses: terraform-docs/gh-actions@v1.4.1
+        with:
+          working-dir: examples/terraform/existing-vpc
+          config-file: ../../../.terraform-docs.yml
+          output-file: README.md
+          output-method: inject
+          git-push: "false"
+          fail-on-diff: "true"
+
+      - name: Terraform Init (no backend)
+        run: terraform -chdir=infra/terraform init -backend=false
+
+      - name: Embedded Module Init (no backend)
+        run: terraform -chdir=infra/terraform/modules/fleetmind init -backend=false
+
+      - name: Terraform Validate
+        run: terraform -chdir=infra/terraform validate
+
+      - name: Terraform Test
+        run: bash tests/terraform/run.sh
+
+      - name: Test Agent Bootstrap Render
+        run: python3 tests/terraform/test_agent_bootstrap_render.py
+
+      - name: Validate Examples
+        run: |
+          set -euo pipefail
+          for dir in examples/terraform/*; do
+            [ -d "$dir" ] || continue
+            echo "==> $dir"
+            terraform -chdir="$dir" init -backend=false
+            terraform -chdir="$dir" validate
+          done
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+
+      - name: TFLint Init
+        run: tflint --init
+
+      - name: TFLint
+        run: |
+          # The embedded module has registry dependencies of its own. Lint the
+          # two configuration roots after their explicit init steps instead of
+          # recursing into child modules, which have no independent lock/module
+          # cache and therefore cannot resolve the VPC module calls.
+          tflint --chdir=infra/terraform --config "$(pwd)/.tflint.hcl"
+          tflint --chdir=infra/terraform/modules/fleetmind --config "$(pwd)/.tflint.hcl"
+
+      - name: Trivy IaC Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          exit-code: "1"
+          severity: "CRITICAL,HIGH"
+          skip-dirs: ".terraform"
+          hide-progress: true
