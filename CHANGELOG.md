@@ -6,6 +6,21 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [1.1.0-beta.0] — 2026-08-05
+
+### Added
+
+- Explicit per-agent `github_apps` declarations, including isolated named-App SSM credential namespaces, declarative onboarding, and host-side allowlisted token minting.
+- Terraform-derived `agent_github_apps` input and least-privilege IAM for declared credential namespaces only.
+
+### Changed
+
+- The Terraform module ships from this repository at `infra/terraform/modules/fleetmind`. Consumers must pin that module source and the FleetMind runtime package to the same FleetMind release tag.
+
+### Fixed
+
+- Refuse GitHub App setup before manifest creation when credential namespaces are ready, incomplete, or unreadable; verify named-App installation ownership; and provide recovery guidance for partial SSM writes.
+
 ## [1.0.3] — 2026-07-29
 
 ### Added
