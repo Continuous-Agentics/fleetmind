@@ -266,10 +266,7 @@ See `fleet.example.yaml` for the full annotated schema.
 | `fleetmind github-app setup --app project` | Create/install a deliberately selected declared App |
 | `fleetmind github-app import --app project` | Import PEM credentials into SSM; `store` is deprecated |
 
-GitHub Apps are declared explicitly under each agent's `github_apps` map.
-Use `project: {}` for the existing project namespace; named Apps require both
-`owner` and `org`. Terraform receives names only to derive IAM—never PEMs,
-App IDs, or installation IDs.
+GitHub Apps are declared explicitly under each agent's `github_apps` map. Use `project: {}` for the existing project namespace; named Apps require both `owner` and `org`. Terraform receives names only to derive IAM—never PEMs, App IDs, or installation IDs.
 
 ### Shared ContextStore
 
