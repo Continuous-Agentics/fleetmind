@@ -528,12 +528,11 @@ export function renderTerraformVars(fleet: Fleet): string {
     })
     .join("\n");
 
-  // Named GitHub Apps are intentionally declared per agent. The default
-  // `project` App keeps its legacy SSM namespace and needs no entry here.
-  const githubAppAliasEntries = fleet.agents.list
+  // Every App is explicit. Terraform receives only names, never credential values.
+  const githubAppEntries = fleet.agents.list
     .map((a) => {
-      const aliases = a.github_app_aliases.map((alias) => `"${alias}"`).join(", ");
-      return `  ${a.id} = [${aliases}]`;
+      const apps = Object.keys(a.github_apps ?? {}).map((name) => `"${name}"`).join(", ");
+      return `  ${a.id} = [${apps}]`;
     })
     .join("\n");
 
@@ -555,10 +554,9 @@ export function renderTerraformVars(fleet: Fleet): string {
     providerEntries,
     `}`,
     ``,
-    `# Additional GitHub App aliases per agent. The default project App remains`,
-    `# at github-app/; aliases receive separate github-apps/<alias>/ IAM access.`,
-    `agent_github_app_aliases = {`,
-    githubAppAliasEntries,
+    `# Explicit GitHub Apps per agent. This grants IAM only: no credentials enter Terraform.`,
+    `agent_github_apps = {`,
+    githubAppEntries,
     `}`,
     ``,
     `# NOTE: instance_type, aws_region, and other infrastructure vars are not`,

@@ -47,17 +47,53 @@ export type GitHubAppPermissionLevel = z.infer<typeof GitHubAppPermissionLevelSc
  *  metadata, administration, deployments, packages, pages, security_events, etc.).
  *  Events are GitHub webhook event names; defaults to empty (no webhook events). */
 export const GitHubAppConfigSchema = z.object({
-  permissions: z.record(z.string(), GitHubAppPermissionLevelSchema).default({}),
-  events: z.array(z.string()).default([]),
-});
+  permissions: z.record(z.string(), GitHubAppPermissionLevelSchema).optional(),
+  events: z.array(z.string().min(1, "GitHub App event names must not be empty"))
+    .refine((events) => new Set(events).size === events.length, "GitHub App events must not contain duplicates")
+    .optional(),
+}).strict();
 export type GitHubAppConfig = z.infer<typeof GitHubAppConfigSchema>;
 
 /** A named non-default GitHub App. `project` is reserved for the legacy default App. */
-export const GitHubAppAliasSchema = z
+export const GitHubAppNameSchema = z
   .string()
-  .regex(/^[a-z][a-z0-9-]{0,62}$/, "GitHub App aliases must be lowercase kebab-case")
-  .refine((alias) => alias !== "project", "'project' is the reserved default GitHub App alias");
-export type GitHubAppAlias = z.infer<typeof GitHubAppAliasSchema>;
+  .regex(/^[a-z][a-z0-9-]{0,62}$/, "GitHub App names must be lowercase kebab-case");
+/** @deprecated Use GitHubAppNameSchema. */
+export const GitHubAppAliasSchema = GitHubAppNameSchema.refine(
+  (name) => name !== "project", "'project' is reserved for the project GitHub App",
+);
+export type GitHubAppName = z.infer<typeof GitHubAppNameSchema>;
+
+/** Desired state for a named GitHub App. Credentials deliberately do not live
+ * here: they are created/imported by FleetMind and stored in SSM outside
+ * Terraform state. Per-app permissions/events override the agent default. */
+export const NamedGitHubAppSchema = GitHubAppConfigSchema.extend({
+  owner: z.string().min(1).regex(/^[^/\s]+$/, "GitHub App owner must be a bare GitHub owner name"),
+  // This must be explicit: organization and personal account manifests differ.
+  org: z.boolean(),
+}).strict();
+export const ProjectGitHubAppSchema = GitHubAppConfigSchema.strict();
+/** @deprecated Use NamedGitHubAppSchema. */
+export const GitHubAppDefinitionSchema = NamedGitHubAppSchema;
+export type GitHubAppDefinition = z.infer<typeof NamedGitHubAppSchema>;
+export type ProjectGitHubApp = z.infer<typeof ProjectGitHubAppSchema>;
+export type AgentGitHubApp = ProjectGitHubApp | GitHubAppDefinition;
+
+/** `project` is the sole value that may omit owner/org. */
+export const AgentGitHubAppsSchema = z.record(GitHubAppNameSchema, z.union([
+  ProjectGitHubAppSchema,
+  NamedGitHubAppSchema,
+])).superRefine((apps, ctx) => {
+  for (const [name, value] of Object.entries(apps)) {
+    const named = "owner" in value || "org" in value;
+    if (name === "project" && named) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [name], message: "'project' must not declare owner or org" });
+    }
+    if (name !== "project" && !named) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [name], message: `Named GitHub App '${name}' requires owner and org` });
+    }
+  }
+});
 
 export const SkillRefSchema = z.union([
   // shorthand string → defaults to client source
@@ -246,24 +282,25 @@ export const AgentSchema = z.object({
   agent_to_agent: AgentToAgentSchema.default({}),
   /** Optional per-agent delegation config. */
   delegation: DelegationAgentSchema.optional(),
-  /** Whether this agent requires its own GitHub App for repo access. Defaults
-   *  to true: every agent gets a GitHub App unless explicitly opted out with
-   *  `github_access: false`. Set false for agents that never touch code
-   *  (e.g. a pure-chat triage bot) to skip GitHub App creation for them. The
-   *  permission set still comes from the bot-type defaults (or the `github_app`
-   *  override below) when access is required. */
-  github_access: z.boolean().default(true),
+  /** Legacy migration input. `fleetmind render` removes it; do not use with github_apps. */
+  github_access: z.boolean().optional(),
+  /** Legacy migration input. Alias strings are not a GitHub App declaration. */
+  github_app_aliases: z.array(GitHubAppNameSchema).optional(),
   /** Optional per-agent GitHub App configuration. Permissions + events
    *  declared here override the bot-type defaults from
    *  openclaw/<bot-type>/github-app-permissions.yaml. Permissions are merged
    *  key-by-key: the per-agent entry wins where it sets a key, and the
    *  per-bot-type entry fills in the rest. Events are taken from per-agent
-   *  when present, else fall back to per-bot-type. Only consulted when
-   *  `github_access` is true (the default). */
+   *  when present, else fall back to per-bot-type. This is a defaults object,
+   *  never an App declaration. */
   github_app: GitHubAppConfigSchema.optional(),
-  /** Additional GitHub Apps this agent may use. Credentials are isolated under
-   * `github-apps/<alias>/`; `project` remains the implicit default App. */
-  github_app_aliases: z.array(GitHubAppAliasSchema).default([]),
+  /** Explicit desired-state Apps. `project: {}` preserves its legacy namespace. */
+  github_apps: AgentGitHubAppsSchema.optional(),
+}).superRefine((agent, ctx) => {
+  if (agent.github_apps && (agent.github_access !== undefined || agent.github_app_aliases !== undefined)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["github_apps"], message:
+      "github_apps cannot be mixed with legacy github_access or github_app_aliases; migrate to github_apps" });
+  }
 });
 
 /**

@@ -236,8 +236,8 @@ variable "nats_tls_ca_pem" {
   sensitive   = true
 }
 
-variable "agent_github_app_aliases" {
-  description = "Map of agent_id → declared named GitHub App aliases. The implicit project App is not included. Each alias grants SSM read access only to github-apps/<alias>/."
+variable "agent_github_apps" {
+  description = "Map of agent_id → explicitly declared GitHub App names. IAM-only; credentials never enter Terraform state."
   type        = map(list(string))
   default     = {}
 }

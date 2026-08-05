@@ -22,6 +22,7 @@ AWS_REGION="${aws_region}"
 NODE_VERSION="${node_version}"
 OPENCLAW_VERSION="${openclaw_version}"
 FLEETMIND_VERSION="${fleetmind_version}"
+GITHUB_APPS_JSON='${github_apps_json}'
 
 OPENCLAW_USER="openclaw"
 # OS account home. Standard OpenClaw one-agent-per-host contract: this IS the
@@ -315,15 +316,17 @@ WORKSPACE_BASE=$WORKSPACE_DIR
 AGENTENV_EOF
 chmod 644 /etc/fleetmind/agent.env
 
-# Install the gh-app-token script
+# Install the non-secret declaration allowlist and token helper.
+install -d -m 0755 /etc/fleetmind
+printf '%s\n' "$GITHUB_APPS_JSON" > /etc/fleetmind/github-apps.json
+chmod 0644 /etc/fleetmind/github-apps.json
 cat > /usr/local/bin/gh-app-token << 'GHTOKEN_EOF'
 #!/bin/bash
 # gh-app-token — Generate short-lived GitHub App installation tokens
 #
 # Usage:
-#   gh-app-token                # Read+write token for this agent's project repo (default)
-#   gh-app-token --app project  # Same as above (explicit)
-#   gh-app-token --app <alias>  # Token for a named App declared in fleet.yaml
+#   gh-app-token --app project  # Token for the explicit project App
+#   gh-app-token --app <name>   # Token for a declared named App
 #
 # Environment variables (optional overrides):
 #   GH_APP_ID            — GitHub App ID (skips SSM lookup)
@@ -349,7 +352,7 @@ base64url() {
   openssl enc -base64 -A | tr '+/' '-_' | tr -d '='
 }
 
-APP_TYPE="project"
+APP_TYPE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -368,6 +371,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+[[ -z "$APP_TYPE" ]] && die "--app is required (for example: --app project)"
+
 if [[ ! "$APP_TYPE" =~ ^[a-z][a-z0-9-]{0,62}$ ]]; then
   die "Invalid app alias: $APP_TYPE"
 fi
@@ -383,6 +388,10 @@ AGENT_ID="$${AGENT_ID:-}"
 
 [[ -z "$FLEET_NAME" ]] && die "FLEET_NAME not set. Is /etc/fleetmind/agent.env present and populated?"
 [[ -z "$AGENT_ID" ]]   && die "AGENT_ID not set. Is /etc/fleetmind/agent.env present and populated?"
+ALLOWLIST="/etc/fleetmind/github-apps.json"
+[[ -r "$ALLOWLIST" ]] || die "GitHub App declaration allowlist is missing: $ALLOWLIST"
+jq -e --arg app "$APP_TYPE" 'index($app) != null' "$ALLOWLIST" >/dev/null \
+  || die "GitHub App '$APP_TYPE' is not declared for this agent"
 
 if [[ "$APP_TYPE" == "project" ]]; then
   SSM_PREFIX="/fleetmind/$${FLEET_NAME}/agents/$${AGENT_ID}/github-app"

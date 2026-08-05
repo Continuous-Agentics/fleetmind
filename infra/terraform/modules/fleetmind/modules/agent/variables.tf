@@ -131,8 +131,8 @@ variable "model_providers" {
   }
 }
 
-variable "github_app_aliases" {
-  description = "Named GitHub App aliases declared for this agent. The implicit project App remains at github-app/; aliases are restricted to github-apps/<alias>/."
+variable "github_apps" {
+  description = "Explicit GitHub App names declared for this agent. IAM access is limited to exactly these namespaces."
   type        = list(string)
   default     = []
 }

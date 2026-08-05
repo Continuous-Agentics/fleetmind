@@ -21,13 +21,13 @@ import http from "node:http";
 import { URL } from "node:url";
 import { Command } from "commander";
 import chalk from "chalk";
-import { SSMClient, PutParameterCommand, ParameterType } from "@aws-sdk/client-ssm";
+import { SSMClient, PutParameterCommand, DescribeParametersCommand, ParameterType } from "@aws-sdk/client-ssm";
 import { log } from "../../utils/log.js";
 import { buildManifest, type ManifestOptions } from "../../runtime/github-app-manifest.js";
 import { mintAppJwt } from "../../runtime/github-app-jwt.js";
 import { resolveGitHubAppConfig } from "../../runtime/github-app-permissions.js";
 import { loadFleet } from "../../config/loader.js";
-import type { GitHubAppConfig } from "../../config/schema.js";
+import type { GitHubAppConfig, GitHubAppDefinition } from "../../config/schema.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -85,7 +85,7 @@ export function resolveAgentGitHubApp(
   fleetName: string,
   agentId: string,
   app = "project",
-): { role: string; githubAppConfig?: GitHubAppConfig } {
+): { role: string; githubAppConfig?: GitHubAppConfig; definition?: GitHubAppDefinition } {
   const fleet = loadFleet(configPath);
   if (fleet.fleet.name !== fleetName) {
     throw new Error(
@@ -98,14 +98,23 @@ export function resolveAgentGitHubApp(
     throw new Error(`Agent '${agentId}' was not found in ${configPath}`);
   }
 
-  if (app !== "project" && !agent.github_app_aliases.includes(app)) {
+  const declaration = agent.github_apps?.[app];
+  if (!declaration) {
     throw new Error(
-      `GitHub App alias '${app}' is not declared for agent '${agentId}' in ${configPath}. ` +
-        `Add it under github_app_aliases before storing or creating credentials.`,
+      `GitHub App '${app}' is not declared for agent '${agentId}' in ${configPath}. ` +
+        `Add it under github_apps before setup or import.`,
     );
   }
+  const definition = app === "project" ? undefined : declaration as GitHubAppDefinition;
 
-  return { role: agent.role, githubAppConfig: agent.github_app };
+  const defaultConfig = agent.github_app ?? { permissions: {}, events: [] };
+  const githubAppConfig = definition
+    ? {
+        permissions: { ...defaultConfig.permissions, ...definition.permissions },
+        events: definition.events ?? defaultConfig.events,
+      }
+    : agent.github_app;
+  return { role: agent.role, githubAppConfig, definition };
 }
 
 /**
@@ -560,12 +569,54 @@ export function registerGithubApp(program: Command): void {
     .description("Manage GitHub App credentials for fleet agents");
 
   githubApp
-    .command("store")
-    .description("Push GitHub App credentials (app-id, installation-id, pem) into AWS SSM Parameter Store")
+    .command("status")
+    .description("Report declared GitHub App credential namespace status without reading values")
+    .option("-c, --config <file>", "fleet.yaml path", "fleet.yaml")
+    .option("--fleet <name>", "Optional fleet-name consistency assertion")
+    .option("--agent <id>", "Limit to one declared agent")
+    .option("--app <name>", "Limit to one declared App")
+    .option("--region <region>", "AWS region", "us-west-2")
+    .option("--json", "Emit JSON", false)
+    .action(async (opts) => {
+      try {
+        const fleet = loadFleet(opts.config as string);
+        if (opts.fleet && opts.fleet !== fleet.fleet.name) throw new Error(`Fleet name mismatch: --fleet '${opts.fleet}' does not match ${fleet.fleet.name}`);
+        const agents = opts.agent ? fleet.agents.list.filter((a) => a.id === opts.agent) : fleet.agents.list;
+        if (opts.agent && agents.length === 0) throw new Error(`Agent '${opts.agent}' was not found in ${opts.config}`);
+        const entries = agents.flatMap((agent) => Object.keys(agent.github_apps ?? {}).map((app) => ({ agent: agent.id, app })));
+        const filtered = opts.app ? entries.filter((entry) => entry.app === opts.app) : entries;
+        if (opts.app && filtered.length === 0) throw new Error(`GitHub App '${opts.app}' is not declared by the selected agent(s)`);
+        const client = new SSMClient({ region: opts.region as string });
+        const results = await Promise.all(filtered.map(async (entry) => {
+          const namespace = githubAppNamespace(fleet.fleet.name, entry.agent, entry.app);
+          const expected = [`${namespace}/app-id`, `${namespace}/installation-id`, `${namespace}/pem`];
+          try {
+            const response = await client.send(new DescribeParametersCommand({
+              ParameterFilters: [{ Key: "Name", Option: "Equals", Values: expected }],
+            }));
+            const count = response.Parameters?.length ?? 0;
+            return { ...entry, namespace, status: count === 3 ? "ready" : count === 0 ? "missing" : "incomplete" };
+          } catch (error) {
+            const name = error instanceof Error ? error.name : "UnknownError";
+            return { ...entry, namespace, status: "unreadable", error: name };
+          }
+        }));
+        if (opts.json) console.log(JSON.stringify(results, null, 2));
+        else for (const result of results) console.log(`${result.agent}/${result.app}: ${result.status}  ${result.namespace}`);
+      } catch (err) {
+        log.error(err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+      }
+    });
+
+  githubApp
+    .command("import")
+    .alias("store")
+    .description("Import GitHub App credentials into AWS SSM Parameter Store (legacy: store)")
     .requiredOption("--fleet <name>", "Fleet name (used as SSM path namespace)")
     .requiredOption("--agent <id>", "Agent ID within the fleet")
-    .option("--app <alias>", "GitHub App alias (default: project)", "project")
-    .option("-c, --config <file>", "fleet.yaml path (required to validate named aliases)")
+    .requiredOption("--app <name>", "Declared GitHub App name (use --app project deliberately)")
+    .option("-c, --config <file>", "fleet.yaml path", "fleet.yaml")
     .requiredOption("--app-id <id>", "GitHub App ID")
     .requiredOption("--installation-id <id>", "GitHub App Installation ID")
     .requiredOption("--pem-file <path>", "Path to the .pem private key file")
@@ -581,12 +632,7 @@ Examples:
 `)
     .action(async (opts) => {
       try {
-        if (opts.app !== "project") {
-          if (!opts.config) {
-            throw new Error("--config is required when storing credentials for a named --app alias");
-          }
-          resolveAgentGitHubApp(opts.config as string, opts.fleet as string, opts.agent as string, opts.app as string);
-        }
+        resolveAgentGitHubApp(opts.config as string, opts.fleet as string, opts.agent as string, opts.app as string);
         const result = await storeGithubApp({
           fleet: opts.fleet as string,
           agent: opts.agent as string,
@@ -606,12 +652,13 @@ Examples:
     });
 
   githubApp
-    .command("create")
-    .description("Create a GitHub App via the manifest flow, then store its credentials in SSM")
+    .command("setup")
+    .alias("create")
+    .description("Set up a declared GitHub App via the manifest flow (legacy: create)")
     .requiredOption("--fleet <name>", "Fleet name (used as SSM path namespace)")
     .requiredOption("--agent <id>", "Agent ID within the fleet")
-    .option("--app <alias>", "GitHub App alias (default: project)", "project")
-    .requiredOption("--owner <name>", "GitHub owner where the App is registered (org name for org-owned Apps, username for user-owned)")
+    .requiredOption("--app <name>", "Declared GitHub App name (use --app project deliberately)")
+    .option("--owner <name>", "GitHub owner for project (named Apps use their declared owner)")
     .option("--no-org", "Create as user-owned App instead of org-owned (default: org-owned)")
     .option("--app-name <name>", "Human-readable App name (default: '<fleet>-<agent>')")
     .option("--homepage-url <url>", "Homepage URL for the GitHub App (defaults to the fleetmind repo URL — GitHub rejects localhost here)")
@@ -654,6 +701,7 @@ Examples:
         // createGithubApp internally.
         let agentRole: string | undefined;
         let agentGithubApp: GitHubAppConfig | undefined;
+        let definition: GitHubAppDefinition | undefined;
         try {
           const resolvedAgent = resolveAgentGitHubApp(
             opts.config as string,
@@ -663,13 +711,14 @@ Examples:
           );
           agentRole = resolvedAgent.role;
           agentGithubApp = resolvedAgent.githubAppConfig;
+          definition = resolvedAgent.definition;
         } catch (err) {
           // A named App is only safe when it was declared in fleet.yaml. Keep
           // the historical project-App fallback for existing users whose
           // config is unavailable at invocation time.
-          if (opts.app !== "project") throw err;
-          log.warn(`Could not load ${opts.config}: ${String(err)}. Falling back to default 'worker' role permissions.`);
+          throw err;
         }
+        if (opts.app === "project" && !opts.owner) throw new Error("--owner is required when setting up --app project");
 
         const result = await createGithubApp({
           fleet: opts.fleet as string,
@@ -677,8 +726,8 @@ Examples:
           app: opts.app as string,
           role: agentRole,
           githubAppConfig: agentGithubApp,
-          owner: opts.owner as string,
-          org: opts.org as boolean,
+          owner: (definition?.owner ?? opts.owner) as string,
+          org: definition?.org ?? opts.org as boolean,
           appName: opts.appName as string | undefined,
           homepageUrl: opts.homepageUrl as string | undefined,
           callbackPort: opts.callbackPort as number,

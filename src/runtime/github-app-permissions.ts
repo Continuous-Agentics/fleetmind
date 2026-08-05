@@ -186,10 +186,10 @@ export function resolveGitHubAppConfig(
   let events: string[];
   let eventsFrom: "agent" | "manifest" | "none";
   if (agentOverride?.events && agentOverride.events.length > 0) {
-    events = agentOverride.events;
+    events = [...new Set(agentOverride.events)];
     eventsFrom = "agent";
   } else if (manifest?.events && manifest.events.length > 0) {
-    events = manifest.events;
+    events = [...new Set(manifest.events)];
     eventsFrom = "manifest";
   } else {
     events = [];

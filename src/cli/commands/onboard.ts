@@ -31,7 +31,8 @@ import { providersForAgent, providerApiKeyVar } from "../../core/model-provider.
 import { slackSecretName, providerSecretName } from "../../core/secret-names.js";
 import { log } from "../../utils/log.js";
 import { generateManifests, discoverSlackBotUserIds, writeSlackChannelIds } from "./slack.js";
-import { storeGithubApp, createGithubApp } from "./github-app.js";
+import { storeGithubApp, createGithubApp, githubAppNamespace } from "./github-app.js";
+import type { GitHubAppConfig, GitHubAppDefinition } from "../../config/schema.js";
 import {
   SecretsManagerClient,
   GetSecretValueCommand,
@@ -292,6 +293,38 @@ function agentNeedsGithubApp(agent: { github_access?: boolean }): boolean {
 /** Does any agent require GitHub access? When none do, steps 5/10 are N/A. */
 function anyAgentNeedsGithubApp(agents: { github_access?: boolean }[]): boolean {
   return agents.some(agentNeedsGithubApp);
+}
+
+interface DeclaredGitHubApp {
+  alias: string;
+  owner?: string;
+  org?: boolean;
+  githubAppConfig?: GitHubAppConfig;
+}
+
+/** The implicit project App plus each explicitly declared named App. */
+function githubAppsForAgent(agent: {
+  github_access?: boolean;
+  github_app?: GitHubAppConfig;
+  github_apps?: Record<string, GitHubAppDefinition | GitHubAppConfig>;
+}): DeclaredGitHubApp[] {
+  const defaultConfig = agent.github_app ?? {};
+  return Object.entries(agent.github_apps ?? {}).map(([alias, declaration]) => {
+    const definition = alias === "project" ? undefined : declaration as GitHubAppDefinition;
+    return {
+      alias,
+      owner: definition?.owner,
+      org: definition?.org,
+      githubAppConfig: {
+        permissions: { ...defaultConfig.permissions, ...definition?.permissions },
+        events: definition?.events ?? defaultConfig.events,
+      },
+    };
+  });
+}
+
+function githubAppKey(agentId: string, alias: string): string {
+  return `${agentId}:${alias}`;
 }
 
 /**
@@ -724,10 +757,13 @@ async function detectRemoteState(args: {
     githubApps = "skip";
   } else {
     try {
-      const needed = agents.filter(a => agentNeedsGithubApp(a as { github_access?: boolean }));
-      const stored = await Promise.all(needed.map(a =>
-        ssmExistsViaClient(deps.ssm,
-          `/fleetmind/${fleetName}/agents/${a.id}/github-app/app-id`).catch(() => false),
+      const stored = await Promise.all(agents.flatMap(agent =>
+        githubAppsForAgent(agent).map(app =>
+          ssmExistsViaClient(
+            deps.ssm,
+            `${githubAppNamespace(fleetName, agent.id, app.alias)}/app-id`,
+          ).catch(() => false),
+        ),
       ));
       githubApps = stored.every(Boolean) ? "done" : "next";
     } catch { githubApps = "next"; }
@@ -829,9 +865,15 @@ export async function runOnboard(
 
   // In-memory credential store (collected during the wizard, used later)
   const slackCreds: Record<string, { botToken: string; signingSecret: string; appToken: string }> = {};
-  const ghAppCreds: Record<string, { appId: string; installationId: string; pemFile: string }> = {};
-  /** Agent IDs whose GitHub App was created via the manifest flow in Step 5.
-   * These already have credentials in SSM; Step 10 doesn't need to re-store. */
+  const ghAppCreds: Record<string, {
+    agentId: string;
+    app: string;
+    appId: string;
+    installationId: string;
+    pemFile: string;
+  }> = {};
+  /** Agent/App keys handled through the manifest flow in Step 5. These already
+   * have credentials in SSM, so Step 10 does not store them again. */
   const ghAppManifestHandled = new Set<string>();
 
   // ── Step 2: Slack manifests ─────────────────────────────────────────────────
@@ -945,8 +987,8 @@ export async function runOnboard(
     console.log("  it's fetched from the GitHub API and written directly to SSM.\n");
   }
 
-  // For the manifest flow we need a GitHub owner. Ask once — same owner for
-  // all agents in this fleet (per the canonical client-org delivery model).
+  // The implicit project App keeps the established fleet-wide owner prompt.
+  // Named Apps declare their own owner/org in fleet.yaml and never inherit it.
   let ghOwner: string | null = null;
   let ghOrgOwned = true;
   if (!legacyGithubApps) {
@@ -966,61 +1008,78 @@ export async function runOnboard(
   }
 
   for (const agent of agents) {
-    // Honor per-agent opt-out: agents with github_access: false never get an App.
-    if (!agentNeedsGithubApp(agent as { github_access?: boolean })) {
+    const declaredApps = githubAppsForAgent(agent);
+    if (declaredApps.length === 0) {
       log.dim(`  ${agent.emoji} ${agent.name}: github_access: false — skipping.`);
       continue;
     }
-    const ssmKey = `/fleetmind/${fleetName}/agents/${agent.id}/github-app/app-id`;
-    const alreadyInSsm = await ssmExistsViaClient(deps.ssm, ssmKey);
 
-    if (alreadyInSsm) {
-      const override = await deps.prompter.confirm(`  ${agent.emoji} ${agent.name}: GitHub App already populated in SSM. Override?`, false);
-      if (!override) {
-        log.ok(`  ${agent.name}: using existing GitHub App credentials`);
+    for (const app of declaredApps) {
+      const key = githubAppKey(agent.id, app.alias);
+      const label = app.alias === "project" ? agent.name : `${agent.name} (${app.alias})`;
+      const ssmKey = `${githubAppNamespace(fleetName, agent.id, app.alias)}/app-id`;
+      const alreadyInSsm = await ssmExistsViaClient(deps.ssm, ssmKey);
+
+      if (alreadyInSsm) {
+        const override = await deps.prompter.confirm(`  ${agent.emoji} ${label}: GitHub App already populated in SSM. Override?`, false);
+        if (!override) {
+          log.ok(`  ${label}: using existing GitHub App credentials`);
+          continue;
+        }
+      } else {
+        console.log(`\n\x1b[1m  ${agent.emoji} ${label} (${agent.id}/${app.alias})\x1b[0m`);
+      }
+
+      if (legacyGithubApps) {
+        const appId = await deps.prompter.prompt(`    App ID:          `);
+        const installationId = await deps.prompter.prompt(`    Installation ID: `);
+        const pemFile = await deps.prompter.prompt(`    PEM file path:   `);
+        ghAppCreds[key] = {
+          agentId: agent.id, app: app.alias, appId: appId.trim(),
+          installationId: installationId.trim(), pemFile: pemFile.trim(),
+        };
         continue;
       }
-    } else {
-      console.log(`\n\x1b[1m  ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
-    }
 
-    if (legacyGithubApps) {
-      const appId = await deps.prompter.prompt(`    App ID:          `);
-      const installationId = await deps.prompter.prompt(`    Installation ID: `);
-      const pemFile = await deps.prompter.prompt(`    PEM file path:   `);
-      ghAppCreds[agent.id] = { appId: appId.trim(), installationId: installationId.trim(), pemFile: pemFile.trim() };
-      continue;
-    }
-
-    // Manifest flow path — createGithubApp writes to SSM directly.
-    const doIt = await deps.prompter.confirm(`    Set up GitHub App for ${agent.id} now?`, true);
-    if (!doIt) {
-      log.warn(`    ${agent.id}: skipped — run 'fleetmind github-app create' later for this bot`);
-      continue;
-    }
-    try {
-      await createGithubApp({
-        fleet: fleetName,
-        agent: agent.id,
-        role: agent.role,
-        githubAppConfig: agent.github_app,
-        owner: ghOwner!,
-        org: ghOrgOwned,
-        callbackPort: 0,
-        region,
-        dryRun: false,
-        overwrite: true,
-        ssmClient: deps.ssm,
-      });
-      // Mark as manifest-handled so Step 10 knows there's nothing left to do.
-      ghAppManifestHandled.add(agent.id);
-    } catch (err) {
-      log.error(`    ${agent.id}: createGithubApp failed — ${String(err)}`);
-      log.warn(`    Falling back to manual prompts for this agent.`);
-      const appId = await deps.prompter.prompt(`    App ID:          `);
-      const installationId = await deps.prompter.prompt(`    Installation ID: `);
-      const pemFile = await deps.prompter.prompt(`    PEM file path:   `);
-      ghAppCreds[agent.id] = { appId: appId.trim(), installationId: installationId.trim(), pemFile: pemFile.trim() };
+      // Named apps carry their own explicit owner/org declaration. The legacy
+      // project App retains the fleet-wide interactive owner selection.
+      const owner = app.owner ?? ghOwner;
+      const org = app.org ?? ghOrgOwned;
+      if (!owner) {
+        throw new Error(`No GitHub owner is configured for ${agent.id}/${app.alias}`);
+      }
+      const doIt = await deps.prompter.confirm(`    Set up GitHub App for ${agent.id}/${app.alias} now?`, true);
+      if (!doIt) {
+        log.warn(`    ${agent.id}/${app.alias}: skipped — run 'fleetmind github-app create' later for this App`);
+        continue;
+      }
+      try {
+        await createGithubApp({
+          fleet: fleetName,
+          agent: agent.id,
+          app: app.alias,
+          role: agent.role,
+          githubAppConfig: app.githubAppConfig,
+          owner,
+          org,
+          callbackPort: 0,
+          region,
+          dryRun: false,
+          overwrite: true,
+          ssmClient: deps.ssm,
+        });
+        ghAppManifestHandled.add(key);
+      } catch (err) {
+        log.error(`    ${agent.id}/${app.alias}: createGithubApp failed — ${String(err)}`);
+        log.warn(`    Falling back to manual prompts for this App.`);
+        const appId = await deps.prompter.prompt(`    App ID:          `);
+        const installationId = await deps.prompter.prompt(`    Installation ID: `);
+        const pemFile = await deps.prompter.prompt(`    PEM file path:   `);
+        ghAppCreds[key] = {
+          agentId: agent.id, app: app.alias, appId: appId.trim(),
+          installationId: installationId.trim(), pemFile: pemFile.trim(),
+        };
+      }
     }
   }
   console.log();
@@ -1188,29 +1247,30 @@ export async function runOnboard(
   // ── Step 10: GitHub App credentials ─────────────────────────────────────────
   header("Step 10 / 12 — Store GitHub App Credentials in SSM");
   if (ghAppManifestHandled.size > 0) {
-    log.ok(`Step 10: ${ghAppManifestHandled.size} agent${ghAppManifestHandled.size === 1 ? "" : "s"} already stored via manifest flow in Step 5`);
+    log.ok(`Step 10: ${ghAppManifestHandled.size} GitHub App credential set${ghAppManifestHandled.size === 1 ? "" : "s"} already stored via manifest flow in Step 5`);
   }
-  const agentsWithNewCreds = Object.keys(ghAppCreds);
-  if (agentsWithNewCreds.length === 0) {
+  const appsWithNewCreds = Object.values(ghAppCreds);
+  if (appsWithNewCreds.length === 0) {
     if (ghAppManifestHandled.size === 0) {
       log.ok("Step 10: no new GitHub App credentials to store — skipping");
     }
-  } else if (await deps.prompter.confirm(`  Store ${agentsWithNewCreds.length} legacy-flow GitHub App credential set${agentsWithNewCreds.length === 1 ? "" : "s"}?`)) {
-    for (const [agentId, creds] of Object.entries(ghAppCreds)) {
+  } else if (await deps.prompter.confirm(`  Store ${appsWithNewCreds.length} legacy-flow GitHub App credential set${appsWithNewCreds.length === 1 ? "" : "s"}?`)) {
+    for (const creds of appsWithNewCreds) {
+      const label = `${creds.agentId}/${creds.app}`;
       if (!creds.appId || !creds.installationId || !creds.pemFile) {
-        log.warn(`  ${agentId}: incomplete credentials — skipping`);
+        log.warn(`  ${label}: incomplete credentials — skipping`);
         continue;
       }
       if (!deps.fs.existsSync(creds.pemFile)) {
-        log.warn(`  ${agentId}: pem file not found at ${creds.pemFile} — skipping`);
+        log.warn(`  ${label}: pem file not found at ${creds.pemFile} — skipping`);
         continue;
       }
       await storeGithubApp({
-        fleet: fleetName, agent: agentId,
+        fleet: fleetName, agent: creds.agentId, app: creds.app,
         appId: creds.appId, installationId: creds.installationId, pemFile: creds.pemFile,
         region, dryRun: false, overwrite: true, ssmClient: deps.ssm,
       });
-      log.ok(`  ${agentId}: GitHub App credentials stored`);
+      log.ok(`  ${label}: GitHub App credentials stored`);
     }
   }
 

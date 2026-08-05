@@ -128,12 +128,12 @@ data "aws_iam_policy_document" "github_app" {
     effect  = "Allow"
     actions = ["ssm:GetParameter", "ssm:GetParameters"]
     resources = concat(
-      [
+      contains(var.github_apps, "project") ? [
         "arn:aws:ssm:${var.aws_region}:*:parameter/fleetmind/${var.fleet_name}/agents/${var.name}/github-app/*",
-      ],
+      ] : [],
       [
-        for alias in var.github_app_aliases :
-        "arn:aws:ssm:${var.aws_region}:*:parameter/fleetmind/${var.fleet_name}/agents/${var.name}/github-apps/${alias}/*"
+        for app in var.github_apps :
+        "arn:aws:ssm:${var.aws_region}:*:parameter/fleetmind/${var.fleet_name}/agents/${var.name}/github-apps/${app}/*" if app != "project"
       ],
     )
   }
@@ -334,6 +334,7 @@ resource "aws_instance" "agent" {
     is_orchestrator   = var.is_orchestrator
     gateway_port      = var.gateway_port
     agent_providers   = join(" ", var.model_providers)
+    github_apps_json  = jsonencode(var.github_apps)
   }))
 
   tags = {

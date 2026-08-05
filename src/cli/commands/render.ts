@@ -1,5 +1,7 @@
 import { Command } from "commander";
+import fs from "node:fs";
 import path from "node:path";
+import { parseDocument, YAMLMap } from "yaml";
 import { loadFleet } from "../../config/loader.js";
 import { writeOutputs } from "../../runtime/renderer.js";
 import { computeFleetSkillGaps } from "../../runtime/skills-manifest.js";
@@ -9,6 +11,43 @@ import { log } from "../../utils/log.js";
 
 function describeSkill(s: { name: string; source: string; author?: string }): string {
   return s.source === "clawhub" && s.author ? `${s.author}/${s.name} (clawhub)` : `${s.name} (${s.source})`;
+}
+
+/** Migrate only the GitHub App nodes, retaining the rest of the YAML document's
+ * comments, ordering, and scalar style. Returns whether a write is required. */
+export function normalizeGithubAppsInFleetYaml(fleetFile: string, write = true): boolean {
+  const original = fs.readFileSync(fleetFile, "utf8");
+  const doc = parseDocument(original);
+  if (doc.errors.length) throw new Error(`Cannot migrate ${fleetFile}: ${doc.errors[0]!.message}`);
+  const agents = doc.getIn(["agents", "list"], true);
+  if (!agents || !Array.isArray((agents as { items?: unknown[] }).items)) return false;
+  let changed = false;
+  for (const agent of (agents as { items: unknown[] }).items) {
+    if (!(agent instanceof YAMLMap)) continue;
+    const apps = agent.get("github_apps", true);
+    const access = agent.get("github_access", true);
+    const aliases = agent.get("github_app_aliases", true);
+    if (apps && (access || aliases)) {
+      throw new Error("Cannot migrate an agent that mixes github_apps with github_access or github_app_aliases; remove legacy controls first.");
+    }
+    if (apps) continue;
+    const accessValue = access && "value" in access ? access.value : undefined;
+    if (accessValue === false && aliases) {
+      throw new Error("Cannot migrate github_access: false with legacy named GitHub App declarations; declare explicit github_apps instead.");
+    }
+    const map = new YAMLMap();
+    if (accessValue !== false) map.set("project", {});
+    agent.set("github_apps", map);
+    if (access) agent.delete("github_access");
+    if (aliases) agent.delete("github_app_aliases");
+    changed = true;
+  }
+  if (!changed || !write) return changed;
+  const directory = path.dirname(path.resolve(fleetFile));
+  const temp = path.join(directory, `.${path.basename(fleetFile)}.${process.pid}.tmp`);
+  fs.writeFileSync(temp, String(doc), "utf8");
+  fs.renameSync(temp, fleetFile);
+  return true;
 }
 
 export function registerRender(program: Command): void {
@@ -39,6 +78,11 @@ Examples:
       const fleetFile = opts.fleet ?? fleetArg ?? "fleet.yaml";
       const checkOnly = Boolean(opts.check || opts.dryRun);
       try {
+        const needsMigration = normalizeGithubAppsInFleetYaml(fleetFile, false);
+        if (checkOnly && needsMigration) {
+          throw new Error("fleet.yaml requires GitHub App migration; run 'fleetmind render' without --check to normalize github_apps.");
+        }
+        if (!checkOnly) normalizeGithubAppsInFleetYaml(fleetFile, true);
         const fleet = loadFleet(fleetFile);
         const gaps = computeFleetSkillGaps(fleet.agents.list);
         const gapsWithMissing = gaps.filter((g) => g.missing.length > 0);
