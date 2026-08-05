@@ -18,6 +18,7 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
 import http from "node:http";
+import readline from "node:readline/promises";
 import { URL } from "node:url";
 import { Command } from "commander";
 import chalk from "chalk";
@@ -561,6 +562,19 @@ export function printStoreResult(result: GithubAppStoreResult, dryRun: boolean):
   console.log();
 }
 
+async function confirmCredentialReplacement(action: string): Promise<void> {
+  if (!process.stdin.isTTY) {
+    throw new Error(`${action} requires an interactive terminal confirmation; refusing to replace credentials non-interactively.`);
+  }
+  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await prompt.question(`${action}. Type 'replace' to continue: `);
+    if (answer.trim() !== "replace") throw new Error("Credential replacement cancelled.");
+  } finally {
+    prompt.close();
+  }
+}
+
 // ── Commander registration ────────────────────────────────────────────────────
 
 export function registerGithubApp(program: Command): void {
@@ -622,7 +636,7 @@ export function registerGithubApp(program: Command): void {
     .requiredOption("--pem-file <path>", "Path to the .pem private key file")
     .option("--region <region>", "AWS region", "us-west-2")
     .option("--dry-run", "Print what would be written without calling SSM", false)
-    .option("--no-overwrite", "Fail if a parameter already exists (default: overwrite)")
+    .option("--replace", "Replace existing credentials after explicit operator confirmation", false)
     .addHelpText("after", `
 Examples:
   $ fleetmind github-app store \\
@@ -633,6 +647,7 @@ Examples:
     .action(async (opts) => {
       try {
         resolveAgentGitHubApp(opts.config as string, opts.fleet as string, opts.agent as string, opts.app as string);
+        if (opts.replace && !opts.dryRun) await confirmCredentialReplacement("Replacing GitHub App credentials");
         const result = await storeGithubApp({
           fleet: opts.fleet as string,
           agent: opts.agent as string,
@@ -642,7 +657,7 @@ Examples:
           pemFile: opts.pemFile as string,
           region: opts.region as string,
           dryRun: opts.dryRun as boolean,
-          overwrite: opts.overwrite as boolean,
+          overwrite: opts.replace as boolean,
         });
         printStoreResult(result, opts.dryRun as boolean);
       } catch (err: unknown) {
@@ -665,7 +680,7 @@ Examples:
     .option("--callback-port <port>", "Local callback port for the manifest redirect (default: auto-pick)", (v) => parseInt(v, 10), 0)
     .option("--region <region>", "AWS region", "us-west-2")
     .option("--dry-run", "Run the flow but skip the SSM write at the end", false)
-    .option("--no-overwrite", "Fail if a SSM parameter already exists (default: overwrite)")
+    .option("--force", "Intentionally replace existing credentials", false)
     .option("--install-timeout-ms <ms>", "How long to wait for the operator to install on the repo (default: 300000 = 5 min)", (v) => parseInt(v, 10), 5 * 60 * 1000)
     .addHelpText("after", `
 The flow has 4 steps:
@@ -719,6 +734,7 @@ Examples:
           throw err;
         }
         if (opts.app === "project" && !opts.owner) throw new Error("--owner is required when setting up --app project");
+        if (opts.force && !opts.dryRun) await confirmCredentialReplacement("Replacing GitHub App credentials");
 
         const result = await createGithubApp({
           fleet: opts.fleet as string,
@@ -733,7 +749,7 @@ Examples:
           callbackPort: opts.callbackPort as number,
           region: opts.region as string,
           dryRun: opts.dryRun as boolean,
-          overwrite: opts.overwrite as boolean,
+          overwrite: opts.force as boolean,
           installPollTimeoutMs: opts.installTimeoutMs as number,
         });
         printStoreResult(result, opts.dryRun as boolean);

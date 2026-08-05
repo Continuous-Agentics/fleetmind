@@ -308,8 +308,13 @@ function githubAppsForAgent(agent: {
   github_app?: GitHubAppConfig;
   github_apps?: Record<string, GitHubAppDefinition | GitHubAppConfig>;
 }): DeclaredGitHubApp[] {
+  // Compatibility for callers that have not yet passed through render
+  // normalization. Rendered fleets always take the explicit branch below.
+  if (!agent.github_apps) {
+    return agentNeedsGithubApp(agent) ? [{ alias: "project", githubAppConfig: agent.github_app }] : [];
+  }
   const defaultConfig = agent.github_app ?? {};
-  return Object.entries(agent.github_apps ?? {}).map(([alias, declaration]) => {
+  return Object.entries(agent.github_apps).map(([alias, declaration]) => {
     const definition = alias === "project" ? undefined : declaration as GitHubAppDefinition;
     return {
       alias,
