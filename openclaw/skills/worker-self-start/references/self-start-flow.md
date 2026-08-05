@@ -8,15 +8,7 @@
 TASK_ID=$(openssl rand -hex 4)
 ```
 
-## Step 2. Write to `memory/task-queue.md` (crash recovery)
-
-Add to `## In Progress`:
-
-```
-- **<TASK_ID>** — <summary> | self-start | tracker: <url-or-none>
-```
-
-## Step 3. Create the DDB row (before any notice)
+## Step 2. Create the DDB row (before any notice)
 
 ```bash
 fleetmind task create \
@@ -37,7 +29,7 @@ fleetmind task create \
 
 `fleetmind task create` uses `attribute_not_exists(PK)` — a duplicate create from a racing PM recovery write is a safe no-op returning `ConditionalCheckFailedException`.
 
-## Step 4. Self-acknowledge (`delegated` → `accepted`)
+## Step 3. Self-acknowledge (`delegated` → `accepted`)
 
 If your worker-mode NATS subscriber (`fleetmind nats subscribe --mode worker`) is running, it will **auto-ack** this delegation the moment `fleetmind task create` publishes the NATS `delegation` event — no manual step needed.
 
@@ -52,7 +44,7 @@ fleetmind task ack \
 
 If this fails with `TaskConditionError`, the subscriber already acked it — treat that as a no-op (already accepted).
 
-## Step 5. Post self-start notice in the PM bot's planning channel
+## Step 4. Post self-start notice in the PM bot's planning channel
 
 Post a **top-level message** (not a reply) within 60 seconds of beginning work. Skip if the PM bot already delegated this via NATS.
 
@@ -71,11 +63,11 @@ Also in your home channel:
 🏃 Self-starting on <task summary> (TASK#<TASK_ID>).<if tracker: " Tracker: <url>">
 ```
 
-## Step 6. Do the work silently
+## Step 5. Do the work silently
 
 Same voice discipline as delegated tasks (no "working on it…" posts).
 
-## Step 7. Ship
+## Step 6. Ship
 
 1. Write narrative to S3 (`fleetmind narrative put --event shipped`)
 2. `fleetmind task ship` — publishes NATS `ship` event. PM bot handles DDB lifecycle. Human sign-off required before `signed_off`.
