@@ -135,4 +135,14 @@ variable "github_apps" {
   description = "Explicit GitHub App names declared for this agent. IAM access is limited to exactly these namespaces."
   type        = list(string)
   default     = []
+
+  validation {
+    condition     = alltrue([for app in var.github_apps : can(regex("^[a-z][a-z0-9-]{0,62}$", app))])
+    error_message = "Every github_apps entry must be a lowercase GitHub App alias matching ^[a-z][a-z0-9-]{0,62}$ (including the legacy 'project' alias)."
+  }
+
+  validation {
+    condition     = length(var.github_apps) == length(distinct(var.github_apps))
+    error_message = "github_apps must not contain duplicate GitHub App aliases."
+  }
 }
