@@ -36,6 +36,20 @@ variable "agent_github_apps" {
   description = "Map of agent_id → explicitly declared GitHub App names (derived from fleet.yaml). IAM-only; credentials never enter Terraform state."
   type        = map(list(string))
   default     = {}
+
+  validation {
+    condition = alltrue(flatten([
+      for apps in values(var.agent_github_apps) : [
+        for app in apps : can(regex("^[a-z][a-z0-9-]{0,62}$", app))
+      ]
+    ]))
+    error_message = "Every agent_github_apps entry must be a lowercase GitHub App alias matching ^[a-z][a-z0-9-]{0,62}$ (including the legacy 'project' alias)."
+  }
+
+  validation {
+    condition     = alltrue([for apps in values(var.agent_github_apps) : length(apps) == length(distinct(apps))])
+    error_message = "Each agent_github_apps list must not contain duplicate GitHub App aliases."
+  }
 }
 
 # ── Operator-owned infrastructure knobs ──────────────────────────────────────

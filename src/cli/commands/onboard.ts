@@ -68,6 +68,7 @@ import { runPushFleet } from "./push-fleet.js";
 import { resolveTerraformVarsPath, writeOutputs } from "../../runtime/renderer.js";
 import { DEFAULT_AWS_RUNTIME_USER } from "../../deploy/aws-runtime-user.js";
 import { provisionFleet } from "../../runtime/provisioner.js";
+import { normalizeGithubAppsInFleetYaml } from "./render.js";
 
 // ── Terminal helpers ──────────────────────────────────────────────────────────
 
@@ -799,6 +800,16 @@ export async function runOnboard(
     exit(1);
   }
 
+  // Onboarding must not use the old implicit-project-App behavior: doing so
+  // could create credentials and later render an empty App declaration. This
+  // migration preserves the effective setting (including an opt-out as an
+  // empty map), is idempotent, and happens before any AWS or GitHub side
+  // effects.
+  if (normalizeGithubAppsInFleetYaml(fleetFile, false)) {
+    normalizeGithubAppsInFleetYaml(fleetFile, true);
+    log.info("Normalized legacy GitHub access settings to explicit github_apps in fleet.yaml.");
+  }
+
   const fleet = loadFleet(fleetFile);
   const fleetName = fleet.fleet.name;
   const agents = fleet.agents.list;
@@ -975,16 +986,15 @@ export async function runOnboard(
   }
 
   // ── Step 5: GitHub Apps ─────────────────────────────────────────────────────
-  // Every agent requires its own GitHub App by default. An agent opts out by
-  // setting `github_access: false` in fleet.yaml. When EVERY agent has opted
-  // out, skip the whole step (no owner prompt, no per-agent prompts) so fleets
-  // that genuinely don't touch GitHub aren't dragged through it.
+  // Agents with no github_apps declaration skip this step. When every agent
+  // has opted out, avoid owner and per-agent prompts for fleets that genuinely
+  // do not touch GitHub.
   const githubAppNeeded = anyAgentNeedsGithubApp(agents);
   const projectAppNeeded = agents.some((agent) => githubAppsForAgent(agent).some((app) => app.alias === "project"));
   if (!githubAppNeeded) {
     header("Step 5 / 12 — GitHub Apps");
-    log.ok("  Every agent has github_access: false in fleet.yaml — skipping.");
-    log.dim("  Remove github_access: false from an agent (and re-run) if a bot needs repo access.");
+    log.ok("  No GitHub Apps are declared in fleet.yaml — skipping.");
+    log.dim("  Add an app under github_apps for an agent (and re-run) if a bot needs repo access.");
   } else {
   header("Step 5 / 12 — GitHub Apps");
   console.log("  Each bot needs its own GitHub App for repo access (PRs, issues, etc.)");
@@ -1020,7 +1030,7 @@ export async function runOnboard(
   for (const agent of agents) {
     const declaredApps = githubAppsForAgent(agent);
     if (declaredApps.length === 0) {
-      log.dim(`  ${agent.emoji} ${agent.name}: github_access: false — skipping.`);
+      log.dim(`  ${agent.emoji} ${agent.name}: no GitHub App declared — skipping.`);
       continue;
     }
 

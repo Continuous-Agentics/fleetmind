@@ -34,7 +34,7 @@ import type { GitHubAppConfig, GitHubAppDefinition } from "../../config/schema.j
 
 /** Minimal interface for the SSM send method — allows injection in tests. */
 export interface SsmSendable {
-  send(command: PutParameterCommand): Promise<unknown>;
+  send(command: PutParameterCommand | DescribeParametersCommand): Promise<unknown>;
 }
 
 export interface GithubAppStoreOptions {
@@ -61,6 +61,31 @@ export interface GithubAppStoreResult {
     valueHint: string;
     written: boolean; // false in dry-run
   }>;
+}
+
+export type GithubAppNamespaceStatus = "missing" | "incomplete" | "ready" | "unreadable";
+
+/** Inspect a credential namespace without reading parameter values. */
+export async function inspectGithubAppNamespace(options: {
+  fleet: string;
+  agent: string;
+  app?: string;
+  region: string;
+  ssmClient?: SsmSendable;
+}): Promise<{ namespace: string; status: GithubAppNamespaceStatus; error?: string }> {
+  const namespace = githubAppNamespace(options.fleet, options.agent, options.app);
+  const expected = [`${namespace}/app-id`, `${namespace}/installation-id`, `${namespace}/pem`];
+  const client: SsmSendable = options.ssmClient ?? new SSMClient({ region: options.region });
+  try {
+    const response = await client.send(new DescribeParametersCommand({
+      ParameterFilters: [{ Key: "Name", Option: "Equals", Values: expected }],
+    })) as { Parameters?: Array<{ Name?: string }> };
+    const found = new Set((response.Parameters ?? []).map((parameter) => parameter.Name));
+    const count = expected.filter((name) => found.has(name)).length;
+    return { namespace, status: count === 3 ? "ready" : count === 0 ? "missing" : "incomplete" };
+  } catch (error) {
+    return { namespace, status: "unreadable", error: error instanceof Error ? error.name : "UnknownError" };
+  }
 }
 
 // ── Shared SSM write ──────────────────────────────────────────────────────────
@@ -280,6 +305,35 @@ export async function createGithubApp(options: GithubAppCreateOptions): Promise<
   }
   const owner = options.owner;
 
+  const app = options.app ?? "project";
+  // Validate and inspect the target namespace before a manifest can create an
+  // App. A later SSM conflict would otherwise leave an orphaned GitHub App.
+  const namespace = githubAppNamespace(options.fleet, options.agent, app);
+  const namespaceState = await inspectGithubAppNamespace({
+    fleet: options.fleet,
+    agent: options.agent,
+    app,
+    region: options.region,
+    ssmClient: options.ssmClient,
+  });
+  if (namespaceState.status === "ready" && !options.overwrite) {
+    throw new Error(
+      `GitHub App credentials already exist at ${namespace}. Refusing to create another App without --force. ` +
+      "Use 'fleetmind github-app status' to inspect them, or use --force to intentionally replace them.",
+    );
+  }
+  if (namespaceState.status === "incomplete" || namespaceState.status === "unreadable") {
+    const detail = namespaceState.error ? ` (${namespaceState.error})` : "";
+    throw new Error(
+      `GitHub App credential namespace ${namespace} is ${namespaceState.status}${detail}; refusing to open the GitHub manifest flow. ` +
+      "Repair or import the existing credentials with 'fleetmind github-app import', then verify with 'fleetmind github-app status'.",
+    );
+  }
+  if (options.dryRun) {
+    console.log(chalk.dim(`\n[dry-run] Namespace ${namespace} is ${namespaceState.status}; no GitHub App or SSM parameters will be created.\n`));
+    return { namespace, region: options.region, params: [] };
+  }
+
   // ─── Pick callback port + state nonce ──────────────────────────────────────
   const callbackPort = options.callbackPort > 0 ? options.callbackPort : await findFreePort(8765);
   const state = crypto.randomBytes(16).toString("hex");
@@ -294,12 +348,6 @@ export async function createGithubApp(options: GithubAppCreateOptions): Promise<
       `, ${resolved.source.permissionsFromOverride} from per-agent override` +
       `${resolved.source.permissionsDropped > 0 ? `, ${resolved.source.permissionsDropped} dropped via 'none'` : ""})`,
   );
-
-  const app = options.app ?? "project";
-  // Validate before opening the browser-side manifest flow. This also keeps
-  // direct callers from accidentally creating a credential namespace the
-  // helper/IAM policy cannot address.
-  githubAppNamespace(options.fleet, options.agent, app);
 
   const manifestOpts: ManifestOptions = {
     name: options.appName ?? (app === "project" ? `${options.fleet}-${options.agent}` : `${options.fleet}-${options.agent}-${app}`),
@@ -359,6 +407,8 @@ export async function createGithubApp(options: GithubAppCreateOptions): Promise<
     appId: conversion.id,
     pem: conversion.pem,
     timeoutMs: options.installPollTimeoutMs ?? 5 * 60 * 1000,
+    owner,
+    org: options.org,
   });
   log.ok(`Installation detected: installation_id=${installationId}`);
 
@@ -484,9 +534,25 @@ interface PollOptions {
   appId: number;
   pem: string;
   timeoutMs: number;
+  owner: string;
+  org: boolean;
 }
 
-async function pollForAppInstallation(opts: PollOptions): Promise<number> {
+/** Return the newest installation for the selected owner, never an arbitrary account. */
+export function matchingAppInstallation(
+  installations: AppInstallation[],
+  owner: string,
+  org: boolean,
+): AppInstallation | undefined {
+  const expectedType = org ? "Organization" : "User";
+  return [...installations]
+    .filter((installation) =>
+      installation.account.type === expectedType &&
+      installation.account.login.toLowerCase() === owner.toLowerCase())
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+}
+
+export async function pollForAppInstallation(opts: PollOptions): Promise<number> {
   const deadline = Date.now() + opts.timeoutMs;
   const jwt = mintAppJwt(opts.pem, String(opts.appId));
   let lastStatus = 0;
@@ -502,13 +568,11 @@ async function pollForAppInstallation(opts: PollOptions): Promise<number> {
     lastStatus = resp.status;
     if (resp.ok) {
       const installations = (await resp.json()) as AppInstallation[];
-      if (installations.length > 0) {
-        // App is freshly-created and should have at most 1 installation.
-        // If there are multiple, pick the most recent.
-        const sorted = [...installations].sort((a, b) => b.created_at.localeCompare(a.created_at));
-        return sorted[0]!.id;
+      const installation = matchingAppInstallation(installations, opts.owner, opts.org);
+      if (installation) {
+        return installation.id;
       }
-      // App created but not yet installed — wait + retry
+      // App created but not yet installed under the selected owner — wait + retry.
       await new Promise((r) => setTimeout(r, 3000));
       continue;
     }
@@ -520,7 +584,7 @@ async function pollForAppInstallation(opts: PollOptions): Promise<number> {
   }
   throw new Error(
     `Timed out after ${opts.timeoutMs / 1000}s waiting for the App to be installed.\n` +
-      `Last GitHub response code: ${lastStatus}. Install via the URL above and re-run.`,
+      `Last GitHub response code: ${lastStatus}. Install it under ${opts.owner} (${opts.org ? "Organization" : "User"}) via the URL above and re-run.`,
   );
 }
 
