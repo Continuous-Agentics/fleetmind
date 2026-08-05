@@ -52,6 +52,13 @@ export const GitHubAppConfigSchema = z.object({
 });
 export type GitHubAppConfig = z.infer<typeof GitHubAppConfigSchema>;
 
+/** A named non-default GitHub App. `project` is reserved for the legacy default App. */
+export const GitHubAppAliasSchema = z
+  .string()
+  .regex(/^[a-z][a-z0-9-]{0,62}$/, "GitHub App aliases must be lowercase kebab-case")
+  .refine((alias) => alias !== "project", "'project' is the reserved default GitHub App alias");
+export type GitHubAppAlias = z.infer<typeof GitHubAppAliasSchema>;
+
 export const SkillRefSchema = z.union([
   // shorthand string → defaults to client source
   z.string().transform((s) => ({
@@ -254,6 +261,9 @@ export const AgentSchema = z.object({
    *  when present, else fall back to per-bot-type. Only consulted when
    *  `github_access` is true (the default). */
   github_app: GitHubAppConfigSchema.optional(),
+  /** Additional GitHub Apps this agent may use. Credentials are isolated under
+   * `github-apps/<alias>/`; `project` remains the implicit default App. */
+  github_app_aliases: z.array(GitHubAppAliasSchema).default([]),
 });
 
 /**
