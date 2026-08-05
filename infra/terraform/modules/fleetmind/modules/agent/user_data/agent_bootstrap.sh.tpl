@@ -325,7 +325,8 @@ cat > /usr/local/bin/gh-app-token << 'GHTOKEN_EOF'
 # gh-app-token — Generate short-lived GitHub App installation tokens
 #
 # Usage:
-#   gh-app-token --app project  # Token for the explicit project App
+#   gh-app-token                # Token for the project App (default)
+#   gh-app-token --app project  # Same as the default
 #   gh-app-token --app <name>   # Token for a declared named App
 #
 # Environment variables (optional overrides):
@@ -352,7 +353,8 @@ base64url() {
   openssl enc -base64 -A | tr '+/' '-_' | tr -d '='
 }
 
-APP_TYPE=""
+# Preserve the established project-App behavior when no selector is supplied.
+APP_TYPE="project"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -370,8 +372,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-
-[[ -z "$APP_TYPE" ]] && die "--app is required (for example: --app project)"
 
 if [[ ! "$APP_TYPE" =~ ^[a-z][a-z0-9-]{0,62}$ ]]; then
   die "Invalid app alias: $APP_TYPE"

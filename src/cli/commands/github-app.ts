@@ -76,11 +76,8 @@ export function githubAppNamespace(fleet: string, agent: string, app = "project"
   return app === "project" ? `${base}/github-app` : `${base}/github-apps/${app}`;
 }
 
-/**
- * Resolve an agent's GitHub App settings from fleet.yaml and verify that a
- * named credential alias was explicitly declared for that agent. `project`
- * remains the implicit, backwards-compatible default App.
- */
+/** Resolve an explicitly declared agent GitHub App from fleet.yaml. The
+ * render migration makes `project` explicit before credential operations. */
 export function resolveAgentGitHubApp(
   configPath: string,
   fleetName: string,

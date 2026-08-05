@@ -290,9 +290,13 @@ function agentNeedsGithubApp(agent: { github_access?: boolean }): boolean {
   return agent.github_access !== false;
 }
 
-/** Does any agent require GitHub access? When none do, steps 5/10 are N/A. */
-function anyAgentNeedsGithubApp(agents: { github_access?: boolean }[]): boolean {
-  return agents.some(agentNeedsGithubApp);
+/** Does any agent declare a GitHub App? When none do, steps 5/10 are N/A. */
+function anyAgentNeedsGithubApp(agents: {
+  github_access?: boolean;
+  github_app?: GitHubAppConfig;
+  github_apps?: Record<string, GitHubAppDefinition | GitHubAppConfig>;
+}[]): boolean {
+  return agents.some((agent) => githubAppsForAgent(agent).length > 0);
 }
 
 interface DeclaredGitHubApp {
@@ -975,7 +979,8 @@ export async function runOnboard(
   // setting `github_access: false` in fleet.yaml. When EVERY agent has opted
   // out, skip the whole step (no owner prompt, no per-agent prompts) so fleets
   // that genuinely don't touch GitHub aren't dragged through it.
-  const githubAppNeeded = anyAgentNeedsGithubApp(agents as { github_access?: boolean }[]);
+  const githubAppNeeded = anyAgentNeedsGithubApp(agents);
+  const projectAppNeeded = agents.some((agent) => githubAppsForAgent(agent).some((app) => app.alias === "project"));
   if (!githubAppNeeded) {
     header("Step 5 / 12 — GitHub Apps");
     log.ok("  Every agent has github_access: false in fleet.yaml — skipping.");
@@ -996,8 +1001,8 @@ export async function runOnboard(
   // Named Apps declare their own owner/org in fleet.yaml and never inherit it.
   let ghOwner: string | null = null;
   let ghOrgOwned = true;
-  if (!legacyGithubApps) {
-    const ownerInput = await deps.prompter.prompt(`  GitHub owner for all bots (org name, or 'username:<user>' for user-owned): `);
+  if (!legacyGithubApps && projectAppNeeded) {
+    const ownerInput = await deps.prompter.prompt(`  GitHub owner for all project Apps (org name, or 'username:<user>' for user-owned): `);
     const trimmed = ownerInput.trim();
     if (trimmed.startsWith("username:")) {
       ghOwner = trimmed.slice("username:".length).trim();
