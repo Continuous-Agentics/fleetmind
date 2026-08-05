@@ -147,17 +147,13 @@ FleetMind’s runtime and Terraform implementation live in this repository:
 
 ## Compatibility
 
-FleetMind spans three repos. Keep these versions aligned when onboarding or upgrading a fleet:
+FleetMind’s CLI and Terraform module ship from this repository under the same release tag. Fleet consumers must pin both the npm package and the Terraform module source to that exact tag; `fleetmind-template` is an optional scaffold that follows FleetMind tags.
 
-| FleetMind CLI | `terraform-aws-fleetmind` | `fleetmind-template` baseline | Notes |
-|---|---|---|---|
-| `1.0.0` | `v1.1.5` | `main` at or after the v1 docs audit | v1.0 public release baseline: public npm path, MIT license metadata, guided Terraform onboarding, no-delegation deploy-staging IAM fix |
-| `0.10.4` | `v1.1.5` | `main` at or after the v1 docs audit | Public npm smoke-test baseline; npm metadata was published before MIT license metadata landed |
-| `0.10.1` | `v1.1.0` | `main` at or after the v1 docs audit | Initial public npm path, guided Terraform onboarding, gateway-token connect fix |
-| `0.10.0` | `v1.1.0` | `main` at or after `9775866` | Guided Terraform onboarding and NATS delegation acceptance baseline |
-| `0.9.x` | `v1.1.0` | `main` at or after PR #25 | OpenClaw 2026.7.1 compatibility and module v1.1.0 |
-| `0.8.x` | `v0.5.x`–`v1.0.x` | `main` at or after PR #18 | Per-provider Secrets Manager paths and explicit `providers:` |
-| `0.7.x` and earlier | pre-`v0.5.0` | historical only | Not recommended for new fleets |
+| FleetMind tag | Terraform source | Notes |
+|---|---|---|
+| `v1.1.0-beta.0` | `github.com/Continuous-Agentics/fleetmind//infra/terraform/modules/fleetmind?ref=v1.1.0-beta.0` | Explicit per-agent GitHub App declarations, namespaced credentials, and least-privilege IAM |
+
+Do not mix a FleetMind npm version with a different Terraform module tag or an untagged branch.
 
 See [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) for the full contract and upgrade notes.
 
@@ -364,7 +360,7 @@ Unpinned skills (`- name: coding`) auto-update. Pinned skills (`version: "2.1.0"
 
 ## Terraform Integration
 
-The Terraform module is in a separate repo: [`Continuous-Agentics/terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind). Operators consume it via [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template), whose `main.tf` already calls the module. `fleetmind render` writes derived tfvars (`fleet_name`, `agent_names`, `agent_orchestrators`, `agent_providers`) into the template repo's `workspaces/<fleet>.derived.tfvars`; the operator passes that file + their hand-edited `<fleet>.tfvars` to `terraform apply -var-file=...`. For the full module surface, BYO VPC, troubleshooting, and per-version migration notes, see the [terraform-aws-fleetmind docs](https://github.com/Continuous-Agentics/terraform-aws-fleetmind#docs).
+The Terraform module ships in this repository at [`infra/terraform/modules/fleetmind`](infra/terraform/modules/fleetmind). Operators consume it using the same FleetMind tag as their runtime package, for example `github.com/Continuous-Agentics/fleetmind//infra/terraform/modules/fleetmind?ref=v1.1.0-beta.0`. `fleetmind render` writes derived tfvars (`fleet_name`, `agent_names`, `agent_orchestrators`, `agent_providers`, `agent_github_apps`) into `workspaces/<fleet>.derived.tfvars`; the operator passes that file plus their hand-edited `<fleet>.tfvars` to `terraform apply -var-file=...`.
 
 ## CI
 
