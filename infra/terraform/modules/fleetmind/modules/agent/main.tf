@@ -127,9 +127,15 @@ data "aws_iam_policy_document" "github_app" {
     sid     = "GitHubAppSSMRead"
     effect  = "Allow"
     actions = ["ssm:GetParameter", "ssm:GetParameters"]
-    resources = [
-      "arn:aws:ssm:${var.aws_region}:*:parameter/fleetmind/${var.fleet_name}/agents/${var.name}/github-app/*",
-    ]
+    resources = concat(
+      [
+        "arn:aws:ssm:${var.aws_region}:*:parameter/fleetmind/${var.fleet_name}/agents/${var.name}/github-app/*",
+      ],
+      [
+        for alias in var.github_app_aliases :
+        "arn:aws:ssm:${var.aws_region}:*:parameter/fleetmind/${var.fleet_name}/agents/${var.name}/github-apps/${alias}/*"
+      ],
+    )
   }
 
   statement {

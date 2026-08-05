@@ -321,8 +321,9 @@ cat > /usr/local/bin/gh-app-token << 'GHTOKEN_EOF'
 # gh-app-token — Generate short-lived GitHub App installation tokens
 #
 # Usage:
-#   gh-app-token              # Read+write token for this agent's project repo (default)
+#   gh-app-token                # Read+write token for this agent's project repo (default)
 #   gh-app-token --app project  # Same as above (explicit)
+#   gh-app-token --app <alias>  # Token for a named App declared in fleet.yaml
 #
 # Environment variables (optional overrides):
 #   GH_APP_ID            — GitHub App ID (skips SSM lookup)
@@ -332,7 +333,8 @@ cat > /usr/local/bin/gh-app-token << 'GHTOKEN_EOF'
 #   AWS_REGION            — AWS region for SSM (default: us-west-2)
 #
 # SSM Parameter paths:
-#   /fleetmind/<fleet_name>/agents/<agent_id>/github-app/{app-id,installation-id,pem}
+#   project: /fleetmind/<fleet_name>/agents/<agent_id>/github-app/{app-id,installation-id,pem}
+#   alias:   /fleetmind/<fleet_name>/agents/<agent_id>/github-apps/<alias>/{app-id,installation-id,pem}
 #
 # Requires: openssl, curl, jq, aws cli
 
@@ -352,7 +354,7 @@ APP_TYPE="project"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --app)
-      [[ $# -lt 2 ]] && die "Missing value for --app (expected: project)"
+      [[ $# -lt 2 ]] && die "Missing value for --app (expected: project or a declared alias)"
       APP_TYPE="$2"
       shift 2
       ;;
@@ -366,7 +368,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ "$APP_TYPE" != "project" ]] && die "Unknown app type: $APP_TYPE (only 'project' is supported)"
+if [[ ! "$APP_TYPE" =~ ^[a-z][a-z0-9-]{0,62}$ ]]; then
+  die "Invalid app alias: $APP_TYPE"
+fi
 
 AGENT_ENV_FILE="/etc/fleetmind/agent.env"
 if [[ -f "$AGENT_ENV_FILE" ]]; then
@@ -380,7 +384,11 @@ AGENT_ID="$${AGENT_ID:-}"
 [[ -z "$FLEET_NAME" ]] && die "FLEET_NAME not set. Is /etc/fleetmind/agent.env present and populated?"
 [[ -z "$AGENT_ID" ]]   && die "AGENT_ID not set. Is /etc/fleetmind/agent.env present and populated?"
 
-SSM_PREFIX="/fleetmind/$${FLEET_NAME}/agents/$${AGENT_ID}/github-app"
+if [[ "$APP_TYPE" == "project" ]]; then
+  SSM_PREFIX="/fleetmind/$${FLEET_NAME}/agents/$${AGENT_ID}/github-app"
+else
+  SSM_PREFIX="/fleetmind/$${FLEET_NAME}/agents/$${AGENT_ID}/github-apps/$${APP_TYPE}"
+fi
 
 fetch_ssm() {
   local name="$1"

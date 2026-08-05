@@ -130,3 +130,9 @@ variable "model_providers" {
     error_message = "model_providers must contain at least one provider id (e.g. [\"anthropic\"]). Explicit provider declaration is required — there is no fallback to inferring from model strings."
   }
 }
+
+variable "github_app_aliases" {
+  description = "Named GitHub App aliases declared for this agent. The implicit project App remains at github-app/; aliases are restricted to github-apps/<alias>/."
+  type        = list(string)
+  default     = []
+}

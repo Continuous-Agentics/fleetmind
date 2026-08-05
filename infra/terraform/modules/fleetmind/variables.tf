@@ -236,6 +236,12 @@ variable "nats_tls_ca_pem" {
   sensitive   = true
 }
 
+variable "agent_github_app_aliases" {
+  description = "Map of agent_id → declared named GitHub App aliases. The implicit project App is not included. Each alias grants SSM read access only to github-apps/<alias>/."
+  type        = map(list(string))
+  default     = {}
+}
+
 variable "agent_rollout_trigger" {
   description = "Arbitrary rollout token for agent instances. Change this value to force replacement when user_data/AMI changes are otherwise ignored."
   type        = string

@@ -32,6 +32,12 @@ variable "agent_providers" {
   type        = map(list(string))
 }
 
+variable "agent_github_app_aliases" {
+  description = "Map of agent_id → declared named GitHub App aliases (derived from fleet.yaml). The implicit project App is not included. Each alias grants SSM read access only to github-apps/<alias>/."
+  type        = map(list(string))
+  default     = {}
+}
+
 # ── Operator-owned infrastructure knobs ──────────────────────────────────────
 # Set these in workspaces/<name>.tfvars.
 

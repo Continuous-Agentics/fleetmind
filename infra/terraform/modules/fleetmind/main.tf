@@ -86,7 +86,8 @@ module "agent" {
   is_orchestrator = lookup(var.agent_orchestrators, each.key, false)
   gateway_port    = 18789
 
-  model_providers = lookup(var.agent_providers, each.key, [])
+  model_providers    = lookup(var.agent_providers, each.key, [])
+  github_app_aliases = lookup(var.agent_github_app_aliases, each.key, [])
 
   rollout_trigger = var.agent_rollout_trigger
 }
