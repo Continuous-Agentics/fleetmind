@@ -16,13 +16,12 @@ The subscriber emits one JSON line per delegation event (see [references/receivi
 
 **Step 4 (post in Slack) must land before any task work** - before reading files, running `gh`, or doing any LLM-visible reasoning about the work. The Slack post is how the human knows you're alive; without it, all activity is invisible until you ship. Steps in order:
 
-1. Write to `memory/task-queue.md` under `## In Progress` (crash recovery).
-2. Confirm DDB auto-ack (`status === "accepted"`).
-3. `fleetmind task get --task-id <task_id> --json` for `project` and `task_s3_key`.
-4. **Post the picked-up announcement in YOUR home channel** (not the PM's delegation thread) - the message the human is waiting for. Store the thread `ts` in `memory/task-queue.md`.
-5. _(Optional)_ Read prior task narratives for context.
-6. Do the work silently (see Voice Discipline).
-7. When done or blocked: write the narrative to S3, update DDB, then post in the requestor's thread.
+1. Confirm DDB auto-ack (`status === "accepted"`).
+2. `fleetmind task get --task-id <task_id> --json` for `project` and `task_s3_key`.
+3. **Post the picked-up announcement in YOUR home channel** (not the PM's delegation thread) - the message the human is waiting for. Include `TASK#<task_id>` so the thread is recoverable by search.
+4. _(Optional)_ Read prior task narratives for context.
+5. Do the work silently (see Voice Discipline).
+6. When done or blocked: write the narrative to S3, update DDB, then post in the requestor's thread.
 
 Full steps, exact announcement template, and the home-channel-vs-PM-channel distinction: [references/receiving-delegation.md](references/receiving-delegation.md).
 
@@ -87,9 +86,12 @@ Any non-trivial work done outside a formal delegation (touches a repo, touches i
 
 **Inline (no ACP):** single-file edit, 1-2 tool calls, mostly mechanical. **Fork ACP session:** 3+ files, iterative work, test-driven loops, large refactors.
 
-## Update task-queue.md
+## Recovery and visibility
 
-On receipt: add to `## In Progress` before starting any work. Update `thread_ts` once the Slack thread opens. On completion/blocked: move to `## Recently Shipped` or `## Blocked` with an outcome note.
+The DynamoDB task ledger is the only task-state source of truth. On receipt,
+confirm the accepted record; on completion or blocking, update its lifecycle
+through `fleetmind task`. Include `TASK#<task_id>` in the home-channel message
+so a restarted worker can recover the human-facing thread through Slack search.
 
 ```
 ## In Progress

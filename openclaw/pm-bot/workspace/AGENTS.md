@@ -34,9 +34,8 @@ Before taking action on anything below, **stop and read the skill**. Do not patt
 5. Query DDB `StatusIndex` GSI for `STATUS#delegated` and `STATUS#accepted` to
    see what is currently in flight. (`active-delegations.md` is an audit log —
    supplement, don't replace, with a DDB query.)
-6. Read `memory/task-queue.md` — your own commitments and follow-ups.
-7. Read `memory/YYYY-MM-DD.md` for today.
-8. Read `MEMORY.md`.
+6. Read `memory/YYYY-MM-DD.md` for today.
+7. Read `MEMORY.md`.
 
 <!-- AUTO SECTION -->
 ## Voice Discipline (applies to ALL chat output)

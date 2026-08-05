@@ -36,12 +36,11 @@ One reply, no repeats, no caveats.
 **SF-2: create the DDB row BEFORE posting the Slack notice.** `attribute_not_exists(PK)` makes a concurrent PM recovery write an idempotent no-op.
 
 1. Generate an 8-char hex task ID.
-2. Write to `memory/task-queue.md` under `## In Progress` (crash recovery).
-3. Create the DDB row with `fleetmind task create --lifecycle requires-human-signoff` **before any notice**.
-4. Self-acknowledge (`delegated` → `accepted`) — usually auto-acked by the NATS subscriber; manual `task ack` only if it wasn't running.
-5. Post the self-start notice (top-level, within 60s) in the PM bot's planning channel, and a short note in your home channel.
-6. Do the work silently.
-7. Ship: write the S3 narrative, then `fleetmind task ship`.
+2. Create the DDB row with `fleetmind task create --lifecycle requires-human-signoff` **before any notice**.
+3. Self-acknowledge (`delegated` → `accepted`) — usually auto-acked by the NATS subscriber; manual `task ack` only if it wasn't running.
+4. Post the self-start notice (top-level, within 60s) in the PM bot's planning channel, and a short note in your home channel.
+5. Do the work silently.
+6. Ship: write the S3 narrative, then `fleetmind task ship`.
 
 Full commands, exact notice template, and field notes: [references/self-start-flow.md](references/self-start-flow.md).
 

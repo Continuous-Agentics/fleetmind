@@ -29,7 +29,7 @@ task_id: <task_id>
 NARRATIVE
 ```
 
-If `fleetmind narrative put` exits with code 2 (S3 failure, local fallback): write the local fallback path to `memory/task-queue.md`, surface it as a follow-up, and do NOT proceed to the DDB update yet.
+If `fleetmind narrative put` exits with code 2 (S3 failure, local fallback): surface the fallback path as a follow-up, preserve it locally until the S3 write can be retried, and do NOT proceed to the DDB update yet.
 
 ## Block narrative
 

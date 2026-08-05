@@ -40,7 +40,7 @@ Before taking action on anything below, **stop and read the skill**. Do not patt
 2. Read `TOOLS.md` — your environment.
 3. Read `COMPANY.md` — fleet-wide org context (skip if absent).
 4. Read `memory/session-state.md` — recover from compaction if needed.
-5. Read `memory/task-queue.md` — your own active work.
+5. Query the DynamoDB task ledger for work assigned to you.
 6. Read `memory/YYYY-MM-DD.md` for today.
 7. Read `MEMORY.md`.
 
