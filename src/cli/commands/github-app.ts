@@ -39,6 +39,8 @@ export interface SsmSendable {
 export interface GithubAppStoreOptions {
   fleet: string;
   agent: string;
+  /** `project` preserves the legacy namespace; named aliases use github-apps/<alias>. */
+  app?: string;
   appId: string;
   installationId: string;
   pemFile: string;
@@ -62,6 +64,17 @@ export interface GithubAppStoreResult {
 
 // ── Shared SSM write ──────────────────────────────────────────────────────────
 
+const GITHUB_APP_ALIAS = /^[a-z][a-z0-9-]{0,62}$/;
+
+/** Resolve a credential namespace without changing the legacy project-App path. */
+export function githubAppNamespace(fleet: string, agent: string, app = "project"): string {
+  if (!GITHUB_APP_ALIAS.test(app)) {
+    throw new Error(`Invalid GitHub App alias: ${app}`);
+  }
+  const base = `/fleetmind/${fleet}/agents/${agent}`;
+  return app === "project" ? `${base}/github-app` : `${base}/github-apps/${app}`;
+}
+
 /**
  * Write GitHub App credentials to AWS SSM Parameter Store.
  *
@@ -72,6 +85,8 @@ export interface GithubAppStoreResult {
 export interface WriteCredentialsOptions {
   fleet: string;
   agent: string;
+  /** `project` preserves the legacy namespace; named aliases use github-apps/<alias>. */
+  app?: string;
   appId: string;
   installationId: string;
   pemContents: string;
@@ -90,7 +105,7 @@ export async function writeCredentialsToSsm(
   }
 
   const pemDigest = crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
-  const namespace = `/fleetmind/${options.fleet}/agents/${options.agent}/github-app`;
+  const namespace = githubAppNamespace(options.fleet, options.agent, options.app);
 
   const params: GithubAppStoreResult["params"] = [
     { name: `${namespace}/app-id`, type: ParameterType.STRING, valueHint: options.appId, written: false },
@@ -151,6 +166,7 @@ export async function storeGithubApp(options: GithubAppStoreOptions): Promise<Gi
   return writeCredentialsToSsm({
     fleet: options.fleet,
     agent: options.agent,
+    app: options.app,
     appId: options.appId,
     installationId: options.installationId,
     pemContents,
@@ -506,6 +522,7 @@ export function registerGithubApp(program: Command): void {
     .description("Push GitHub App credentials (app-id, installation-id, pem) into AWS SSM Parameter Store")
     .requiredOption("--fleet <name>", "Fleet name (used as SSM path namespace)")
     .requiredOption("--agent <id>", "Agent ID within the fleet")
+    .option("--app <alias>", "GitHub App alias (default: project)", "project")
     .requiredOption("--app-id <id>", "GitHub App ID")
     .requiredOption("--installation-id <id>", "GitHub App Installation ID")
     .requiredOption("--pem-file <path>", "Path to the .pem private key file")
@@ -524,6 +541,7 @@ Examples:
         const result = await storeGithubApp({
           fleet: opts.fleet as string,
           agent: opts.agent as string,
+          app: opts.app as string,
           appId: opts.appId as string,
           installationId: opts.installationId as string,
           pemFile: opts.pemFile as string,

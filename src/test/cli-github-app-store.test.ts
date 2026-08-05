@@ -21,6 +21,7 @@ import { test, describe, beforeEach, afterEach } from "node:test";
 
 import {
   storeGithubApp,
+  githubAppNamespace,
   type GithubAppStoreOptions,
   type SsmSendable,
 } from "../cli/commands/github-app.js";
@@ -70,6 +71,20 @@ afterEach(() => {
 });
 
 // ── Live (mocked SSM via DI) ──────────────────────────────────────────────────
+
+describe("GitHub App credential namespaces", () => {
+  test("keeps project credentials in the legacy namespace", () => {
+    assert.equal(githubAppNamespace("myfleet", "forge"), "/fleetmind/myfleet/agents/forge/github-app");
+  });
+
+  test("uses a separate namespace for a named alias", () => {
+    assert.equal(githubAppNamespace("myfleet", "forge", "secondary"), "/fleetmind/myfleet/agents/forge/github-apps/secondary");
+  });
+
+  test("rejects unsafe aliases", () => {
+    assert.throws(() => githubAppNamespace("myfleet", "forge", "../other"));
+  });
+});
 
 describe("storeGithubApp — live (injected mock SSM)", () => {
   test("writes three SSM params with correct names, types, and values", async () => {
