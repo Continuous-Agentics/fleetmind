@@ -123,6 +123,8 @@ resource "aws_iam_role_policy" "dynamodb" {
 }
 
 data "aws_iam_policy_document" "github_app" {
+  count = length(var.github_apps) > 0 ? 1 : 0
+
   statement {
     sid     = "GitHubAppSSMRead"
     effect  = "Allow"
@@ -147,10 +149,12 @@ data "aws_iam_policy_document" "github_app" {
 }
 
 resource "aws_iam_role_policy" "github_app" {
+  count = length(var.github_apps) > 0 ? 1 : 0
+
   name = "${var.fleet_name}-${var.name}-github-app"
   role = aws_iam_role.agent.id
 
-  policy = data.aws_iam_policy_document.github_app.json
+  policy = data.aws_iam_policy_document.github_app[0].json
 }
 
 resource "aws_iam_instance_profile" "agent" {
