@@ -219,7 +219,7 @@ export async function writeCredentialsToSsm(
     throw new Error(
       `Failed to write GitHub App credentials to ${namespace} after ${written}/3 parameters: ${detail}. ` +
       `The namespace may be incomplete. Inspect it with 'fleetmind github-app status --fleet ${options.fleet} --agent ${options.agent} --app ${options.app ?? "project"}', ` +
-      `then repair it by re-running 'fleetmind github-app import --fleet ${options.fleet} --agent ${options.agent} --app ${options.app ?? "project"} ... --force'.`,
+      `then repair it by re-running 'fleetmind github-app import --fleet ${options.fleet} --agent ${options.agent} --app ${options.app ?? "project"} ... --replace'.`,
     );
   }
 

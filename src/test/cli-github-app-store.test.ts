@@ -169,7 +169,7 @@ describe("storeGithubApp — partial-write recovery", () => {
         fleet: "myfleet", agent: "forge", app: "ggettert", appId: "123", installationId: "456",
         pemFile: pemPath, region: "us-west-2", dryRun: false, overwrite: false, ssmClient: client,
       }),
-      /after 1\/3 parameters.*status.*import.*--force/is,
+      /after 1\/3 parameters.*status.*import.*--replace/is,
     );
   });
 });
