@@ -1438,6 +1438,41 @@ describe("GitHub Apps skip path (every agent opted out with github_access: false
   });
 });
 
+describe("GitHub Apps with only named declarations", () => {
+  test("does not prompt for a project owner", async () => {
+    const fleetName = "named-only-fleet";
+    const yaml = makeFleetYaml({
+      fleetName,
+      githubApp: false,
+      agents: [{ id: "client-bot", name: "Client Bot", providers: ["anthropic"] }],
+    }).replace(
+      "      github_access: false",
+      "      github_apps:\n        client:\n          owner: acme\n          org: true",
+    );
+    const setup = makeTempFleet(yaml);
+    const ssmMock = makeMockSSM([
+      `/fleetmind/${fleetName}/agents/client-bot/github-apps/client/app-id`,
+    ]);
+    const smMock = makeMockSM({
+      [`${fleetName}/agents/client-bot/slack`]: JSON.stringify({ SLACK_BOT_TOKEN: "xoxb-client" }),
+      [`${fleetName}/agents/client-bot/providers/anthropic`]: JSON.stringify({ ANTHROPIC_API_KEY: "sk-client" }),
+    });
+    const mock = makeMockPrompter(
+      [true, false, true, false, true, false, false, true],
+      [],
+    );
+
+    await runOnboard(setup.fleetFile, "us-west-2", {}, makeDeps(mock.prompter, ssmMock.ssm, smMock.sm));
+
+    assert.equal(
+      mock.calls.filter((call) => call.type === "prompt" && call.question.includes("GitHub owner")).length,
+      0,
+      "named-only declarations must not prompt for the project owner",
+    );
+    cleanupTempDir(setup.tmpDir);
+  });
+});
+
 describe("createDefaultDeps", () => {
   test("factory returns an object satisfying the OnboardDeps interface shape", async () => {
     const { createDefaultDeps } = await import("../cli/commands/onboard.js");

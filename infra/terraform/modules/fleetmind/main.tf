@@ -87,6 +87,7 @@ module "agent" {
   gateway_port    = 18789
 
   model_providers = lookup(var.agent_providers, each.key, [])
+  github_apps     = lookup(var.agent_github_apps, each.key, [])
 
   rollout_trigger = var.agent_rollout_trigger
 }

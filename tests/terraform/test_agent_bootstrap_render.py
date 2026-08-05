@@ -31,6 +31,7 @@ def render() -> str:
         "is_orchestrator": False,
         "gateway_port": 18789,
         "agent_providers": "anthropic",
+        "github_apps_json": '["project"]',
     }
     hcl_map = ", ".join(f"{key} = {json.dumps(value)}" for key, value in values.items())
     expression = f"templatefile({json.dumps(str(TEMPLATE))}, {{ {hcl_map} }})\n"
@@ -108,6 +109,8 @@ def main() -> int:
         "runuser -u \"$OPENCLAW_USER\" -- env HOME=\"$OPENCLAW_HOME\" PATH=\"$RUNTIME_PATH\" openclaw plugins install @openclaw/slack --force",
         # No per-agent subdirectory: the workspace *is* $OPENCLAW_HOME/.openclaw/workspace.
         'WORKSPACE_DIR="$OPENCLAW_HOME/.openclaw/workspace"',
+        "APP_TYPE=\"project\"",
+        "GitHub App declaration allowlist is missing: $ALLOWLIST",
     ):
         require(rendered, expected)
 

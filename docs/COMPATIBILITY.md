@@ -56,3 +56,15 @@ Use compatible versions across all three. Version drift usually shows up as miss
 ## Future Runtime Check
 
 The next hardening step is a render-time compatibility check that reads the consumer repo's `main.tf`, extracts the `terraform-aws-fleetmind?ref=...` pin, and warns or errors when it is outside the known-good range for the installed FleetMind CLI.
+
+## GitHub App lifecycle (#290)
+
+GitHub access is explicit per agent. Declare every usable App under `github_apps`; use `project: {}` for the legacy project namespace and named Apps with both `owner` and `org`. `github_app` remains only a permissions/event defaults object. Run `fleetmind render` once to migrate legacy `github_access` settings; `render --check` reports a required migration without writing.
+
+Use `fleetmind github-app status`, `setup`, and `import` with an explicit `--app` (including `--app project`). Credentials are stored only in SSM: Terraform receives App names solely to derive exact read IAM paths and never receives PEMs, App IDs, or installation IDs. Removing a declaration does not delete its GitHub App or SSM parameters.
+
+### Existing host helper rollout
+
+Discovery for this repository found that the supported deployment transports push workspace/configuration only; they do not provide an authenticated, auditable arbitrary-root-command transport to every EC2 target. Terraform explicitly ignores `user_data_base64` changes for existing instances, and its rollout trigger is replacement-oriented. Therefore #290 **does not implement an existing-host helper installer**: using replacement, SSH, or an ad-hoc SSM Run Command path would violate the non-destructive rollout contract.
+
+New instances receive `/usr/local/bin/gh-app-token` plus the non-secret `/etc/fleetmind/github-apps.json` allowlist. The helper defaults to `project` when `--app` is omitted, rejects undeclared names before SSM lookup, and the rendered IAM policy limits SSM reads to that agent's declared namespaces. A future rollout requires a reviewed existing-host transport with preview, explicit confirmation, atomic install/rollback, audit trail, and per-host verification.

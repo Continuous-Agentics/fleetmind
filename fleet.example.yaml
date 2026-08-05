@@ -153,6 +153,12 @@ agents:
       # the `model:` string was removed; this list must be explicit.
       providers:
         - anthropic
+      # Every usable GitHub App is explicit. `project` retains its legacy SSM path.
+      github_apps:
+        project: {}
+        client-prod:
+          owner: acme-corp
+          org: true
       # Optional: point specific providers at specific credentials. Omit to use
       # the ${ANTHROPIC_API_KEY} / ${OPENAI_API_KEY} env-var convention.
       # api_keys:

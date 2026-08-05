@@ -20,11 +20,16 @@ import path from "node:path";
 import { test, describe, beforeEach, afterEach } from "node:test";
 
 import {
+  createGithubApp,
   storeGithubApp,
+  githubAppNamespace,
+  inspectGithubAppNamespace,
+  matchingAppInstallation,
+  githubAppStatusExitCode,
   type GithubAppStoreOptions,
   type SsmSendable,
 } from "../cli/commands/github-app.js";
-import { PutParameterCommand } from "@aws-sdk/client-ssm";
+import { DescribeParametersCommand, PutParameterCommand } from "@aws-sdk/client-ssm";
 
 // ── Mock SSM client factory ───────────────────────────────────────────────────
 
@@ -70,6 +75,104 @@ afterEach(() => {
 });
 
 // ── Live (mocked SSM via DI) ──────────────────────────────────────────────────
+
+describe("GitHub App credential namespaces", () => {
+  test("keeps project credentials in the legacy namespace", () => {
+    assert.equal(githubAppNamespace("myfleet", "forge"), "/fleetmind/myfleet/agents/forge/github-app");
+  });
+
+  test("uses a separate namespace for a named alias", () => {
+    assert.equal(githubAppNamespace("myfleet", "forge", "secondary"), "/fleetmind/myfleet/agents/forge/github-apps/secondary");
+  });
+
+  test("rejects unsafe aliases", () => {
+    assert.throws(() => githubAppNamespace("myfleet", "forge", "../other"));
+  });
+});
+
+describe("GitHub App creation preflight", () => {
+  test("reports a complete namespace from injected SSM", async () => {
+    const namespace = githubAppNamespace("myfleet", "forge");
+    const client: SsmSendable = {
+      async send(command) {
+        assert.ok(command instanceof DescribeParametersCommand);
+        return { Parameters: ["app-id", "installation-id", "pem"].map((suffix) => ({ Name: `${namespace}/${suffix}` })) };
+      },
+    };
+
+    const result = await inspectGithubAppNamespace({ fleet: "myfleet", agent: "forge", region: "us-west-2", ssmClient: client });
+    assert.equal(result.status, "ready");
+  });
+
+  test("refuses a ready namespace before opening the manifest flow", async () => {
+    const namespace = githubAppNamespace("myfleet", "forge");
+    let calls = 0;
+    const client: SsmSendable = {
+      async send() {
+        calls++;
+        return { Parameters: ["app-id", "installation-id", "pem"].map((suffix) => ({ Name: `${namespace}/${suffix}` })) };
+      },
+    };
+
+    await assert.rejects(
+      () => createGithubApp({
+        fleet: "myfleet", agent: "forge", owner: "acme", org: true,
+        callbackPort: 0, region: "us-west-2", dryRun: false, overwrite: false, ssmClient: client,
+      }),
+      /already exist.*--force/i,
+    );
+    assert.equal(calls, 1, "only the namespace preflight may run");
+  });
+});
+
+describe("GitHub App installation owner matching", () => {
+  const installations = [
+    { id: 1, account: { login: "wrong-owner", type: "Organization" as const }, created_at: "2026-01-02T00:00:00Z" },
+    { id: 2, account: { login: "Acme", type: "Organization" as const }, created_at: "2026-01-01T00:00:00Z" },
+    { id: 3, account: { login: "acme", type: "User" as const }, created_at: "2026-01-03T00:00:00Z" },
+  ];
+
+  test("accepts the selected owner and account type", () => {
+    assert.equal(matchingAppInstallation(installations, "acme", true)?.id, 2);
+  });
+
+  test("rejects an installation with a matching login but wrong account type", () => {
+    assert.equal(matchingAppInstallation(installations, "acme", false)?.id, 3);
+    assert.equal(matchingAppInstallation(installations.slice(0, 2), "acme", false), undefined);
+  });
+});
+
+describe("GitHub App status exit semantics", () => {
+  test("returns success only when every selected namespace is ready", () => {
+    assert.equal(githubAppStatusExitCode(["ready", "ready"]), 0);
+    assert.equal(githubAppStatusExitCode(["ready", "missing"]), 2);
+    assert.equal(githubAppStatusExitCode(["incomplete"]), 2);
+    assert.equal(githubAppStatusExitCode(["unreadable"]), 2);
+  });
+});
+
+describe("storeGithubApp — partial-write recovery", () => {
+  test("reports the repair command after a partial SSM write", async () => {
+    const pemPath = path.join(tmpDir, "partial.pem");
+    fs.writeFileSync(pemPath, "-----BEGIN PRIVATE KEY-----\\npartial\\n-----END PRIVATE KEY-----\\n");
+    let calls = 0;
+    const client: SsmSendable = {
+      async send() {
+        calls++;
+        if (calls === 2) throw new Error("AccessDenied");
+        return {};
+      },
+    };
+
+    await assert.rejects(
+      () => storeGithubApp({
+        fleet: "myfleet", agent: "forge", app: "ggettert", appId: "123", installationId: "456",
+        pemFile: pemPath, region: "us-west-2", dryRun: false, overwrite: false, ssmClient: client,
+      }),
+      /after 1\/3 parameters.*status.*import.*--replace/is,
+    );
+  });
+});
 
 describe("storeGithubApp — live (injected mock SSM)", () => {
   test("writes three SSM params with correct names, types, and values", async () => {

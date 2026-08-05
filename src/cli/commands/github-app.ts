@@ -18,27 +18,30 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
 import http from "node:http";
+import readline from "node:readline/promises";
 import { URL } from "node:url";
 import { Command } from "commander";
 import chalk from "chalk";
-import { SSMClient, PutParameterCommand, ParameterType } from "@aws-sdk/client-ssm";
+import { SSMClient, PutParameterCommand, DescribeParametersCommand, ParameterType } from "@aws-sdk/client-ssm";
 import { log } from "../../utils/log.js";
 import { buildManifest, type ManifestOptions } from "../../runtime/github-app-manifest.js";
 import { mintAppJwt } from "../../runtime/github-app-jwt.js";
 import { resolveGitHubAppConfig } from "../../runtime/github-app-permissions.js";
 import { loadFleet } from "../../config/loader.js";
-import type { GitHubAppConfig } from "../../config/schema.js";
+import type { GitHubAppConfig, GitHubAppDefinition } from "../../config/schema.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 /** Minimal interface for the SSM send method — allows injection in tests. */
 export interface SsmSendable {
-  send(command: PutParameterCommand): Promise<unknown>;
+  send(command: PutParameterCommand | DescribeParametersCommand): Promise<unknown>;
 }
 
 export interface GithubAppStoreOptions {
   fleet: string;
   agent: string;
+  /** `project` preserves the legacy namespace; named aliases use github-apps/<alias>. */
+  app?: string;
   appId: string;
   installationId: string;
   pemFile: string;
@@ -60,7 +63,87 @@ export interface GithubAppStoreResult {
   }>;
 }
 
+export type GithubAppNamespaceStatus = "missing" | "incomplete" | "ready" | "unreadable";
+
+/** Exit status for a credential inventory: 0 only when every selected App is ready. */
+export function githubAppStatusExitCode(statuses: GithubAppNamespaceStatus[]): number {
+  return statuses.every((status) => status === "ready") ? 0 : 2;
+}
+
+/** Inspect a credential namespace without reading parameter values. */
+export async function inspectGithubAppNamespace(options: {
+  fleet: string;
+  agent: string;
+  app?: string;
+  region: string;
+  ssmClient?: SsmSendable;
+}): Promise<{ namespace: string; status: GithubAppNamespaceStatus; error?: string }> {
+  const namespace = githubAppNamespace(options.fleet, options.agent, options.app);
+  const expected = [`${namespace}/app-id`, `${namespace}/installation-id`, `${namespace}/pem`];
+  const client: SsmSendable = options.ssmClient ?? new SSMClient({ region: options.region });
+  try {
+    const response = await client.send(new DescribeParametersCommand({
+      ParameterFilters: [{ Key: "Name", Option: "Equals", Values: expected }],
+    })) as { Parameters?: Array<{ Name?: string }> };
+    const found = new Set((response.Parameters ?? []).map((parameter) => parameter.Name));
+    const count = expected.filter((name) => found.has(name)).length;
+    return { namespace, status: count === 3 ? "ready" : count === 0 ? "missing" : "incomplete" };
+  } catch (error) {
+    return { namespace, status: "unreadable", error: error instanceof Error ? error.name : "UnknownError" };
+  }
+}
+
 // ── Shared SSM write ──────────────────────────────────────────────────────────
+
+const GITHUB_APP_ALIAS = /^[a-z][a-z0-9-]{0,62}$/;
+
+/** Resolve a credential namespace without changing the legacy project-App path. */
+export function githubAppNamespace(fleet: string, agent: string, app = "project"): string {
+  if (!GITHUB_APP_ALIAS.test(app)) {
+    throw new Error(`Invalid GitHub App alias: ${app}`);
+  }
+  const base = `/fleetmind/${fleet}/agents/${agent}`;
+  return app === "project" ? `${base}/github-app` : `${base}/github-apps/${app}`;
+}
+
+/** Resolve an explicitly declared agent GitHub App from fleet.yaml. The
+ * render migration makes `project` explicit before credential operations. */
+export function resolveAgentGitHubApp(
+  configPath: string,
+  fleetName: string,
+  agentId: string,
+  app = "project",
+): { role: string; githubAppConfig?: GitHubAppConfig; definition?: GitHubAppDefinition } {
+  const fleet = loadFleet(configPath);
+  if (fleet.fleet.name !== fleetName) {
+    throw new Error(
+      `Fleet name mismatch: --fleet '${fleetName}' does not match ${configPath} (${fleet.fleet.name})`,
+    );
+  }
+
+  const agent = fleet.agents.list.find((candidate) => candidate.id === agentId);
+  if (!agent) {
+    throw new Error(`Agent '${agentId}' was not found in ${configPath}`);
+  }
+
+  const declaration = agent.github_apps?.[app];
+  if (!declaration) {
+    throw new Error(
+      `GitHub App '${app}' is not declared for agent '${agentId}' in ${configPath}. ` +
+        `Run 'fleetmind render' to migrate legacy GitHub access, or add it under github_apps before setup or import.`,
+    );
+  }
+  const definition = app === "project" ? undefined : declaration as GitHubAppDefinition;
+
+  const defaultConfig = agent.github_app ?? { permissions: {}, events: [] };
+  const githubAppConfig = definition
+    ? {
+        permissions: { ...defaultConfig.permissions, ...definition.permissions },
+        events: definition.events ?? defaultConfig.events,
+      }
+    : agent.github_app;
+  return { role: agent.role, githubAppConfig, definition };
+}
 
 /**
  * Write GitHub App credentials to AWS SSM Parameter Store.
@@ -72,6 +155,8 @@ export interface GithubAppStoreResult {
 export interface WriteCredentialsOptions {
   fleet: string;
   agent: string;
+  /** `project` preserves the legacy namespace; named aliases use github-apps/<alias>. */
+  app?: string;
   appId: string;
   installationId: string;
   pemContents: string;
@@ -90,7 +175,7 @@ export async function writeCredentialsToSsm(
   }
 
   const pemDigest = crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
-  const namespace = `/fleetmind/${options.fleet}/agents/${options.agent}/github-app`;
+  const namespace = githubAppNamespace(options.fleet, options.agent, options.app);
 
   const params: GithubAppStoreResult["params"] = [
     { name: `${namespace}/app-id`, type: ParameterType.STRING, valueHint: options.appId, written: false },
@@ -116,16 +201,26 @@ export async function writeCredentialsToSsm(
   }
 
   const client: SsmSendable = options.ssmClient ?? new SSMClient({ region: options.region });
-  for (const p of params) {
-    await client.send(
-      new PutParameterCommand({
-        Name: p.name,
-        Value: values[p.name]!,
-        Type: p.type,
-        Overwrite: options.overwrite,
-      }),
+  try {
+    for (const p of params) {
+      await client.send(
+        new PutParameterCommand({
+          Name: p.name,
+          Value: values[p.name]!,
+          Type: p.type,
+          Overwrite: options.overwrite,
+        }),
+      );
+      p.written = true;
+    }
+  } catch (error) {
+    const written = params.filter((parameter) => parameter.written).length;
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to write GitHub App credentials to ${namespace} after ${written}/3 parameters: ${detail}. ` +
+      `The namespace may be incomplete. Inspect it with 'fleetmind github-app status --fleet ${options.fleet} --agent ${options.agent} --app ${options.app ?? "project"}', ` +
+      `then repair it by re-running 'fleetmind github-app import --fleet ${options.fleet} --agent ${options.agent} --app ${options.app ?? "project"} ... --replace'.`,
     );
-    p.written = true;
   }
 
   return { namespace, region: options.region, params };
@@ -151,6 +246,7 @@ export async function storeGithubApp(options: GithubAppStoreOptions): Promise<Gi
   return writeCredentialsToSsm({
     fleet: options.fleet,
     agent: options.agent,
+    app: options.app,
     appId: options.appId,
     installationId: options.installationId,
     pemContents,
@@ -166,6 +262,8 @@ export async function storeGithubApp(options: GithubAppStoreOptions): Promise<Gi
 export interface GithubAppCreateOptions {
   fleet: string;
   agent: string;
+  /** `project` preserves the legacy namespace; named aliases use github-apps/<alias>. */
+  app?: string;
   /** Agent's role (pm | worker | backend-worker | frontend-worker). Drives
    *  per-bot-type permission defaults from
    *  openclaw/<bot-type>/github-app-permissions.yaml. Falls back to 'worker'
@@ -222,6 +320,35 @@ export async function createGithubApp(options: GithubAppCreateOptions): Promise<
   }
   const owner = options.owner;
 
+  const app = options.app ?? "project";
+  // Validate and inspect the target namespace before a manifest can create an
+  // App. A later SSM conflict would otherwise leave an orphaned GitHub App.
+  const namespace = githubAppNamespace(options.fleet, options.agent, app);
+  const namespaceState = await inspectGithubAppNamespace({
+    fleet: options.fleet,
+    agent: options.agent,
+    app,
+    region: options.region,
+    ssmClient: options.ssmClient,
+  });
+  if (namespaceState.status === "ready" && !options.overwrite) {
+    throw new Error(
+      `GitHub App credentials already exist at ${namespace}. Refusing to create another App without --force. ` +
+      "Use 'fleetmind github-app status' to inspect them, or use --force to intentionally replace them.",
+    );
+  }
+  if (namespaceState.status === "incomplete" || namespaceState.status === "unreadable") {
+    const detail = namespaceState.error ? ` (${namespaceState.error})` : "";
+    throw new Error(
+      `GitHub App credential namespace ${namespace} is ${namespaceState.status}${detail}; refusing to open the GitHub manifest flow. ` +
+      "Repair or import the existing credentials with 'fleetmind github-app import', then verify with 'fleetmind github-app status'.",
+    );
+  }
+  if (options.dryRun) {
+    console.log(chalk.dim(`\n[dry-run] Namespace ${namespace} is ${namespaceState.status}; no GitHub App or SSM parameters will be created.\n`));
+    return { namespace, region: options.region, params: [] };
+  }
+
   // ─── Pick callback port + state nonce ──────────────────────────────────────
   const callbackPort = options.callbackPort > 0 ? options.callbackPort : await findFreePort(8765);
   const state = crypto.randomBytes(16).toString("hex");
@@ -238,7 +365,7 @@ export async function createGithubApp(options: GithubAppCreateOptions): Promise<
   );
 
   const manifestOpts: ManifestOptions = {
-    name: options.appName ?? `${options.fleet}-${options.agent}`,
+    name: options.appName ?? (app === "project" ? `${options.fleet}-${options.agent}` : `${options.fleet}-${options.agent}-${app}`),
     redirectUrl,
     description: `Fleetmind agent: ${options.agent} (fleet: ${options.fleet})`,
     homepageUrl: options.homepageUrl,
@@ -295,6 +422,8 @@ export async function createGithubApp(options: GithubAppCreateOptions): Promise<
     appId: conversion.id,
     pem: conversion.pem,
     timeoutMs: options.installPollTimeoutMs ?? 5 * 60 * 1000,
+    owner,
+    org: options.org,
   });
   log.ok(`Installation detected: installation_id=${installationId}`);
 
@@ -304,6 +433,7 @@ export async function createGithubApp(options: GithubAppCreateOptions): Promise<
   const result = await writeCredentialsToSsm({
     fleet: options.fleet,
     agent: options.agent,
+    app,
     appId: String(conversion.id),
     installationId: String(installationId),
     pemContents: conversion.pem,
@@ -419,9 +549,25 @@ interface PollOptions {
   appId: number;
   pem: string;
   timeoutMs: number;
+  owner: string;
+  org: boolean;
 }
 
-async function pollForAppInstallation(opts: PollOptions): Promise<number> {
+/** Return the newest installation for the selected owner, never an arbitrary account. */
+export function matchingAppInstallation(
+  installations: AppInstallation[],
+  owner: string,
+  org: boolean,
+): AppInstallation | undefined {
+  const expectedType = org ? "Organization" : "User";
+  return [...installations]
+    .filter((installation) =>
+      installation.account.type === expectedType &&
+      installation.account.login.toLowerCase() === owner.toLowerCase())
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+}
+
+export async function pollForAppInstallation(opts: PollOptions): Promise<number> {
   const deadline = Date.now() + opts.timeoutMs;
   const jwt = mintAppJwt(opts.pem, String(opts.appId));
   let lastStatus = 0;
@@ -437,13 +583,11 @@ async function pollForAppInstallation(opts: PollOptions): Promise<number> {
     lastStatus = resp.status;
     if (resp.ok) {
       const installations = (await resp.json()) as AppInstallation[];
-      if (installations.length > 0) {
-        // App is freshly-created and should have at most 1 installation.
-        // If there are multiple, pick the most recent.
-        const sorted = [...installations].sort((a, b) => b.created_at.localeCompare(a.created_at));
-        return sorted[0]!.id;
+      const installation = matchingAppInstallation(installations, opts.owner, opts.org);
+      if (installation) {
+        return installation.id;
       }
-      // App created but not yet installed — wait + retry
+      // App created but not yet installed under the selected owner — wait + retry.
       await new Promise((r) => setTimeout(r, 3000));
       continue;
     }
@@ -455,7 +599,7 @@ async function pollForAppInstallation(opts: PollOptions): Promise<number> {
   }
   throw new Error(
     `Timed out after ${opts.timeoutMs / 1000}s waiting for the App to be installed.\n` +
-      `Last GitHub response code: ${lastStatus}. Install via the URL above and re-run.`,
+      `Last GitHub response code: ${lastStatus}. Install it under ${opts.owner} (${opts.org ? "Organization" : "User"}) via the URL above and re-run.`,
   );
 }
 
@@ -494,6 +638,19 @@ export function printStoreResult(result: GithubAppStoreResult, dryRun: boolean):
   console.log();
 }
 
+async function confirmCredentialReplacement(action: string): Promise<void> {
+  if (!process.stdin.isTTY) {
+    throw new Error(`${action} requires an interactive terminal confirmation; refusing to replace credentials non-interactively.`);
+  }
+  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await prompt.question(`${action}. Type 'replace' to continue: `);
+    if (answer.trim() !== "replace") throw new Error("Credential replacement cancelled.");
+  } finally {
+    prompt.close();
+  }
+}
+
 // ── Commander registration ────────────────────────────────────────────────────
 
 export function registerGithubApp(program: Command): void {
@@ -502,16 +659,61 @@ export function registerGithubApp(program: Command): void {
     .description("Manage GitHub App credentials for fleet agents");
 
   githubApp
-    .command("store")
-    .description("Push GitHub App credentials (app-id, installation-id, pem) into AWS SSM Parameter Store")
+    .command("status")
+    .description("Report declared GitHub App credential namespace status without reading values")
+    .option("-c, --config <file>", "fleet.yaml path", "fleet.yaml")
+    .option("--fleet <name>", "Optional fleet-name consistency assertion")
+    .option("--agent <id>", "Limit to one declared agent")
+    .option("--app <name>", "Limit to one declared App")
+    .option("--region <region>", "AWS region", "us-west-2")
+    .option("--json", "Emit JSON", false)
+    .action(async (opts) => {
+      try {
+        const fleet = loadFleet(opts.config as string);
+        if (opts.fleet && opts.fleet !== fleet.fleet.name) throw new Error(`Fleet name mismatch: --fleet '${opts.fleet}' does not match ${fleet.fleet.name}`);
+        const agents = opts.agent ? fleet.agents.list.filter((a) => a.id === opts.agent) : fleet.agents.list;
+        if (opts.agent && agents.length === 0) throw new Error(`Agent '${opts.agent}' was not found in ${opts.config}`);
+        const entries = agents.flatMap((agent) => Object.keys(agent.github_apps ?? {}).map((app) => ({ agent: agent.id, app })));
+        const filtered = opts.app ? entries.filter((entry) => entry.app === opts.app) : entries;
+        if (opts.app && filtered.length === 0) throw new Error(`GitHub App '${opts.app}' is not declared by the selected agent(s)`);
+        const client = new SSMClient({ region: opts.region as string });
+        const results: Array<{ agent: string; app: string; namespace: string; status: GithubAppNamespaceStatus; error?: string }> = await Promise.all(filtered.map(async (entry) => {
+          const namespace = githubAppNamespace(fleet.fleet.name, entry.agent, entry.app);
+          const expected = [`${namespace}/app-id`, `${namespace}/installation-id`, `${namespace}/pem`];
+          try {
+            const response = await client.send(new DescribeParametersCommand({
+              ParameterFilters: [{ Key: "Name", Option: "Equals", Values: expected }],
+            }));
+            const count = response.Parameters?.length ?? 0;
+            return { ...entry, namespace, status: count === 3 ? "ready" : count === 0 ? "missing" : "incomplete" };
+          } catch (error) {
+            const name = error instanceof Error ? error.name : "UnknownError";
+            return { ...entry, namespace, status: "unreadable", error: name };
+          }
+        }));
+        if (opts.json) console.log(JSON.stringify(results, null, 2));
+        else for (const result of results) console.log(`${result.agent}/${result.app}: ${result.status}  ${result.namespace}`);
+        process.exitCode = githubAppStatusExitCode(results.map((result) => result.status));
+      } catch (err) {
+        log.error(err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+      }
+    });
+
+  githubApp
+    .command("import")
+    .alias("store")
+    .description("Import GitHub App credentials into AWS SSM Parameter Store (legacy: store)")
     .requiredOption("--fleet <name>", "Fleet name (used as SSM path namespace)")
     .requiredOption("--agent <id>", "Agent ID within the fleet")
+    .requiredOption("--app <name>", "Declared GitHub App name (use --app project deliberately)")
+    .option("-c, --config <file>", "fleet.yaml path", "fleet.yaml")
     .requiredOption("--app-id <id>", "GitHub App ID")
     .requiredOption("--installation-id <id>", "GitHub App Installation ID")
     .requiredOption("--pem-file <path>", "Path to the .pem private key file")
     .option("--region <region>", "AWS region", "us-west-2")
     .option("--dry-run", "Print what would be written without calling SSM", false)
-    .option("--no-overwrite", "Fail if a parameter already exists (default: overwrite)")
+    .option("--replace", "Replace existing credentials after explicit operator confirmation", false)
     .addHelpText("after", `
 Examples:
   $ fleetmind github-app store \\
@@ -521,15 +723,18 @@ Examples:
 `)
     .action(async (opts) => {
       try {
+        resolveAgentGitHubApp(opts.config as string, opts.fleet as string, opts.agent as string, opts.app as string);
+        if (opts.replace && !opts.dryRun) await confirmCredentialReplacement("Replacing GitHub App credentials");
         const result = await storeGithubApp({
           fleet: opts.fleet as string,
           agent: opts.agent as string,
+          app: opts.app as string,
           appId: opts.appId as string,
           installationId: opts.installationId as string,
           pemFile: opts.pemFile as string,
           region: opts.region as string,
           dryRun: opts.dryRun as boolean,
-          overwrite: opts.overwrite as boolean,
+          overwrite: opts.replace as boolean,
         });
         printStoreResult(result, opts.dryRun as boolean);
       } catch (err: unknown) {
@@ -539,18 +744,20 @@ Examples:
     });
 
   githubApp
-    .command("create")
-    .description("Create a GitHub App via the manifest flow, then store its credentials in SSM")
+    .command("setup")
+    .alias("create")
+    .description("Set up a declared GitHub App via the manifest flow (legacy: create)")
     .requiredOption("--fleet <name>", "Fleet name (used as SSM path namespace)")
     .requiredOption("--agent <id>", "Agent ID within the fleet")
-    .requiredOption("--owner <name>", "GitHub owner where the App is registered (org name for org-owned Apps, username for user-owned)")
+    .requiredOption("--app <name>", "Declared GitHub App name (use --app project deliberately)")
+    .option("--owner <name>", "GitHub owner for project (named Apps use their declared owner)")
     .option("--no-org", "Create as user-owned App instead of org-owned (default: org-owned)")
     .option("--app-name <name>", "Human-readable App name (default: '<fleet>-<agent>')")
     .option("--homepage-url <url>", "Homepage URL for the GitHub App (defaults to the fleetmind repo URL — GitHub rejects localhost here)")
     .option("--callback-port <port>", "Local callback port for the manifest redirect (default: auto-pick)", (v) => parseInt(v, 10), 0)
     .option("--region <region>", "AWS region", "us-west-2")
     .option("--dry-run", "Run the flow but skip the SSM write at the end", false)
-    .option("--no-overwrite", "Fail if a SSM parameter already exists (default: overwrite)")
+    .option("--force", "Intentionally replace existing credentials", false)
     .option("--install-timeout-ms <ms>", "How long to wait for the operator to install on the repo (default: 300000 = 5 min)", (v) => parseInt(v, 10), 5 * 60 * 1000)
     .addHelpText("after", `
 The flow has 4 steps:
@@ -559,8 +766,7 @@ The flow has 4 steps:
      for App credentials (app_id, pem, slug).
   3. Print an install URL. You open it and select the target repo.
   4. fleetmind polls until the App is installed on the repo, then writes
-     app_id, installation_id, and pem to SSM under
-     /fleetmind/<fleet>/agents/<agent>/github-app/*.
+     app_id, installation_id, and pem to the selected App namespace in SSM.
 
 Examples:
   # Create + install + store for an org-owned App:
@@ -587,32 +793,40 @@ Examples:
         // createGithubApp internally.
         let agentRole: string | undefined;
         let agentGithubApp: GitHubAppConfig | undefined;
+        let definition: GitHubAppDefinition | undefined;
         try {
-          const fleet = loadFleet(opts.config as string);
-          const agent = fleet.agents.list.find((a) => a.id === opts.agent);
-          if (agent) {
-            agentRole = agent.role;
-            agentGithubApp = agent.github_app;
-          } else {
-            log.warn(`Agent '${opts.agent}' not found in ${opts.config}; falling back to default 'worker' role permissions.`);
-          }
+          const resolvedAgent = resolveAgentGitHubApp(
+            opts.config as string,
+            opts.fleet as string,
+            opts.agent as string,
+            opts.app as string,
+          );
+          agentRole = resolvedAgent.role;
+          agentGithubApp = resolvedAgent.githubAppConfig;
+          definition = resolvedAgent.definition;
         } catch (err) {
-          log.warn(`Could not load ${opts.config}: ${String(err)}. Falling back to default 'worker' role permissions.`);
+          // A named App is only safe when it was declared in fleet.yaml. Keep
+          // the historical project-App fallback for existing users whose
+          // config is unavailable at invocation time.
+          throw err;
         }
+        if (opts.app === "project" && !opts.owner) throw new Error("--owner is required when setting up --app project");
+        if (opts.force && !opts.dryRun) await confirmCredentialReplacement("Replacing GitHub App credentials");
 
         const result = await createGithubApp({
           fleet: opts.fleet as string,
           agent: opts.agent as string,
+          app: opts.app as string,
           role: agentRole,
           githubAppConfig: agentGithubApp,
-          owner: opts.owner as string,
-          org: opts.org as boolean,
+          owner: (definition?.owner ?? opts.owner) as string,
+          org: definition?.org ?? opts.org as boolean,
           appName: opts.appName as string | undefined,
           homepageUrl: opts.homepageUrl as string | undefined,
           callbackPort: opts.callbackPort as number,
           region: opts.region as string,
           dryRun: opts.dryRun as boolean,
-          overwrite: opts.overwrite as boolean,
+          overwrite: opts.force as boolean,
           installPollTimeoutMs: opts.installTimeoutMs as number,
         });
         printStoreResult(result, opts.dryRun as boolean);

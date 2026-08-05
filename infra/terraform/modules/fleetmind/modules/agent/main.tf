@@ -123,13 +123,21 @@ resource "aws_iam_role_policy" "dynamodb" {
 }
 
 data "aws_iam_policy_document" "github_app" {
+  count = length(var.github_apps) > 0 ? 1 : 0
+
   statement {
     sid     = "GitHubAppSSMRead"
     effect  = "Allow"
     actions = ["ssm:GetParameter", "ssm:GetParameters"]
-    resources = [
-      "arn:aws:ssm:${var.aws_region}:*:parameter/fleetmind/${var.fleet_name}/agents/${var.name}/github-app/*",
-    ]
+    resources = concat(
+      contains(var.github_apps, "project") ? [
+        "arn:aws:ssm:${var.aws_region}:*:parameter/fleetmind/${var.fleet_name}/agents/${var.name}/github-app/*",
+      ] : [],
+      [
+        for app in var.github_apps :
+        "arn:aws:ssm:${var.aws_region}:*:parameter/fleetmind/${var.fleet_name}/agents/${var.name}/github-apps/${app}/*" if app != "project"
+      ],
+    )
   }
 
   statement {
@@ -141,10 +149,12 @@ data "aws_iam_policy_document" "github_app" {
 }
 
 resource "aws_iam_role_policy" "github_app" {
+  count = length(var.github_apps) > 0 ? 1 : 0
+
   name = "${var.fleet_name}-${var.name}-github-app"
   role = aws_iam_role.agent.id
 
-  policy = data.aws_iam_policy_document.github_app.json
+  policy = data.aws_iam_policy_document.github_app[0].json
 }
 
 resource "aws_iam_instance_profile" "agent" {
@@ -328,6 +338,7 @@ resource "aws_instance" "agent" {
     is_orchestrator   = var.is_orchestrator
     gateway_port      = var.gateway_port
     agent_providers   = join(" ", var.model_providers)
+    github_apps_json  = jsonencode(var.github_apps)
   }))
 
   tags = {

@@ -510,7 +510,7 @@ export function renderTerraformVars(fleet: Fleet): string {
   // Operators must use this map in their bootstrap template to conditionally set NATS_MODE:
   //   NATS_MODE=${agent_orchestrators[agent_id] ? "pm" : "worker"}
   const orchestratorEntries = fleet.agents.list
-    .map((a) => `  ${a.id} = ${a.orchestrator ? "true" : "false"}`)
+    .map((a) => `  ${JSON.stringify(a.id)} = ${a.orchestrator ? "true" : "false"}`)
     .join("\n");
 
   // Derive agent_providers map from each agent's explicit `providers:` list in
@@ -524,7 +524,15 @@ export function renderTerraformVars(fleet: Fleet): string {
     .map((a) => {
       const provs = (a as { providers?: string[] }).providers ?? [];
       const items = provs.map((p) => `"${String(p).toLowerCase()}"`).join(", ");
-      return `  ${a.id} = [${items}]`;
+      return `  ${JSON.stringify(a.id)} = [${items}]`;
+    })
+    .join("\n");
+
+  // Every App is explicit. Terraform receives only names, never credential values.
+  const githubAppEntries = fleet.agents.list
+    .map((a) => {
+      const apps = Object.keys(a.github_apps ?? {}).map((name) => `"${name}"`).join(", ");
+      return `  ${JSON.stringify(a.id)} = [${apps}]`;
     })
     .join("\n");
 
@@ -544,6 +552,11 @@ export function renderTerraformVars(fleet: Fleet): string {
     `# at <fleet>/agents/<agent>/providers/<provider>). REQUIRED.`,
     `agent_providers = {`,
     providerEntries,
+    `}`,
+    ``,
+    `# Explicit GitHub Apps per agent. This grants IAM only: no credentials enter Terraform.`,
+    `agent_github_apps = {`,
+    githubAppEntries,
     `}`,
     ``,
     `# NOTE: instance_type, aws_region, and other infrastructure vars are not`,

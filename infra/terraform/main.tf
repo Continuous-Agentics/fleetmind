@@ -52,6 +52,7 @@ module "fleetmind" {
   agent_names         = var.agent_names
   agent_orchestrators = var.agent_orchestrators
   agent_providers     = var.agent_providers
+  agent_github_apps   = var.agent_github_apps
 
   # ── Operator-owned infrastructure knobs ─────────────────────────────────────
   aws_region                  = var.aws_region
