@@ -65,6 +65,11 @@ export interface GithubAppStoreResult {
 
 export type GithubAppNamespaceStatus = "missing" | "incomplete" | "ready" | "unreadable";
 
+/** Exit status for a credential inventory: 0 only when every selected App is ready. */
+export function githubAppStatusExitCode(statuses: GithubAppNamespaceStatus[]): number {
+  return statuses.every((status) => status === "ready") ? 0 : 2;
+}
+
 /** Inspect a credential namespace without reading parameter values. */
 export async function inspectGithubAppNamespace(options: {
   fleet: string;
@@ -196,16 +201,26 @@ export async function writeCredentialsToSsm(
   }
 
   const client: SsmSendable = options.ssmClient ?? new SSMClient({ region: options.region });
-  for (const p of params) {
-    await client.send(
-      new PutParameterCommand({
-        Name: p.name,
-        Value: values[p.name]!,
-        Type: p.type,
-        Overwrite: options.overwrite,
-      }),
+  try {
+    for (const p of params) {
+      await client.send(
+        new PutParameterCommand({
+          Name: p.name,
+          Value: values[p.name]!,
+          Type: p.type,
+          Overwrite: options.overwrite,
+        }),
+      );
+      p.written = true;
+    }
+  } catch (error) {
+    const written = params.filter((parameter) => parameter.written).length;
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to write GitHub App credentials to ${namespace} after ${written}/3 parameters: ${detail}. ` +
+      `The namespace may be incomplete. Inspect it with 'fleetmind github-app status --fleet ${options.fleet} --agent ${options.agent} --app ${options.app ?? "project"}', ` +
+      `then repair it by re-running 'fleetmind github-app import --fleet ${options.fleet} --agent ${options.agent} --app ${options.app ?? "project"} ... --force'.`,
     );
-    p.written = true;
   }
 
   return { namespace, region: options.region, params };
@@ -662,7 +677,7 @@ export function registerGithubApp(program: Command): void {
         const filtered = opts.app ? entries.filter((entry) => entry.app === opts.app) : entries;
         if (opts.app && filtered.length === 0) throw new Error(`GitHub App '${opts.app}' is not declared by the selected agent(s)`);
         const client = new SSMClient({ region: opts.region as string });
-        const results = await Promise.all(filtered.map(async (entry) => {
+        const results: Array<{ agent: string; app: string; namespace: string; status: GithubAppNamespaceStatus; error?: string }> = await Promise.all(filtered.map(async (entry) => {
           const namespace = githubAppNamespace(fleet.fleet.name, entry.agent, entry.app);
           const expected = [`${namespace}/app-id`, `${namespace}/installation-id`, `${namespace}/pem`];
           try {
@@ -678,6 +693,7 @@ export function registerGithubApp(program: Command): void {
         }));
         if (opts.json) console.log(JSON.stringify(results, null, 2));
         else for (const result of results) console.log(`${result.agent}/${result.app}: ${result.status}  ${result.namespace}`);
+        process.exitCode = githubAppStatusExitCode(results.map((result) => result.status));
       } catch (err) {
         log.error(err instanceof Error ? err.message : String(err));
         process.exitCode = 1;

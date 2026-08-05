@@ -25,6 +25,7 @@ import {
   githubAppNamespace,
   inspectGithubAppNamespace,
   matchingAppInstallation,
+  githubAppStatusExitCode,
   type GithubAppStoreOptions,
   type SsmSendable,
 } from "../cli/commands/github-app.js";
@@ -138,6 +139,38 @@ describe("GitHub App installation owner matching", () => {
   test("rejects an installation with a matching login but wrong account type", () => {
     assert.equal(matchingAppInstallation(installations, "acme", false)?.id, 3);
     assert.equal(matchingAppInstallation(installations.slice(0, 2), "acme", false), undefined);
+  });
+});
+
+describe("GitHub App status exit semantics", () => {
+  test("returns success only when every selected namespace is ready", () => {
+    assert.equal(githubAppStatusExitCode(["ready", "ready"]), 0);
+    assert.equal(githubAppStatusExitCode(["ready", "missing"]), 2);
+    assert.equal(githubAppStatusExitCode(["incomplete"]), 2);
+    assert.equal(githubAppStatusExitCode(["unreadable"]), 2);
+  });
+});
+
+describe("storeGithubApp — partial-write recovery", () => {
+  test("reports the repair command after a partial SSM write", async () => {
+    const pemPath = path.join(tmpDir, "partial.pem");
+    fs.writeFileSync(pemPath, "-----BEGIN PRIVATE KEY-----\\npartial\\n-----END PRIVATE KEY-----\\n");
+    let calls = 0;
+    const client: SsmSendable = {
+      async send() {
+        calls++;
+        if (calls === 2) throw new Error("AccessDenied");
+        return {};
+      },
+    };
+
+    await assert.rejects(
+      () => storeGithubApp({
+        fleet: "myfleet", agent: "forge", app: "ggettert", appId: "123", installationId: "456",
+        pemFile: pemPath, region: "us-west-2", dryRun: false, overwrite: false, ssmClient: client,
+      }),
+      /after 1\/3 parameters.*status.*import.*--force/is,
+    );
   });
 });
 
