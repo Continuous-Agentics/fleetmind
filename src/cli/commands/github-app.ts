@@ -100,7 +100,7 @@ export function resolveAgentGitHubApp(
   if (!declaration) {
     throw new Error(
       `GitHub App '${app}' is not declared for agent '${agentId}' in ${configPath}. ` +
-        `Add it under github_apps before setup or import.`,
+        `Run 'fleetmind render' to migrate legacy GitHub access, or add it under github_apps before setup or import.`,
     );
   }
   const definition = app === "project" ? undefined : declaration as GitHubAppDefinition;
