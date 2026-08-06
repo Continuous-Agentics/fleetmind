@@ -65,7 +65,7 @@ targets:
   #     user: openclaw
 
 # ContextStore — shared cross-agent KV state. Must match the table the
-# FleetMind embedded Terraform module module provisions (default name: "fleetmind-<fleet>").
+# FleetMind embedded Terraform module provisions (default name: "fleetmind-<fleet>").
 context:
   provider: dynamodb
   region: us-west-2
