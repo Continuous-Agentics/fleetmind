@@ -22,9 +22,10 @@ agent_instance_types = {
 }
 
 # ── Software pins ───────────────────────────────────────────────────────────
-openclaw_version  = "latest"
-node_version      = "24"
-fleetmind_version = "0.10.4"
+openclaw_version = "latest"
+node_version     = "24"
+# Keep this npm version aligned with the FleetMind Git tag used for Terraform (without its leading v).
+fleetmind_version = "1.1.0"
 
 # ── Delegation substrate ────────────────────────────────────────────────────
 # Task-ledger DDB + S3 narratives. Default true.

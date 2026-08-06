@@ -13,11 +13,11 @@ delegate tasks to worker bots and track them through the full lifecycle.
 
 ## Step 1: Provision the task-ledger infrastructure
 
-The task-ledger Terraform submodule lives in the separate [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) repo and provisions the DynamoDB table, S3 bucket, IAM policies, and EventBridge wake pipeline.
+The task-ledger Terraform submodule ships with FleetMind at [`infra/terraform/modules/task-ledger`](../../infra/terraform/modules/task-ledger). It provisions the DynamoDB table, S3 narrative bucket, and scoped IAM required for delegation; terminal delivery is handled by the agent NATS subscriber installed during bootstrap.
 
-**Canonical path:** consume it via [`fleetmind-template`](https://github.com/Continuous-Agentics/fleetmind-template), which calls the root `terraform-aws-fleetmind` module from its `main.tf`. The submodule activates automatically when you set `delegation_enabled = true` in your tfvars. See [`fleetmind-template/docs/SETUP-A-FLEET.md`](https://github.com/Continuous-Agentics/fleetmind-template/blob/main/docs/SETUP-A-FLEET.md) for the full setup.
+**Canonical path:** consume the embedded `fleetmind` Terraform module using the same FleetMind release tag as the runtime package. The submodule activates automatically when `delegation_enabled = true` in your tfvars.
 
-**Standalone path:** if you're integrating with a fleet that doesn't use fleetmind-template, or you want delegation infra without the rest of the fleetmind EC2/VPC/SG stack, call the submodule directly. See [`terraform-aws-fleetmind/docs/TASK-LEDGER-STANDALONE.md`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/blob/main/docs/TASK-LEDGER-STANDALONE.md) for the full root-module example.
+**Standalone path:** if you need delegation infrastructure without the EC2/VPC stack, use the in-repo [`docs/terraform/TASK-LEDGER-STANDALONE.md`](../terraform/TASK-LEDGER-STANDALONE.md) example.
 
 Either way, note the `table_name` and `s3_bucket` outputs — you'll need them in `fleet.yaml` (next step).
 

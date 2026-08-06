@@ -1,6 +1,6 @@
 ###############################################################################
 # Re-export module outputs so operators (and operator-side CI) can read them
-# via `terraform output`. Identical surface to terraform-aws-fleetmind's
+# via `terraform output`. Identical surface to FleetMind embedded Terraform module's
 # outputs.
 ###############################################################################
 

@@ -18,7 +18,7 @@ the `@continuous-agentics/fleetmind` package on npm to trust this repository's
    ```bash
    npm version minor   # or patch/major as appropriate
    ```
-   This updates `package.json` and creates a git tag (e.g. `v0.5.0`).
+   This updates `package.json` and creates a git tag (e.g. `v1.1.0`).
 4. **Push commit + tag — this creates a draft GitHub Release:**
    ```bash
    git push && git push --tags
@@ -38,9 +38,10 @@ the `@continuous-agentics/fleetmind` package on npm to trust this repository's
    (manual `workflow_dispatch` with the existing tag).
 
 6. **Update consumer infra:**
-   Bump `fleetmind_version` in `fleetmind-template/workspaces/default.tfvars` (and any per-fleet `<fleet>.tfvars`) to match:
+   Set `fleetmind_version` in `infra/terraform/workspaces/default.tfvars` (and every consumer fleet) to match the npm release. The Terraform module source must use the same Git tag:
    ```hcl
-   fleetmind_version = "0.5.0"
+   fleetmind_version = "1.1.0"
+   # source = "git::https://github.com/Continuous-Agentics/fleetmind.git//infra/terraform/modules/fleetmind?ref=v1.1.0"
    ```
 7. **Apply Terraform** in each consuming fleet:
    ```bash
@@ -66,7 +67,7 @@ If you need to re-publish (e.g. a flake after the release was published):
 1. Go to `https://github.com/Continuous-Agentics/fleetmind/actions/workflows/publish.yml`
 2. Click **Run workflow**
 3. Branch: `main` (or the tagged ref)
-4. Enter the existing tag, e.g. `v0.10.4`
+4. Enter the existing tag, e.g. `v1.1.0`
 5. Run
 
 The manual path publishes npm from the requested tag. The GitHub Release usually

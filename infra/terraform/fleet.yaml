@@ -65,7 +65,7 @@ targets:
   #     user: openclaw
 
 # ContextStore — shared cross-agent KV state. Must match the table the
-# terraform-aws-fleetmind module provisions (default name: "fleetmind-<fleet>").
+# FleetMind embedded Terraform module provisions (default name: "fleetmind-<fleet>").
 context:
   provider: dynamodb
   region: us-west-2
@@ -81,7 +81,7 @@ delegation:
   s3_bucket: my-fleet-ledger
   # ── NATS transport ─────────────────────────────────────────────────────
   # Agents use NATS (Cloud Map discovery) for inter-bot messaging — the
-  # server is provisioned by var.nats_enabled in terraform-aws-fleetmind
+  # server is provisioned by var.nats_enabled in FleetMind embedded Terraform module
   # (defaults true). Fleetmind ≥0.8.0-beta.2 auto-defaults `nats: {}` when
   # delegation.enabled is true, so no entry is needed here for the standard
   # path. Uncomment + extend only to override (custom subject_prefix, creds

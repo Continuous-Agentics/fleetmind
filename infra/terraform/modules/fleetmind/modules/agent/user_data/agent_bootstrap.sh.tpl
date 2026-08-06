@@ -185,7 +185,7 @@ fi
 
 # ── STAGE 7c — webhooks plugin hooks token ────────────────────────────────────
 # The webhooks plugin (used by the NATS subscriber wake path) authenticates
-# inbound POSTs against OPENCLAW_HOOKS_TOKEN. terraform-aws-fleetmind seeds the
+# inbound POSTs against OPENCLAW_HOOKS_TOKEN. FleetMind embedded Terraform module seeds the
 # Secrets Manager value with the literal placeholder "PENDING_BOOTSTRAP"
 # (modules/agent/main.tf hooks_placeholder, with ignore_changes); the comment
 # there promises that "STAGE 7c" generates the real token at bootstrap time.

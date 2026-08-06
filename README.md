@@ -83,8 +83,7 @@ An SSM operator should enter the configured runtime account with
 `sudo -iu openclaw` (substitute the runtime-user override when set), then run
 `ocalias`. The module-provided shortcuts include `ocstatus`, `oclog`, and
 `octail` for the gateway plus `ocnatsstatus`, `ocnatslog`, and `ocnatstail` for
-its NATS subscriber. These require a `terraform-aws-fleetmind` pin at or after
-[#47](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/pull/47).
+its NATS subscriber. These are included in FleetMind `v1.1.0` and later when the embedded Terraform module uses the matching release tag.
 
 ## Architecture
 
@@ -151,7 +150,7 @@ FleetMind’s CLI and Terraform module ship from this repository under the same 
 
 | FleetMind tag | Terraform source | Notes |
 |---|---|---|
-| `v1.1.0-beta.0` | `github.com/Continuous-Agentics/fleetmind//infra/terraform/modules/fleetmind?ref=v1.1.0-beta.0` | Explicit per-agent GitHub App declarations, namespaced credentials, and least-privilege IAM |
+| `v1.1.0` | `github.com/Continuous-Agentics/fleetmind//infra/terraform/modules/fleetmind?ref=v1.1.0` | Explicit per-agent GitHub App declarations, namespaced credentials, and least-privilege IAM |
 
 Do not mix a FleetMind npm version with a different Terraform module tag or an untagged branch.
 
@@ -259,10 +258,20 @@ See `fleet.example.yaml` for the full annotated schema.
 | Command | Description |
 |---|---|
 | `fleetmind github-app status` | Report declared App credential status without reading values |
-| `fleetmind github-app setup --app project` | Create/install a deliberately selected declared App |
-| `fleetmind github-app import --app project` | Import PEM credentials into SSM; `store` is deprecated |
+| `fleetmind github-app setup --fleet acme --agent worker --app project` | Create/install a deliberately selected declared App |
+| `fleetmind github-app import --fleet acme --agent worker --app project` | Import PEM credentials into SSM; `store` is deprecated |
 
-GitHub Apps are declared explicitly under each agent's `github_apps` map. Use `project: {}` for the existing project namespace; named Apps require both `owner` and `org`. Terraform receives names only to derive IAM—never PEMs, App IDs, or installation IDs.
+GitHub Apps are declared explicitly under each agent's `github_apps` map:
+
+```yaml
+github_apps:
+  project: {}
+  customer-app:
+    owner: acme
+    org: true
+```
+
+Use `project: {}` for the existing project namespace. Named Apps take their owner and account type from the declaration; `github_app` configures permission and event defaults only. Terraform receives names only to derive IAM—never PEMs, App IDs, or installation IDs.
 
 ### Shared ContextStore
 
@@ -312,9 +321,7 @@ The DynamoDB table ARN is exported as a Terraform output (`context_store_table_a
 
 ## Delegation (PM bot → worker bot)
 
-fleetmind 0.3.0 added a durable task ledger for orchestrator-to-specialist delegation. When `delegation.enabled: true` is set in `fleet.yaml`, the PM bot can record delegations to a DynamoDB-backed task table, workers can `ack`/`ship`/`block` against it, and a wake pipeline (DDB Streams → EventBridge Pipe → SSM Run Command) notifies the PM bot when a worker reaches a terminal state. Narratives (what the worker did + what they learned) are written to S3.
-
-The wake pipeline is what makes per-EC2 isolation practical: when the worker on EC2 B finishes, the SSM Run Command target fires on the orchestrator's EC2 A — no shared process or socket required.
+FleetMind provides a durable task ledger for orchestrator-to-specialist delegation. When `delegation.enabled: true` is set in `fleet.yaml`, the PM bot can record delegations to a DynamoDB-backed task table and workers can `ack`/`ship`/`block` against it. Narratives are written to S3; terminal delivery uses the fleet’s NATS subscriber path rather than an ad-hoc remote-command wake pipeline.
 
 ```yaml
 # fleet.yaml — minimal delegation config
@@ -330,7 +337,7 @@ to list the worker IDs they can delegate to. Worker agents add
 `delegation.specialty: <label>` for routing. Wake-pipeline targeting (SSM
 session key, EC2 tag) is configured at the Terraform layer.
 
-The substrate is provisioned by the [`task-ledger`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind/tree/main/modules/task-ledger) submodule inside [`terraform-aws-fleetmind`](https://github.com/Continuous-Agentics/terraform-aws-fleetmind) — it activates automatically when `delegation_enabled = true` in your fleet's tfvars. Add the `bot-delegation` skill to the PM bot and the `bot-reception` skill to each worker (both ship in `openclaw/skills/`). Full walkthrough: [`docs/integration/delegation.md`](docs/integration/delegation.md). Protocol details: [`docs/protocol.md`](docs/protocol.md).
+The substrate is provisioned by the embedded [`task-ledger`](infra/terraform/modules/task-ledger) submodule and activates automatically when `delegation_enabled = true` in your fleet's tfvars. Add the `bot-delegation` skill to the PM bot and the `bot-reception` skill to each worker (both ship in `openclaw/skills/`). Full walkthrough: [`docs/integration/delegation.md`](docs/integration/delegation.md). Protocol details: [`docs/protocol.md`](docs/protocol.md).
 
 ## Skills Repo (GitOps)
 
@@ -360,7 +367,7 @@ Unpinned skills (`- name: coding`) auto-update. Pinned skills (`version: "2.1.0"
 
 ## Terraform Integration
 
-The Terraform module ships in this repository at [`infra/terraform/modules/fleetmind`](infra/terraform/modules/fleetmind). Operators consume it using the same FleetMind tag as their runtime package, for example `github.com/Continuous-Agentics/fleetmind//infra/terraform/modules/fleetmind?ref=v1.1.0-beta.0`. `fleetmind render` writes derived tfvars (`fleet_name`, `agent_names`, `agent_orchestrators`, `agent_providers`, `agent_github_apps`) into `workspaces/<fleet>.derived.tfvars`; the operator passes that file plus their hand-edited `<fleet>.tfvars` to `terraform apply -var-file=...`.
+The Terraform module ships in this repository at [`infra/terraform/modules/fleetmind`](infra/terraform/modules/fleetmind). Operators consume it using the same FleetMind tag as their runtime package, for example `github.com/Continuous-Agentics/fleetmind//infra/terraform/modules/fleetmind?ref=v1.1.0`. `fleetmind render` writes derived tfvars (`fleet_name`, `agent_names`, `agent_orchestrators`, `agent_providers`, `agent_github_apps`) into `workspaces/<fleet>.derived.tfvars`; the operator passes that file plus their hand-edited `<fleet>.tfvars` to `terraform apply -var-file=...`.
 
 ## CI
 

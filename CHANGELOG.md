@@ -6,7 +6,7 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
-## [1.1.0-beta.0] — 2026-08-05
+## [1.1.0] — 2026-08-06
 
 ### Added
 
