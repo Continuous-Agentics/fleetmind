@@ -6,7 +6,7 @@ Provisions one FleetMind bot's AWS footprint:
 - **IAM role + instance profile** — least-privilege scoping for SSM, CloudWatch Logs, this agent's secrets, the fleet ContextStore table (optional), and GitHub App SSM params.
 - **Secrets Manager secrets** — per-agent placeholders for Slack tokens and the model-provider API key (operator populates real values out-of-band; `lifecycle.ignore_changes` preserves them).
 
-Invoked from the root `terraform-aws-fleetmind` module via `for_each` over agent names. Cross-cutting policies (task-ledger PM/worker grants) are attached separately by the `task-ledger` submodule using this module's `iam_role_name` output.
+Invoked from the root `FleetMind embedded Terraform module` module via `for_each` over agent names. Cross-cutting policies (task-ledger PM/worker grants) are attached separately by the `task-ledger` submodule using this module's `iam_role_name` output.
 
 ## Key design choices
 

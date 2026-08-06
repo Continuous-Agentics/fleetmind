@@ -22,11 +22,9 @@ terraform {
     }
   }
 
-  # Remote state — partial config. Fill in bucket/region/dynamodb_table via
-  # backend.hcl (see backend.example.hcl). The `key` argument is intentionally
-  # omitted: Terraform workspaces auto-prefix state files with `env:/<workspace>/`,
-  # so the workspace itself isolates state across fleets in the same operator
-  # account. Run `terraform workspace new <fleet-name>` per fleet.
+  # Remote state — partial config. Fill in bucket, key, region, and dynamodb_table
+  # via backend.hcl (see backend.example.hcl). Use one explicit key per fleet.
+  # Terraform CLI workspaces are retained only for legacy-state migration.
   backend "s3" {
     encrypt = true
   }
