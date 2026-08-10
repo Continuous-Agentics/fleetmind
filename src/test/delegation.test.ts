@@ -24,7 +24,9 @@ import { TaskConditionError } from "../runtime/delegation/ddb.js";
 import {
   legacySlackThreadTarget,
   sessionKeyForDeliveryContext,
+  sessionKeyForDeliveryWithLegacyFallback,
   sessionKeyForLegacySlackThread,
+  slackThreadTargetWithLegacyFallback,
 } from "../runtime/delegation/delivery.js";
 import {
   buildShipNarrative,
@@ -204,15 +206,17 @@ describe("delivery adapter compatibility", () => {
   });
 
   test("does not invent a Discord session-key contract", () => {
-    assert.equal(
-      sessionKeyForDeliveryContext("wren", {
-        provider: "discord",
-        accountId: "default",
-        conversationId: "123",
-        threadId: "456",
-      }),
-      undefined,
-    );
+    const discordContext = {
+      provider: "discord",
+      accountId: "default",
+      conversationId: "123",
+      threadId: "456",
+    } as const;
+    const legacySlackUrl = "https://example.slack.com/archives/C0BLZJQCPK2/p1780020261313409";
+
+    assert.equal(sessionKeyForDeliveryContext("wren", discordContext), undefined);
+    assert.equal(slackThreadTargetWithLegacyFallback(discordContext, legacySlackUrl), undefined);
+    assert.equal(sessionKeyForDeliveryWithLegacyFallback("wren", discordContext, legacySlackUrl), undefined);
   });
 });
 

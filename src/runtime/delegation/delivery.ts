@@ -37,6 +37,20 @@ export function slackThreadTarget(context: DeliveryContext | undefined): SlackTh
 }
 
 /**
+ * Use legacy Slack fields only for records that predate DeliveryContext.
+ *
+ * A present non-Slack context is authoritative: falling through to a stale
+ * Slack permalink would deliver a Discord (or future-provider) task to the
+ * wrong conversation.
+ */
+export function slackThreadTargetWithLegacyFallback(
+  context: DeliveryContext | undefined,
+  legacyThreadUrl: string,
+): SlackThreadTarget | undefined {
+  return context ? slackThreadTarget(context) : legacySlackThreadTarget(legacyThreadUrl);
+}
+
+/**
  * Build the known OpenClaw Slack thread session key. Other channel adapters
  * return undefined until their session-key contract is explicitly verified.
  */
@@ -54,4 +68,15 @@ export function sessionKeyForLegacySlackThread(agentId: string, url: string): st
   const target = legacySlackThreadTarget(url);
   if (!target) return undefined;
   return `agent:${agentId}:slack:channel:${target.conversationId.toLowerCase()}:thread:${target.threadId}`;
+}
+
+/** Match `slackThreadTargetWithLegacyFallback` when selecting a wake session. */
+export function sessionKeyForDeliveryWithLegacyFallback(
+  agentId: string,
+  context: DeliveryContext | undefined,
+  legacyThreadUrl: string,
+): string | undefined {
+  return context
+    ? sessionKeyForDeliveryContext(agentId, context)
+    : sessionKeyForLegacySlackThread(agentId, legacyThreadUrl);
 }

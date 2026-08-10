@@ -23,8 +23,8 @@ import { TaskLedger, TaskConditionError } from "../../runtime/delegation/ddb.js"
 import {
   legacySlackThreadTarget,
   sessionKeyForDeliveryContext,
-  sessionKeyForLegacySlackThread,
-  slackThreadTarget,
+  sessionKeyForDeliveryWithLegacyFallback,
+  slackThreadTargetWithLegacyFallback,
 } from "../../runtime/delegation/delivery.js";
 import { log } from "../../utils/log.js";
 
@@ -419,8 +419,7 @@ Examples:
             if (workerId) {
               const homeChannel = resolveWorkerHomeChannel(fleet, workerId);
               const deliveryTarget =
-                slackThreadTarget(event.delivery_context) ??
-                legacySlackThreadTarget(event.delegation_thread ?? "");
+                slackThreadTargetWithLegacyFallback(event.delivery_context, event.delegation_thread ?? "");
               const backlinkSuffix = event.delegation_thread
                 ? ` (triggered by ${event.delegation_thread})`
                 : "";
@@ -453,8 +452,11 @@ Examples:
                     threadTs: deliveryTarget.threadId,
                     text: `${ackText} (note: failed to post in worker home channel — falling back to delegation thread)`,
                   });
-                  sessionKey = sessionKeyForDeliveryContext(workerId, event.delivery_context)
-                    ?? sessionKeyForLegacySlackThread(workerId, event.delegation_thread ?? "");
+                  sessionKey = sessionKeyForDeliveryWithLegacyFallback(
+                    workerId,
+                    event.delivery_context,
+                    event.delegation_thread ?? "",
+                  );
                 }
               } else if (deliveryTarget) {
                 // No home channel configured for this worker — same behavior as
@@ -465,8 +467,11 @@ Examples:
                   threadTs: deliveryTarget.threadId,
                   text: ackText,
                 });
-                sessionKey = sessionKeyForDeliveryContext(workerId, event.delivery_context)
-                  ?? sessionKeyForLegacySlackThread(workerId, event.delegation_thread ?? "");
+                sessionKey = sessionKeyForDeliveryWithLegacyFallback(
+                  workerId,
+                  event.delivery_context,
+                  event.delegation_thread ?? "",
+                );
               }
 
               const msg = `NATS: Task ${event.task_id} delegated to you. Description: ${event.description ?? "(see DDB)"}${event.delegation_thread ? ` Original delegation thread (PM↔human): ${event.delegation_thread}` : ""}`;
@@ -541,7 +546,7 @@ Examples:
               // back to anything the event carried (it's an optional field).
               const threadUrl = taskRecord?.delegation_thread ?? event.delegation_thread ?? "";
               const deliveryContext = taskRecord?.delivery_context ?? event.delivery_context;
-              const parsed = slackThreadTarget(deliveryContext) ?? legacySlackThreadTarget(threadUrl);
+              const parsed = slackThreadTargetWithLegacyFallback(deliveryContext, threadUrl);
               // Stage 1: fast-path ack. Fire-and-forget; only attempted when
               // we have a real Slack thread to post into.
               if (parsed) {
@@ -557,8 +562,7 @@ Examples:
                 });
               }
               // Stage 2: considered response via agent turn in the thread session.
-              const sessionKey = sessionKeyForDeliveryContext(pmAgentId, deliveryContext)
-                ?? sessionKeyForLegacySlackThread(pmAgentId, threadUrl);
+              const sessionKey = sessionKeyForDeliveryWithLegacyFallback(pmAgentId, deliveryContext, threadUrl);
               wakeAgent(pmAgentId, msg, sessionKey ? { sessionKey } : undefined);
             }
 

@@ -43,7 +43,7 @@ The existing conditional-write guards are part of the public safety contract:
 | sign off  | `shipped` and `requires-human-signoff`                      |
 | merge     | `signed_off`, or `shipped` with `shipped-is-done`           |
 | block     | `delegated` or `accepted`, and record worker matches caller |
-| abandon   | not `merged` or already `abandoned`                         |
+| abandon   | neither `merged` nor `abandoned`                            |
 
 A plugin migration must preserve the rule that a PR-producing task is not done when a worker ships: it remains pending human signoff and merge.
 
