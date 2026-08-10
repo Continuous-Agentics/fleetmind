@@ -22,7 +22,7 @@ import {
   StringCodec,
   ConnectionOptions,
 } from "nats";
-import { NatsConfig } from "../config/schema.js";
+import type { NatsConfig } from "../config/schema.js";
 import { log } from "../utils/log.js";
 
 // ── Event schema ─────────────────────────────────────────────────────────────
