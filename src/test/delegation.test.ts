@@ -22,6 +22,11 @@ import {
 } from "../runtime/delegation/types.js";
 import { TaskConditionError } from "../runtime/delegation/ddb.js";
 import {
+  legacySlackThreadTarget,
+  sessionKeyForDeliveryContext,
+  sessionKeyForLegacySlackThread,
+} from "../runtime/delegation/delivery.js";
+import {
   buildShipNarrative,
   buildBlockNarrative,
 } from "../runtime/delegation/s3.js";
@@ -181,6 +186,33 @@ describe("TaskRecordSchema", () => {
     assert.throws(() => {
       TaskRecordSchema.shape.status.parse("in-progress");
     });
+  });
+});
+
+// ── Delivery adapter compatibility ──────────────────────────────────────────
+
+describe("delivery adapter compatibility", () => {
+  test("converts a legacy Slack permalink only at the delivery boundary", () => {
+    assert.deepEqual(
+      legacySlackThreadTarget("https://example.slack.com/archives/C0BLZJQCPK2/p1780020261313409"),
+      { conversationId: "C0BLZJQCPK2", threadId: "1780020261.313409" },
+    );
+    assert.equal(
+      sessionKeyForLegacySlackThread("wren", "https://example.slack.com/archives/C0BLZJQCPK2/p1780020261313409"),
+      "agent:wren:slack:channel:c0blzjqcpk2:thread:1780020261.313409",
+    );
+  });
+
+  test("does not invent a Discord session-key contract", () => {
+    assert.equal(
+      sessionKeyForDeliveryContext("wren", {
+        provider: "discord",
+        accountId: "default",
+        conversationId: "123",
+        threadId: "456",
+      }),
+      undefined,
+    );
   });
 });
 

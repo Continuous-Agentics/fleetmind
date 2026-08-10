@@ -20,6 +20,12 @@ import {
   type TaskEventType,
 } from "../../transport/nats.js";
 import { TaskLedger, TaskConditionError } from "../../runtime/delegation/ddb.js";
+import {
+  legacySlackThreadTarget,
+  sessionKeyForDeliveryContext,
+  sessionKeyForLegacySlackThread,
+  slackThreadTarget,
+} from "../../runtime/delegation/delivery.js";
 import { log } from "../../utils/log.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -94,14 +100,10 @@ function makeLedger(fleet: ReturnType<typeof resolveAndLoadFleet>): TaskLedger {
  * URL, or a `/messages/` permalink shape). Caller decides what to do then.
  */
 export function parseSlackThreadUrl(url: string): { channelId: string; threadTs: string } | null {
-  if (!url) return null;
-  const match = url.match(/\/archives\/([A-Z0-9]+)\/p(\d{7,})/);
-  if (!match) return null;
-  const channelId = match[1]!;
-  const compact = match[2]!;
-  // Last 6 digits are microseconds; everything before is seconds.
-  const threadTs = `${compact.slice(0, -6)}.${compact.slice(-6)}`;
-  return { channelId, threadTs };
+  const target = legacySlackThreadTarget(url);
+  return target
+    ? { channelId: target.conversationId, threadTs: target.threadId }
+    : null;
 }
 
 /**
@@ -258,10 +260,6 @@ function resolveWorkerHomeChannel(
  * of the agent's `:main` session (which is the default and was making
  * NATS-driven wakes invisible to live Slack conversations).
  */
-function slackThreadSessionKey(agentId: string, channelId: string, threadTs: string): string {
-  return `agent:${agentId}:slack:channel:${channelId.toLowerCase()}:thread:${threadTs}`;
-}
-
 function wakeAgent(
   agentId: string,
   message: string,
@@ -420,7 +418,9 @@ Examples:
             const workerId = opts.workerId ?? event.worker;
             if (workerId) {
               const homeChannel = resolveWorkerHomeChannel(fleet, workerId);
-              const delegationParsed = parseSlackThreadUrl(event.delegation_thread ?? "");
+              const deliveryTarget =
+                slackThreadTarget(event.delivery_context) ??
+                legacySlackThreadTarget(event.delegation_thread ?? "");
               const backlinkSuffix = event.delegation_thread
                 ? ` (triggered by ${event.delegation_thread})`
                 : "";
@@ -439,27 +439,34 @@ Examples:
                   text: ackText,
                 });
                 if (ackResult) {
-                  sessionKey = slackThreadSessionKey(workerId, homeChannel.channelId, ackResult.ts);
-                } else if (delegationParsed) {
+                  sessionKey = sessionKeyForDeliveryContext(workerId, {
+                    provider: "slack",
+                    accountId: homeChannel.accountId || "legacy",
+                    conversationId: homeChannel.channelId,
+                    threadId: ackResult.ts,
+                  });
+                } else if (deliveryTarget) {
                   // Slack post failed — degrade to threading under delegation_thread
                   // so the human still sees *something*. Logged via the helper.
                   void postSlackThreadAck({
-                    channelId: delegationParsed.channelId,
-                    threadTs: delegationParsed.threadTs,
+                    channelId: deliveryTarget.conversationId,
+                    threadTs: deliveryTarget.threadId,
                     text: `${ackText} (note: failed to post in worker home channel — falling back to delegation thread)`,
                   });
-                  sessionKey = slackThreadSessionKey(workerId, delegationParsed.channelId, delegationParsed.threadTs);
+                  sessionKey = sessionKeyForDeliveryContext(workerId, event.delivery_context)
+                    ?? sessionKeyForLegacySlackThread(workerId, event.delegation_thread ?? "");
                 }
-              } else if (delegationParsed) {
+              } else if (deliveryTarget) {
                 // No home channel configured for this worker — same behavior as
                 // pre-beta.7 (post in the delegation thread). Path stays available
                 // for fleets/agents without an explicit channels block.
                 void postSlackThreadAck({
-                  channelId: delegationParsed.channelId,
-                  threadTs: delegationParsed.threadTs,
+                  channelId: deliveryTarget.conversationId,
+                  threadTs: deliveryTarget.threadId,
                   text: ackText,
                 });
-                sessionKey = slackThreadSessionKey(workerId, delegationParsed.channelId, delegationParsed.threadTs);
+                sessionKey = sessionKeyForDeliveryContext(workerId, event.delivery_context)
+                  ?? sessionKeyForLegacySlackThread(workerId, event.delegation_thread ?? "");
               }
 
               const msg = `NATS: Task ${event.task_id} delegated to you. Description: ${event.description ?? "(see DDB)"}${event.delegation_thread ? ` Original delegation thread (PM↔human): ${event.delegation_thread}` : ""}`;
@@ -533,7 +540,8 @@ Examples:
               // Prefer the DDB record's delegation_thread (authoritative), fall
               // back to anything the event carried (it's an optional field).
               const threadUrl = taskRecord?.delegation_thread ?? event.delegation_thread ?? "";
-              const parsed = parseSlackThreadUrl(threadUrl);
+              const deliveryContext = taskRecord?.delivery_context ?? event.delivery_context;
+              const parsed = slackThreadTarget(deliveryContext) ?? legacySlackThreadTarget(threadUrl);
               // Stage 1: fast-path ack. Fire-and-forget; only attempted when
               // we have a real Slack thread to post into.
               if (parsed) {
@@ -543,15 +551,14 @@ Examples:
                 // Intentionally not awaited; subscriber should not block on
                 // the Slack API. Errors land in log.warn via the function itself.
                 void postSlackThreadAck({
-                  channelId: parsed.channelId,
-                  threadTs: parsed.threadTs,
+                  channelId: parsed.conversationId,
+                  threadTs: parsed.threadId,
                   text: ackText,
                 });
               }
               // Stage 2: considered response via agent turn in the thread session.
-              const sessionKey = parsed
-                ? slackThreadSessionKey(pmAgentId, parsed.channelId, parsed.threadTs)
-                : undefined;
+              const sessionKey = sessionKeyForDeliveryContext(pmAgentId, deliveryContext)
+                ?? sessionKeyForLegacySlackThread(pmAgentId, threadUrl);
               wakeAgent(pmAgentId, msg, sessionKey ? { sessionKey } : undefined);
             }
 
