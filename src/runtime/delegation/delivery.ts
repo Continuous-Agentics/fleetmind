@@ -37,6 +37,18 @@ export function slackThreadTarget(context: DeliveryContext | undefined): SlackTh
 }
 
 /**
+ * Whether the legacy Slack adapter may handle this delivery.
+ *
+ * Legacy records have no context and retain their existing Slack behavior.
+ * Once a context exists, its provider is authoritative: a Discord task must
+ * never cause a Slack acknowledgement merely because the worker also has a
+ * Slack home channel configured.
+ */
+export function usesSlackDeliveryAdapter(context: DeliveryContext | undefined): boolean {
+  return context === undefined || context.provider === "slack";
+}
+
+/**
  * Use legacy Slack fields only for records that predate DeliveryContext.
  *
  * A present non-Slack context is authoritative: falling through to a stale

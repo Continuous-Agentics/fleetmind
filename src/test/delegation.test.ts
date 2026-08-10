@@ -27,6 +27,7 @@ import {
   sessionKeyForDeliveryWithLegacyFallback,
   sessionKeyForLegacySlackThread,
   slackThreadTargetWithLegacyFallback,
+  usesSlackDeliveryAdapter,
 } from "../runtime/delegation/delivery.js";
 import {
   buildShipNarrative,
@@ -217,6 +218,8 @@ describe("delivery adapter compatibility", () => {
     assert.equal(sessionKeyForDeliveryContext("wren", discordContext), undefined);
     assert.equal(slackThreadTargetWithLegacyFallback(discordContext, legacySlackUrl), undefined);
     assert.equal(sessionKeyForDeliveryWithLegacyFallback("wren", discordContext, legacySlackUrl), undefined);
+    assert.equal(usesSlackDeliveryAdapter(discordContext), false);
+    assert.equal(usesSlackDeliveryAdapter(undefined), true);
   });
 });
 

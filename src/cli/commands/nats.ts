@@ -25,6 +25,7 @@ import {
   sessionKeyForDeliveryContext,
   sessionKeyForDeliveryWithLegacyFallback,
   slackThreadTargetWithLegacyFallback,
+  usesSlackDeliveryAdapter,
 } from "../../runtime/delegation/delivery.js";
 import { log } from "../../utils/log.js";
 
@@ -417,7 +418,9 @@ Examples:
           if (opts.mode === "worker" && event.event === "delegation") {
             const workerId = opts.workerId ?? event.worker;
             if (workerId) {
-              const homeChannel = resolveWorkerHomeChannel(fleet, workerId);
+              const homeChannel = usesSlackDeliveryAdapter(event.delivery_context)
+                ? resolveWorkerHomeChannel(fleet, workerId)
+                : null;
               const deliveryTarget =
                 slackThreadTargetWithLegacyFallback(event.delivery_context, event.delegation_thread ?? "");
               const backlinkSuffix = event.delegation_thread
