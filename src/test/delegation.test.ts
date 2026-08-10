@@ -102,9 +102,9 @@ describe("TaskRecordSchema", () => {
     const discord = DeliveryContextSchema.parse({
       provider: "discord",
       accountId: "default",
-      conversationId: "1516504878523093064",
-      messageId: "1536443681769525399",
-      actorIds: { requestor: "1516504878523093064" },
+      conversationId: "123456789012345678",
+      messageId: "234567890123456789",
+      actorIds: { requestor: "345678901234567890" },
     });
 
     assert.equal(slack.provider, "slack");
