@@ -22,7 +22,8 @@ import {
   StringCodec,
   ConnectionOptions,
 } from "nats";
-import { NatsConfig } from "../config/schema.js";
+import type { NatsConfig } from "../config/schema.js";
+import type { DeliveryContext } from "../runtime/delegation/types.js";
 import { log } from "../utils/log.js";
 
 // ── Event schema ─────────────────────────────────────────────────────────────
@@ -88,6 +89,8 @@ export interface TaskEvent {
    * and threaded replies when Slack is also in use.
    */
   delegation_envelope_ts?: string;
+  /** Channel-neutral delivery context for plugin-managed delegations. */
+  delivery_context?: DeliveryContext;
   /**
    * Optional free-form reason (used in block events to carry the blocker
    * summary without requiring a DDB read on the PM side).

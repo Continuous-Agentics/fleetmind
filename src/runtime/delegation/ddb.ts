@@ -128,6 +128,7 @@ export class TaskLedger {
       definition_of_done: input.definition_of_done,
       delegation_thread: input.delegation_thread ?? "",
       delegation_envelope_ts: input.delegation_envelope_ts ?? "",
+      ...(input.delivery_context ? { delivery_context: input.delivery_context } : {}),
       tracker_link: input.tracker_link ?? null,
       ...(input.description ? { description: input.description } : {}),
       ...(input.requestor ? { requestor: input.requestor } : {}),

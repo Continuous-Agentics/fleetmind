@@ -86,6 +86,12 @@ describe("TaskEvent shape", () => {
     tracker_link: "https://linear.app/continuous-agentics/issue/CON-115",
     delegation_thread: "https://slack.com/archives/C123/p1234",
     delegation_envelope_ts: "1234567890.123456",
+    delivery_context: {
+      provider: "slack",
+      accountId: "ariadne",
+      conversationId: "C123",
+      threadId: "1234567890.123456",
+    },
   };
 
   test("delegation event has required fields", () => {
@@ -93,6 +99,7 @@ describe("TaskEvent shape", () => {
     assert.equal(baseEvent.event, "delegation");
     assert.equal(baseEvent.task_id, "a1b2c3d4");
     assert.equal(baseEvent.worker, "daedalus");
+    assert.equal(baseEvent.delivery_context?.conversationId, "C123");
   });
 
   test("ack event omits delegation-only fields", () => {

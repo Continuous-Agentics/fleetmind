@@ -22,7 +22,7 @@ import { randomBytes } from "crypto";
 import { readFileSync } from "fs";
 import { resolveAndLoadFleet } from "../../config/loader.js";
 import { TaskLedger, TaskConditionError } from "../../runtime/delegation/ddb.js";
-import type { TaskRecord } from "../../runtime/delegation/types.js";
+import type { DeliveryContext, TaskRecord } from "../../runtime/delegation/types.js";
 import type { DelegationFleetConfig } from "../../config/schema.js";
 import { publishTaskEvent, type TaskEvent } from "../../transport/nats.js";
 import { log } from "../../utils/log.js";
@@ -87,6 +87,7 @@ export interface TaskLedgerLike {
     definition_of_done: string;
     delegation_thread?: string;
     delegation_envelope_ts?: string;
+    delivery_context?: DeliveryContext;
     tracker_link?: string;
     description?: string;
     requestor?: string;
@@ -132,6 +133,8 @@ export interface CreateTaskOptions {
   /** Slack message TS of the delegation envelope. Optional for NATS-only fleets
    *  where there is no Slack envelope. */
   envelopeTs?: string;
+  /** Channel-neutral delivery context for plugin-managed callers. */
+  deliveryContext?: DeliveryContext;
   tracker?: string;
   /** Slack user ID (U…) of the human who requested this feature */
   requestor?: string;
@@ -260,6 +263,7 @@ export async function createTask(
       definition_of_done: opts.dod,
       delegation_thread: opts.thread,
       delegation_envelope_ts: opts.envelopeTs,
+      delivery_context: opts.deliveryContext,
       tracker_link: opts.tracker,
       description: opts.description,
       requestor: opts.requestor,
@@ -477,6 +481,7 @@ Examples:
           requestor: record.requestor,
           delegation_thread: record.delegation_thread,
           delegation_envelope_ts: record.delegation_envelope_ts,
+          delivery_context: record.delivery_context,
         });
       } catch (err) {
         if (err instanceof TaskConditionError) {
