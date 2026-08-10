@@ -17,6 +17,7 @@ import {
   taskPK,
   renderS3Key,
   DEFAULT_S3_KEY_TEMPLATE,
+  DeliveryContextSchema,
   TaskRecordSchema,
 } from "../runtime/delegation/types.js";
 import { TaskConditionError } from "../runtime/delegation/ddb.js";
@@ -81,6 +82,27 @@ describe("renderS3Key", () => {
 // ── TaskRecord schema validation ──────────────────────────────────────────────
 
 describe("TaskRecordSchema", () => {
+  test("accepts Slack and Discord delivery contexts without changing core shape", () => {
+    const slack = DeliveryContextSchema.parse({
+      provider: "slack",
+      accountId: "wren",
+      conversationId: "C0BLZJQCPK2",
+      threadId: "1780020261.313409",
+      messageId: "1780020261.313409",
+      actorIds: { requestor: "U123" },
+    });
+    const discord = DeliveryContextSchema.parse({
+      provider: "discord",
+      accountId: "default",
+      conversationId: "1516504878523093064",
+      messageId: "1536443681769525399",
+      actorIds: { requestor: "1516504878523093064" },
+    });
+
+    assert.equal(slack.provider, "slack");
+    assert.equal(discord.provider, "discord");
+  });
+
   test("accepts a valid task record", () => {
     const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
     const record = {

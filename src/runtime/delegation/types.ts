@@ -28,6 +28,25 @@ export const LifecycleSchema = z.enum([
 ]);
 export type Lifecycle = z.infer<typeof LifecycleSchema>;
 
+// ── Channel-neutral delivery context ───────────────────────────────────────
+
+/**
+ * Location and participants for a human-facing delegation conversation.
+ *
+ * This is intentionally independent of Slack's permalink and timestamp model.
+ * The legacy `delegation_thread` / `delegation_envelope_ts` fields remain
+ * readable while fleets migrate to this context.
+ */
+export const DeliveryContextSchema = z.object({
+  provider: z.string().min(1),
+  accountId: z.string().min(1),
+  conversationId: z.string().min(1),
+  threadId: z.string().min(1).optional(),
+  messageId: z.string().min(1).optional(),
+  actorIds: z.record(z.string(), z.string()).optional(),
+});
+export type DeliveryContext = z.infer<typeof DeliveryContextSchema>;
+
 // ── DynamoDB task record ─────────────────────────────────────────────────────
 
 /**
@@ -71,6 +90,8 @@ export const TaskRecordSchema = z.object({
   delegation_thread: z.string().default(""),
   /** Slack TS of the delegation envelope message. Empty string for NATS-only fleets. */
   delegation_envelope_ts: z.string().default(""),
+  /** Channel-neutral delivery context for new plugin-managed delegations. */
+  delivery_context: DeliveryContextSchema.optional(),
   tracker_link: z.string().nullable().optional(),
   /** Optional free-text title for the task (updatable via task update --title) */
   title: z.string().optional(),
@@ -153,6 +174,8 @@ export interface CreateTaskInput {
   delegation_thread?: string;
   /** Slack TS of the delegation envelope message. Optional for NATS-only fleets. */
   delegation_envelope_ts?: string;
+  /** Channel-neutral delivery context for plugin-managed delegations. */
+  delivery_context?: DeliveryContext;
   tracker_link?: string | null;
   lifecycle?: Lifecycle;
   /** Free-text description of the feature / work context */
