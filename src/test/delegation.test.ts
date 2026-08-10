@@ -107,6 +107,31 @@ describe("TaskRecordSchema", () => {
     assert.equal(parsed.status, "delegated");
   });
 
+  test("preserves the v0.2 NATS-only compatibility fixture", () => {
+    const legacyNatsOnlyRecord = {
+      PK: "TASK#deadbeef",
+      task_id: "deadbeef",
+      v: "0.2",
+      project: "delegation-core",
+      status: "accepted",
+      GSI1PK: "PROJECT#delegation-core#STATUS#accepted",
+      GSI2PK: "STATUS#accepted",
+      delegated_by: "wren",
+      worker: "forge",
+      delegated_at: "2026-08-10T18:00:00Z",
+      accepted_at: "2026-08-10T18:01:00Z",
+      lifecycle: "requires-human-signoff",
+      definition_of_done: "Preserve compatibility during extraction.",
+      delegation_thread: "",
+      delegation_envelope_ts: "",
+      tracker_link: null,
+      task_s3_key: "v0/projects/delegation-core/tasks/2026-08-10-deadbeef.md",
+      expires_at: 1817920800,
+    };
+
+    assert.deepEqual(TaskRecordSchema.parse(legacyNatsOnlyRecord), legacyNatsOnlyRecord);
+  });
+
   test("rejects task_id that is not 8-char hex", () => {
     assert.throws(() => {
       TaskRecordSchema.parse({
