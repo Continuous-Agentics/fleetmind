@@ -20,6 +20,7 @@ import {
   delegationSubject,
   taskSubject,
   allTaskEventsSubject,
+  validateTaskEventPayload,
   type TaskEvent,
 } from "../transport/nats.js";
 
@@ -128,6 +129,19 @@ describe("TaskEvent shape", () => {
       reason: "waiting on NATS creds secret in SSM",
     };
     assert.equal(block.reason, "waiting on NATS creds secret in SSM");
+  });
+
+  test("validates the shared envelope without stripping a legacy lifecycle extension", () => {
+    const event = validateTaskEventPayload({
+      v: "1.0",
+      event: "ship",
+      task_id: "a1b2c3d4",
+      worker: "daedalus",
+      at: "2026-05-20T23:10:00Z",
+      lifecycle: "shipped-is-done",
+    }) as TaskEvent & { lifecycle?: string };
+
+    assert.equal(event.lifecycle, "shipped-is-done");
   });
 });
 

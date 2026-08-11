@@ -169,6 +169,17 @@ export async function subscribeTaskEvents(
   return cleanup;
 }
 
+/**
+ * Validate a versioned task-event envelope without stripping legacy extensions.
+ *
+ * The PM subscriber still supports `lifecycle` on ship events when a task
+ * record cannot be read from DynamoDB.
+ */
+export function validateTaskEventPayload(payload: unknown): TaskEvent {
+  TaskEventSchema.parse(payload);
+  return payload as TaskEvent;
+}
+
 async function driveSubscription(
   sub: Subscription,
   filter: TaskEventType[] | undefined,
@@ -177,12 +188,7 @@ async function driveSubscription(
   for await (const msg of sub) {
     let event: TaskEvent;
     try {
-      const payload: unknown = JSON.parse(sc.decode(msg.data));
-      TaskEventSchema.parse(payload);
-      // Validate the versioned envelope while preserving supported legacy
-      // extensions. In particular, FleetMind's ship-event fallback reads an
-      // optional `lifecycle` when the task record is unavailable.
-      event = payload as TaskEvent;
+      event = validateTaskEventPayload(JSON.parse(sc.decode(msg.data)));
     } catch (err) {
       log.warn(`[nats] failed to parse message on ${msg.subject}: ${err}`);
       continue;
