@@ -23,100 +23,26 @@ import {
   ConnectionOptions,
 } from "nats";
 import type { NatsConfig } from "../config/schema.js";
-import type { DeliveryContext } from "../runtime/delegation/types.js";
 import { log } from "../utils/log.js";
 
-// ── Event schema ─────────────────────────────────────────────────────────────
+// ── Versioned event contracts ───────────────────────────────────────────────
 
-/** Union of all task event types published over NATS. */
-export type TaskEventType =
-  | "delegation"
-  | "ack"
-  | "progress"
-  | "ship"
-  | "block";
+export {
+  allTaskEventsSubject,
+  delegationSubject,
+  taskSubject,
+  type TaskEvent,
+  type TaskEventType,
+} from "@continuous-agentics/delegation-core";
 
-/** Core envelope published for every task event. */
-export interface TaskEvent {
-  /** Schema version — bump when the payload shape changes. */
-  v: "1.0";
-  /** Event type. */
-  event: TaskEventType;
-  /** 8-char hex task ID. */
-  task_id: string;
-  /**
-   * Project slug. Present in all events when known; optional in worker→PM
-   * events (ack/progress/ship/block) where the worker may not have it.
-   */
-  project?: string;
-  /** Worker agent ID. */
-  worker: string;
-  /**
-   * PM bot agent ID. Present in delegation events; optional in worker→PM
-   * events (ack/progress/ship/block) since the PM already knows the task.
-   */
-  delegated_by?: string;
-  /** ISO 8601 timestamp of this event. */
-  at: string;
-  /**
-   * Full definition of done — included in delegation events so workers
-   * do not need a DDB round-trip for basic display.
-   */
-  definition_of_done?: string;
-  /**
-   * Free-text description of the feature / work context.
-   * Included in delegation events so workers can open an informed Slack
-   * thread with the requestor without a DDB round-trip.
-   */
-  description?: string;
-  /**
-   * Slack user ID (U…) of the human who requested this feature.
-   * Workers use this to open a Slack thread directly with the requestor
-   * on delegation receipt.
-   */
-  requestor?: string;
-  /**
-   * External tracker link (Linear, Jira, etc.) — included in delegations
-   * so workers can update the tracker without a DDB lookup.
-   */
-  tracker_link?: string;
-  /**
-   * Delegation thread URL — included so workers know where to reply.
-   */
-  delegation_thread?: string;
-  /**
-   * Delegation envelope Slack message TS — needed for `:eyes:` reactions
-   * and threaded replies when Slack is also in use.
-   */
-  delegation_envelope_ts?: string;
-  /** Channel-neutral delivery context for plugin-managed delegations. */
-  delivery_context?: DeliveryContext;
-  /**
-   * Optional free-form reason (used in block events to carry the blocker
-   * summary without requiring a DDB read on the PM side).
-   */
-  reason?: string;
-  /**
-   * Progress message (used in progress events).
-   * Freeform update from the worker to the PM bot mid-task.
-   */
-  message?: string;
-}
-
-// ── Subject helpers ───────────────────────────────────────────────────────────
-
-export function delegationSubject(prefix: string, workerId: string): string {
-  return `${prefix}.delegation.${workerId}`;
-}
-
-export function taskSubject(prefix: string, taskId: string, event: "ack" | "progress" | "ship" | "block"): string {
-  return `${prefix}.task.${taskId}.${event}`;
-}
-
-/** Wildcard subject that matches all task lifecycle events. Used by the PM bot subscriber. */
-export function allTaskEventsSubject(prefix: string): string {
-  return `${prefix}.task.>`;
-}
+import {
+  TaskEventSchema,
+  delegationSubject,
+  taskSubject,
+  allTaskEventsSubject,
+  type TaskEvent,
+  type TaskEventType,
+} from "@continuous-agentics/delegation-core";
 
 // ── Connection factory ────────────────────────────────────────────────────────
 
@@ -243,6 +169,17 @@ export async function subscribeTaskEvents(
   return cleanup;
 }
 
+/**
+ * Validate a versioned task-event envelope without stripping legacy extensions.
+ *
+ * The PM subscriber still supports `lifecycle` on ship events when a task
+ * record cannot be read from DynamoDB.
+ */
+export function validateTaskEventPayload(payload: unknown): TaskEvent {
+  TaskEventSchema.parse(payload);
+  return payload as TaskEvent;
+}
+
 async function driveSubscription(
   sub: Subscription,
   filter: TaskEventType[] | undefined,
@@ -251,7 +188,7 @@ async function driveSubscription(
   for await (const msg of sub) {
     let event: TaskEvent;
     try {
-      event = JSON.parse(sc.decode(msg.data)) as TaskEvent;
+      event = validateTaskEventPayload(JSON.parse(sc.decode(msg.data)));
     } catch (err) {
       log.warn(`[nats] failed to parse message on ${msg.subject}: ${err}`);
       continue;
