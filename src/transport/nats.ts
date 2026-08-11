@@ -177,7 +177,12 @@ async function driveSubscription(
   for await (const msg of sub) {
     let event: TaskEvent;
     try {
-      event = TaskEventSchema.parse(JSON.parse(sc.decode(msg.data)));
+      const payload: unknown = JSON.parse(sc.decode(msg.data));
+      TaskEventSchema.parse(payload);
+      // Validate the versioned envelope while preserving supported legacy
+      // extensions. In particular, FleetMind's ship-event fallback reads an
+      // optional `lifecycle` when the task record is unavailable.
+      event = payload as TaskEvent;
     } catch (err) {
       log.warn(`[nats] failed to parse message on ${msg.subject}: ${err}`);
       continue;
