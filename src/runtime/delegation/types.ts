@@ -1,201 +1,30 @@
 /**
- * FleetMind delegation — shared TypeScript types.
+ * Compatibility facade for FleetMind's versioned delegation contracts.
  *
- * Mirrors the DynamoDB schema defined in docs/protocol.md.
- * Zod schemas validate runtime data at DDB/S3 boundaries.
+ * New code may import these values and types directly from
+ * @continuous-agentics/delegation-core.
  */
-
-import { z } from "zod";
-
-// ── Status enum ──────────────────────────────────────────────────────────────
-
-export const TaskStatusSchema = z.enum([
-  "delegated",
-  "accepted",
-  "shipped",
-  "signed_off",
-  "merged",
-  "blocked",
-  "abandoned",
-]);
-export type TaskStatus = z.infer<typeof TaskStatusSchema>;
-
-// ── Lifecycle ────────────────────────────────────────────────────────────────
-
-export const LifecycleSchema = z.enum([
-  "requires-human-signoff",
-  "shipped-is-done",
-]);
-export type Lifecycle = z.infer<typeof LifecycleSchema>;
-
-// ── Channel-neutral delivery context ───────────────────────────────────────
-
-/**
- * Location and participants for a human-facing delegation conversation.
- *
- * This is intentionally independent of Slack's permalink and timestamp model.
- * The legacy `delegation_thread` / `delegation_envelope_ts` fields remain
- * readable while fleets migrate to this context.
- */
-export const DeliveryContextSchema = z.object({
-  provider: z.string().min(1),
-  accountId: z.string().min(1),
-  conversationId: z.string().min(1),
-  threadId: z.string().min(1).optional(),
-  messageId: z.string().min(1).optional(),
-  actorIds: z.record(z.string(), z.string()).optional(),
-});
-export type DeliveryContext = z.infer<typeof DeliveryContextSchema>;
-
-// ── DynamoDB task record ─────────────────────────────────────────────────────
-
-/**
- * Raw DDB item shape (what DynamoDB returns via lib-dynamodb).
- * All fields use plain JS types — the Document Client unmarshals for us.
- */
-export const TaskRecordSchema = z.object({
-  /** PK: "TASK#<task_id>" */
-  PK: z.string(),
-  /** 8-char lowercase hex */
-  task_id: z.string().regex(/^[0-9a-f]{8}$/),
-  /** Schema version */
-  v: z.string().default("0.2"),
-  /** Project slug */
-  project: z.string(),
-  status: TaskStatusSchema,
-  /** GSI1 hash key: "PROJECT#<slug>#STATUS#<status>" */
-  GSI1PK: z.string(),
-  /** GSI2 hash key: "STATUS#<status>" */
-  GSI2PK: z.string(),
-  /** PM bot identifier (Slack user ID or agent ID) */
-  delegated_by: z.string(),
-  /** Worker bot identifier */
-  worker: z.string(),
-  /** ISO 8601 delegation timestamp */
-  delegated_at: z.string(),
-  accepted_at: z.string().optional(),
-  shipped_at: z.string().optional(),
-  signed_off_at: z.string().optional(),
-  merged_at: z.string().optional(),
-  blocked_at: z.string().optional(),
-  unblocked_at: z.string().optional(),
-  unblocked_reason: z.string().optional(),
-  abandoned_at: z.string().optional(),
-  /** ISO 8601 timestamp of the last nag sent by the PM bot for this task */
-  last_nag_at: z.string().optional(),
-  lifecycle: LifecycleSchema,
-  definition_of_done: z.string(),
-  /** Slack permalink or equivalent coordination-channel URL */
-  /** Slack permalink to the delegation thread. Empty string for NATS-only fleets. */
-  delegation_thread: z.string().default(""),
-  /** Slack TS of the delegation envelope message. Empty string for NATS-only fleets. */
-  delegation_envelope_ts: z.string().default(""),
-  /** Channel-neutral delivery context for new plugin-managed delegations. */
-  delivery_context: DeliveryContextSchema.optional(),
-  tracker_link: z.string().nullable().optional(),
-  /** Optional free-text title for the task (updatable via task update --title) */
-  title: z.string().optional(),
-  /** Optional extended description (updatable via task update --description) */
-  description: z.string().optional(),
-  /**
-   * Slack user ID (U…) of the human who requested this feature.
-   * Used by workers to open a Slack thread with the requestor on delegation receipt.
-   */
-  requestor: z.string().optional(),
-  /** S3 key for the narrative .md — e.g. "v0/projects/my-proj/tasks/2026-01-01-a1b2c3d4.md" */
-  task_s3_key: z.string(),
-  /** TTL epoch seconds */
-  expires_at: z.number(),
-  /** ISO 8601 timestamp of the last metadata update */
-  updated_at: z.string().optional(),
-  /** Agent/user ID who last updated metadata */
-  updated_by: z.string().optional(),
-  /** Bounded history of metadata updates (last 20) */
-  update_history: z
-    .array(
-      z.object({
-        at: z.string(),
-        by: z.string(),
-        reason: z.string().optional(),
-        fields_changed: z.array(z.string()),
-      })
-    )
-    .optional(),
-});
-
-export type TaskRecord = z.infer<typeof TaskRecordSchema>;
-
-// ── GSI key helpers ──────────────────────────────────────────────────────────
-
-export function gsi1pk(project: string, status: TaskStatus): string {
-  return `PROJECT#${project}#STATUS#${status}`;
-}
-
-export function gsi2pk(status: TaskStatus): string {
-  return `STATUS#${status}`;
-}
-
-export function taskPK(taskId: string): string {
-  return `TASK#${taskId}`;
-}
-
-// ── S3 narrative schema ──────────────────────────────────────────────────────
-
-/** s3_key_template parameter substitution context */
-export interface S3KeyContext {
-  project: string;
-  date: string; // YYYY-MM-DD
-  task_id: string;
-}
-
-/**
- * Render the S3 key from a template string.
- * Template tokens: {project}, {date}, {task_id}
- */
-export function renderS3Key(template: string, ctx: S3KeyContext): string {
-  return template
-    .replace("{project}", ctx.project)
-    .replace("{date}", ctx.date)
-    .replace("{task_id}", ctx.task_id);
-}
-
-export const DEFAULT_S3_KEY_TEMPLATE =
-  "v0/projects/{project}/tasks/{date}-{task_id}.md";
-
-// ── PutItem input shape (returned by ddb.buildCreateItem) ────────────────────
-
-export interface CreateTaskInput {
-  task_id: string;
-  project: string;
-  delegated_by: string;
-  worker: string;
-  definition_of_done: string;
-  /** Slack permalink to the delegation thread. Optional for NATS-only fleets. */
-  delegation_thread?: string;
-  /** Slack TS of the delegation envelope message. Optional for NATS-only fleets. */
-  delegation_envelope_ts?: string;
-  /** Channel-neutral delivery context for plugin-managed delegations. */
-  delivery_context?: DeliveryContext;
-  tracker_link?: string | null;
-  lifecycle?: Lifecycle;
-  /** Free-text description of the feature / work context */
-  description?: string;
-  /** Slack user ID (U…) of the human who requested this feature */
-  requestor?: string;
-  /** Override the delegated_at timestamp (defaults to now) */
-  delegated_at?: string;
-  /** S3 key template; defaults to DEFAULT_S3_KEY_TEMPLATE */
-  s3_key_template?: string;
-}
-
-// ── Query result shapes ──────────────────────────────────────────────────────
-
-/** Slim projection of a task for heartbeat / query output */
-export interface TaskSummary {
-  task_id: string;
-  project: string;
-  status: TaskStatus;
-  delegated_at: string;
-  worker: string;
-  task_s3_key: string;
-}
+export {
+  DEFAULT_S3_KEY_TEMPLATE,
+  DeliveryContextSchema,
+  LifecycleSchema,
+  TaskEventSchema,
+  TaskStatusSchema,
+  TaskRecordSchema,
+  allTaskEventsSubject,
+  delegationSubject,
+  gsi1pk,
+  gsi2pk,
+  renderS3Key,
+  taskPK,
+  taskSubject,
+  type CreateTaskInput,
+  type DeliveryContext,
+  type Lifecycle,
+  type S3KeyContext,
+  type TaskEvent,
+  type TaskEventType,
+  type TaskRecord,
+  type TaskStatus,
+  type TaskSummary,
+} from "@continuous-agentics/delegation-core";
