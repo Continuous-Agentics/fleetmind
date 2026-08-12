@@ -275,6 +275,8 @@ function makeFleetYaml(opts: {
     role?: string;
     providers?: string[];
     noProviders?: boolean;
+    botUserId?: string;
+    channelIds?: string[];
   }>;
   /** Whether agents require GitHub access (drives step 5). Default true, which
    *  matches the schema default (every agent gets a GitHub App). Set false to
@@ -308,8 +310,8 @@ delegation:
     .map((a, i) => {
       const id = a.id;
       const displayName = a.name ?? id;
-      const userId = `U${id.replace(/-/g, "").toUpperCase().padEnd(9, "0")}`.slice(0, 10);
-      const channelId = `C${id.replace(/-/g, "").toUpperCase().padEnd(9, "0")}`.slice(0, 10);
+      const userId = a.botUserId ?? `U${id.replace(/-/g, "").toUpperCase().padEnd(9, "0")}`.slice(0, 10);
+      const channelIds = a.channelIds ?? [`C${id.replace(/-/g, "").toUpperCase().padEnd(9, "0")}`.slice(0, 10)];
       const providersYaml = a.noProviders ? "" : `      providers: [${(a.providers ?? ["anthropic"]).join(", ")}]`;
       // github_access defaults to true in the schema, so the step-5 path is
       // exercised without emitting anything. The skip path is exercised by
@@ -327,8 +329,7 @@ ${providersYaml}${githubAppYaml}
           bot_token: "xoxb-placeholder-${i}"
           app_token: "xapp-placeholder-${i}"
           bot_user_id: "${userId}"
-          channels:
-            - "${channelId}"`;
+          channels:${channelIds.length > 0 ? channelIds.map((channelId) => `\n            - "${channelId}"`).join("") : " []"}`;
     })
     .join("\n");
 
@@ -546,6 +547,103 @@ describe("happy path — delegation: false", () => {
     // Verify no unexpected secrets were written (all existing, all skipped)
     const putCalls = smMock.calls.filter(c => c.op === "put");
     assert.equal(putCalls.length, 0, "no SM writes should occur when all secrets exist and override is refused");
+  });
+});
+
+describe("incremental Slack setup", () => {
+  let setup: TestSetup;
+
+  beforeEach(() => {
+    setup = makeTempFleet(makeFleetYaml({
+      fleetName: "incremental-slack",
+      githubApp: false,
+      agents: [
+        { id: "wren", name: "Wren", botUserId: "UWREN00000", channelIds: ["CWREN00000"] },
+        { id: "vesper", name: "Vesper", botUserId: "", channelIds: [] },
+      ],
+    }));
+  });
+
+  afterEach(() => cleanupTempDir(setup.tmpDir));
+
+  test("prompts only newly added agents and discovers only their Slack identity", async () => {
+    const fleetName = "incremental-slack";
+    const ssmMock = makeMockSSM([]);
+    const smMock = makeMockSM({
+      [`${fleetName}/agents/wren/slack`]: JSON.stringify({ SLACK_BOT_TOKEN: "xoxb-wren" }),
+      [`${fleetName}/agents/wren/providers/anthropic`]: JSON.stringify({ ANTHROPIC_API_KEY: "sk-ant-wren" }),
+      [`${fleetName}/agents/vesper/slack`]: JSON.stringify({ SLACK_BOT_TOKEN: "xoxb-vesper" }),
+      [`${fleetName}/agents/vesper/providers/anthropic`]: JSON.stringify({ ANTHROPIC_API_KEY: "sk-ant-vesper" }),
+    });
+    const mock = makeMockPrompter(
+      [
+        true,  // Start onboarding
+        true,  // Discover Vesper's bot_user_id
+        false, // Render
+        false, // Terraform
+        false, // Populate secrets
+        false, // Store GitHub App credentials (step 10)
+        false, // Push fleet
+      ],
+      ["CVESPER0000"],
+      ["xoxb-vesper", "signing-vesper", "xapp-vesper"],
+    );
+    const discoverCalls: Array<{ agent?: string[] }> = [];
+
+    await runOnboard(setup.fleetFile, "us-west-2", {}, {
+      ...makeDeps(mock.prompter, ssmMock.ssm, smMock.sm),
+      discoverSlackBotUserIds: async (options) => {
+        discoverCalls.push({ agent: options.agent });
+        return {
+          agents: [{ agentId: "vesper", status: "discovered", botUserId: "UVESPER000" }],
+          discoveredCount: 1,
+          skippedCount: 0,
+          failedCount: 0,
+        };
+      },
+    });
+
+    const hiddenQuestions = mock.calls.filter((call) => call.type === "hidden").map((call) => call.question);
+    assert.equal(hiddenQuestions.length, 3, "only Vesper's three Slack credentials are requested");
+    assert.ok(hiddenQuestions.every((question) => !question.includes("Wren")));
+    assert.deepEqual(discoverCalls, [{ agent: ["vesper"] }]);
+    assert.match(fs.readFileSync(setup.fleetFile, "utf-8"), /- CVESPER0000/);
+  });
+
+  test("marks Slack setup incomplete when an agent has no channel IDs", async () => {
+    const fleetName = "incremental-slack";
+    fs.writeFileSync(setup.fleetFile, makeFleetYaml({
+      fleetName,
+      githubApp: false,
+      agents: [
+        { id: "wren", name: "Wren", botUserId: "UWREN00000", channelIds: ["CWREN00000"] },
+        { id: "vesper", name: "Vesper", botUserId: "UVESPER000", channelIds: [] },
+      ],
+    }));
+    const ssmMock = makeMockSSM([]);
+    const smMock = makeMockSM({
+      [`${fleetName}/agents/wren/slack`]: JSON.stringify({ SLACK_BOT_TOKEN: "***" }),
+      [`${fleetName}/agents/wren/providers/anthropic`]: JSON.stringify({ ANTHROPIC_API_KEY: "***" }),
+      [`${fleetName}/agents/vesper/slack`]: JSON.stringify({ SLACK_BOT_TOKEN: "***" }),
+      [`${fleetName}/agents/vesper/providers/anthropic`]: JSON.stringify({ ANTHROPIC_API_KEY: "***" }),
+    });
+    const mock = makeMockPrompter(
+      [
+        true,  // Start onboarding
+        false, // Render
+        false, // Terraform
+        false, // Populate secrets
+        false, // Push fleet
+      ],
+      ["CVESPER0000"],
+    );
+
+    await runOnboard(setup.fleetFile, "us-west-2", {}, makeDeps(mock.prompter, ssmMock.ssm, smMock.sm));
+
+    assert.ok(
+      mock.calls.some((call) => call.question === "    Channel IDs: "),
+      "agents with no channel IDs must be prompted during Step 3",
+    );
   });
 });
 
