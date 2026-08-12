@@ -6,6 +6,22 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-08-12
+
+### Added
+
+- Channel-neutral delegation delivery context and routing foundations, preserving authoritative delivery metadata across supported providers.
+- Shared `@continuous-agentics/delegation-core` lifecycle and task-ledger contracts for FleetMind's delegation runtime.
+
+### Changed
+
+- Refactor delegation transport and task handling to consume the shared core while retaining legacy NATS lifecycle compatibility.
+
+### Fixed
+
+- Onboarding now collects Slack credentials and channel IDs per agent, preserving already configured agents during incremental fleet setup.
+- Slack preflight correctly reports agents with no channel IDs as incomplete.
+
 ## [1.1.0] — 2026-08-06
 
 ### Added
