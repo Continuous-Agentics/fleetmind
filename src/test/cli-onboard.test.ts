@@ -609,6 +609,42 @@ describe("incremental Slack setup", () => {
     assert.deepEqual(discoverCalls, [{ agent: ["vesper"] }]);
     assert.match(fs.readFileSync(setup.fleetFile, "utf-8"), /- CVESPER0000/);
   });
+
+  test("marks Slack setup incomplete when an agent has no channel IDs", async () => {
+    const fleetName = "incremental-slack";
+    fs.writeFileSync(setup.fleetFile, makeFleetYaml({
+      fleetName,
+      githubApp: false,
+      agents: [
+        { id: "wren", name: "Wren", botUserId: "UWREN00000", channelIds: ["CWREN00000"] },
+        { id: "vesper", name: "Vesper", botUserId: "UVESPER000", channelIds: [] },
+      ],
+    }));
+    const ssmMock = makeMockSSM([]);
+    const smMock = makeMockSM({
+      [`${fleetName}/agents/wren/slack`]: JSON.stringify({ SLACK_BOT_TOKEN: "***" }),
+      [`${fleetName}/agents/wren/providers/anthropic`]: JSON.stringify({ ANTHROPIC_API_KEY: "***" }),
+      [`${fleetName}/agents/vesper/slack`]: JSON.stringify({ SLACK_BOT_TOKEN: "***" }),
+      [`${fleetName}/agents/vesper/providers/anthropic`]: JSON.stringify({ ANTHROPIC_API_KEY: "***" }),
+    });
+    const mock = makeMockPrompter(
+      [
+        true,  // Start onboarding
+        false, // Render
+        false, // Terraform
+        false, // Populate secrets
+        false, // Push fleet
+      ],
+      ["CVESPER0000"],
+    );
+
+    await runOnboard(setup.fleetFile, "us-west-2", {}, makeDeps(mock.prompter, ssmMock.ssm, smMock.sm));
+
+    assert.ok(
+      mock.calls.some((call) => call.question === "    Channel IDs: "),
+      "agents with no channel IDs must be prompted during Step 3",
+    );
+  });
 });
 
 describe("happy path — delegation: true", () => {

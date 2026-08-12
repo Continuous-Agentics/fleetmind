@@ -845,7 +845,9 @@ export async function runOnboard(
     deps.fs.readdirSync(manifestsDir).some(f => f.endsWith(".yaml"));
 
   const allUserIdsSet = agents.every(a => isRealUserId(slackChannel(a)?.bot_user_id));
-  const allChannelsSet = agents.every(a => (slackChannel(a)?.channels ?? []).every(c => isRealChannelId(c)));
+  const allChannelsSet = agents.every((agent) =>
+    (slackChannel(agent)?.channels ?? []).some(isRealChannelId),
+  );
 
   // Render output: the renderer writes the derived tfvars next to the
   // `workspaces/` infra tfvars directory (a plain directory name, unrelated
