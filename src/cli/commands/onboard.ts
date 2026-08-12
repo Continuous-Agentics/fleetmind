@@ -186,6 +186,8 @@ export interface OnboardDeps {
   ssm: SSMClient;
   /** File-system operations (existsSync / writeFileSync / readdirSync). */
   fs: OnboardFsDeps;
+  /** Resolve Slack bot user IDs after credentials have been collected. */
+  discoverSlackBotUserIds?: typeof discoverSlackBotUserIds;
   /** Push fleet to S3 + trigger pull-self on instances. */
   pushFleet?: typeof runPushFleet;
   /** Terraform backend checks/creates + command runner. */
@@ -232,6 +234,7 @@ export function createDefaultDeps(region?: string): OnboardDeps {
       readdirSync: (p) => fs.readdirSync(p) as string[],
     },
     terraform: createTerraformDeps(s3, dynamodb, sts),
+    discoverSlackBotUserIds,
     pushFleet: runPushFleet,
     provisionFleet,
     writeOutputs,
@@ -913,47 +916,53 @@ export async function runOnboard(
   }
 
   // ── Step 3: Collect Slack credentials ──────────────────────────────────────
-  const needsCreds = agents.some(a => !isRealUserId(slackChannel(a)?.bot_user_id));
-  if (needsCreds) {
+  // Setup is incremental: adding one agent must never ask an operator to
+  // re-enter credentials for agents that already have a resolved Slack identity.
+  const agentsNeedingSlackCredentials = agents.filter(
+    (agent) => !isRealUserId(slackChannel(agent)?.bot_user_id),
+  );
+  const agentsNeedingChannelIds = agents.filter(
+    (agent) => !(slackChannel(agent)?.channels ?? []).some(isRealChannelId),
+  );
+  if (agentsNeedingSlackCredentials.length > 0 || agentsNeedingChannelIds.length > 0) {
     header("Step 3 / 12 — Create Slack Apps + Collect Credentials");
-    console.log("  For each agent, create a Slack app from its manifest:");
-    console.log(`  → Open ${manifestsDir}`);
-    console.log("  → Go to https://api.slack.com/apps → Create New App → From a manifest");
-    console.log("  → Paste the YAML, install to workspace, capture credentials\n");
 
-    for (const agent of agents) {
-      console.log(`\x1b[1m  Agent: ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
-      const botToken = await deps.prompter.hiddenPrompt(`    Bot Token (xoxb-...): `);
-      const signingSecret = await deps.prompter.hiddenPrompt(`    Signing Secret:       `);
-      const appToken = await deps.prompter.hiddenPrompt(`    App Token (xapp-...): `);
-      slackCreds[agent.id] = { botToken, signingSecret, appToken };
-      console.log();
-    }
+    if (agentsNeedingSlackCredentials.length > 0) {
+      console.log("  For each unconfigured agent, create a Slack app from its manifest:");
+      console.log(`  → Open ${manifestsDir}`);
+      console.log("  → Go to https://api.slack.com/apps → Create New App → From a manifest");
+      console.log("  → Paste the YAML, install to workspace, capture credentials\n");
 
-    // Channel IDs
-    console.log("  Now invite each bot to its Slack channels and copy the channel IDs.\n");
-    const channelUpdates = new Map<string, string[]>();
-
-    for (const agent of agents) {
-      const existing = (slackChannel(agent)?.channels ?? []).filter(c => isRealChannelId(c));
-      if (existing.length > 0) {
-        log.ok(`    ${agent.name}: channels already set (${existing.join(", ")})`);
-        continue;
-      }
-      console.log(`\x1b[1m  ${agent.emoji} ${agent.name} — channel IDs\x1b[0m`);
-      console.log("    (comma-separated, format: C0123456789)");
-      const channelInput = await deps.prompter.prompt("    Channel IDs: ");
-      const channelIds = channelInput.split(",").map(c => c.trim()).filter(Boolean);
-      if (channelIds.length > 0) {
-        channelUpdates.set(agent.id, channelIds);
+      for (const agent of agentsNeedingSlackCredentials) {
+        console.log(`\x1b[1m  Agent: ${agent.emoji} ${agent.name} (${agent.id})\x1b[0m`);
+        const botToken = await deps.prompter.hiddenPrompt(`    Bot Token (xoxb-...): `);
+        const signingSecret = await deps.prompter.hiddenPrompt(`    Signing Secret:       `);
+        const appToken = await deps.prompter.hiddenPrompt(`    App Token (xapp-...): `);
+        slackCreds[agent.id] = { botToken, signingSecret, appToken };
+        console.log();
       }
     }
 
-    if (channelUpdates.size > 0) {
-      // Write channel IDs into each agent's slack channel entry via the yaml
-      // document API (preserves comments; targets the v2 nested channels list).
-      writeSlackChannelIds(fleetFile, channelUpdates, (p, content) => deps.fs.writeFileSync(p, content, "utf-8"));
-      log.ok("  fleet.yaml updated with channel IDs");
+    if (agentsNeedingChannelIds.length > 0) {
+      console.log("  Now invite each unconfigured bot to its Slack channels and copy the channel IDs.\n");
+      const channelUpdates = new Map<string, string[]>();
+
+      for (const agent of agentsNeedingChannelIds) {
+        console.log(`\x1b[1m  ${agent.emoji} ${agent.name} — channel IDs\x1b[0m`);
+        console.log("    (comma-separated, format: C0123456789)");
+        const channelInput = await deps.prompter.prompt("    Channel IDs: ");
+        const channelIds = channelInput.split(",").map(c => c.trim()).filter(Boolean);
+        if (channelIds.length > 0) {
+          channelUpdates.set(agent.id, channelIds);
+        }
+      }
+
+      if (channelUpdates.size > 0) {
+        // Write channel IDs into each agent's slack channel entry via the yaml
+        // document API (preserves comments; targets the v2 nested channels list).
+        writeSlackChannelIds(fleetFile, channelUpdates, (p, content) => deps.fs.writeFileSync(p, content, "utf-8"));
+        log.ok("  fleet.yaml updated with channel IDs");
+      }
     }
   } else {
     log.ok("Step 3: Slack apps already configured — skipping credential collection");
@@ -961,7 +970,7 @@ export async function runOnboard(
   }
 
   // ── Step 4: Discover bot_user_ids ───────────────────────────────────────────
-  if (!allUserIdsSet) {
+  if (agentsNeedingSlackCredentials.length > 0) {
     header("Step 4 / 12 — Discover bot_user_ids");
     console.log("  Calls Slack auth.test using the tokens entered in step 3.");
     if (await deps.prompter.confirm("  Run fleetmind slack discover?")) {
@@ -974,7 +983,15 @@ export async function runOnboard(
         toClean.push(key);
       }
       try {
-        await discoverSlackBotUserIds({ fleet: fleetFile, region, interactive: false, dryRun: false, force: false });
+        const discoverFn = deps.discoverSlackBotUserIds ?? discoverSlackBotUserIds;
+        await discoverFn({
+          fleet: fleetFile,
+          region,
+          agent: agentsNeedingSlackCredentials.map((agent) => agent.id),
+          interactive: false,
+          dryRun: false,
+          force: false,
+        });
         log.ok("  bot_user_ids written to fleet.yaml");
       } finally {
         // Clean up env vars — don't leave tokens in process.env
