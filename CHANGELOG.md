@@ -6,6 +6,12 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-08-20
+
+### Fixed
+
+- Persist a structured Slack delivery context from delegation permalinks when creating tasks, allowing terminal PM wakes to survive gateway restarts.
+
 ## [1.2.0] — 2026-08-12
 
 ### Added
