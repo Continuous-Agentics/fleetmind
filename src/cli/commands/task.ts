@@ -26,6 +26,8 @@ import type { DeliveryContext, TaskRecord } from "../../runtime/delegation/types
 import type { DelegationFleetConfig } from "../../config/schema.js";
 import { publishTaskEvent, type TaskEvent } from "../../transport/nats.js";
 import { log } from "../../utils/log.js";
+import { slackDeliveryContextFromPermalink } from "../../runtime/delegation/delivery.js";
+import type { Fleet } from "../../config/loader.js";
 
 // ── NATS helper ────────────────────────────────────────────────────────────
 
@@ -236,6 +238,21 @@ function output(data: unknown, jsonMode: boolean): void {
 
 function generateTaskId(): string {
   return randomBytes(4).toString("hex");
+}
+
+/** Persist a Slack delivery context only when the configured PM account is unambiguous. */
+export function deliveryContextForTaskCreate(fleet: Fleet, thread?: string): DeliveryContext | undefined {
+  if (!thread) return undefined;
+  const channelMatch = thread.match(/^https:\/\/[^/]+\/archives\/([A-Z0-9]+)\/p\d{7,}/);
+  if (!channelMatch) return undefined;
+  const pm = fleet.agents.list.find((agent) => agent.orchestrator);
+  const slackAccounts = pm?.channels
+    .filter((channel) => channel.provider === "slack")
+    .filter((channel) => channel.channels.includes(channelMatch[1]!))
+    .map((channel) => channel.account_id) ?? [];
+  const uniqueAccounts = [...new Set(slackAccounts)];
+  if (uniqueAccounts.length !== 1) return undefined;
+  return slackDeliveryContextFromPermalink(thread, uniqueAccounts[0]!);
 }
 
 function handleError(err: unknown): never {
@@ -459,7 +476,8 @@ Examples:
       const fleet = resolveAndLoadFleet(opts.fleet);
       const ledger = makeLedger(fleet);
       try {
-        const record = await createTask(opts, ledger);
+        const deliveryContext = opts.deliveryContext ?? deliveryContextForTaskCreate(fleet, opts.thread);
+        const record = await createTask({ ...opts, deliveryContext }, ledger);
         output(
           opts.json
             ? record

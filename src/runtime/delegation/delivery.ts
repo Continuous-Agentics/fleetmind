@@ -13,6 +13,23 @@ export interface SlackThreadTarget {
   threadId: string;
 }
 
+/** Parse a Slack permalink into a routable context when the owning account is known. */
+export function slackDeliveryContextFromPermalink(url: string, accountId: string): DeliveryContext | undefined {
+  const match = url.match(/^https:\/\/[^/]+\/archives\/([A-Z0-9]+)\/p(\d{7,})(?:\?([^#]+))?$/);
+  if (!match) return undefined;
+  const compactTimestamp = match[2]!;
+  const messageId = `${compactTimestamp.slice(0, -6)}.${compactTimestamp.slice(-6)}`;
+  const threadTs = new URLSearchParams(match[3] ?? "").get("thread_ts") ?? messageId;
+  if (!/^\d+\.\d{6}$/.test(threadTs)) return undefined;
+  return {
+    provider: "slack",
+    accountId,
+    conversationId: match[1]!,
+    threadId: threadTs,
+    messageId,
+  };
+}
+
 /**
  * Read the pre-plugin Slack permalink stored in v0.2 task records.
  *
