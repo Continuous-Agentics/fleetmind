@@ -14,6 +14,7 @@
  */
 
 import { z } from "zod";
+import { AwsAccessCatalog, AwsAgentAccess, AwsRoleArn } from "./aws-access.js";
 import {
   FleetNameSchema,
   AgentIdSchema,
@@ -296,6 +297,7 @@ export const AgentSchema = z.object({
   github_app: GitHubAppConfigSchema.optional(),
   /** Explicit desired-state Apps. `project: {}` preserves its legacy namespace. */
   github_apps: AgentGitHubAppsSchema.optional(),
+  aws_access: AwsAgentAccess.optional(),
 }).superRefine((agent, ctx) => {
   if (agent.github_apps && (agent.github_access !== undefined || agent.github_app_aliases !== undefined)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["github_apps"], message:
@@ -359,7 +361,13 @@ export const AgentDefaultsSchema = z.object({
 
 export const AgentsConfigSchema = z.object({
   defaults: AgentDefaultsSchema.default({}),
-  list: z.array(AgentSchema),
+  list: z.array(AgentSchema).superRefine((agents, ctx) => {
+    const seen = new Set<string>();
+    agents.forEach((agent, index) => {
+      if (seen.has(agent.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [index, "id"], message: "Duplicate agent ID" });
+      seen.add(agent.id);
+    });
+  }),
 });
 
 // ── Targets (runtime hosts) ──────────────────────────────────────────────────
@@ -378,6 +386,9 @@ export const AwsSsmTargetSchema = z.object({
   ...TargetCommonSchema,
   aws: z.object({
     region: z.string(),
+    /** Independent host binding required by aws-access sync, including revocation. */
+    account_id: z.string().regex(/^[0-9]{12}$/).optional(),
+    workload_role_arn: AwsRoleArn.optional(),
     /** Linux account that owns the OpenClaw user-systemd services on this
      * target. Set `ec2-user` for existing pre-user-systemd hosts during a
      * migration; new FleetMind AWS hosts use `openclaw`. */
@@ -554,6 +565,7 @@ export const FleetMetaSchema = z.object({
 
 export const FleetSchema = z.object({
   fleet: FleetMetaSchema,
+  aws_access: AwsAccessCatalog.optional(),
   delegation: DelegationFleetSchema.optional(),
   /** Runtime hosts, keyed by id. Agents reference these via `target`. */
   targets: TargetsSchema,

@@ -46,11 +46,12 @@ module "fleetmind" {
   source = "./modules/fleetmind"
 
   # ── Derived from fleet.yaml via `fleetmind render` ──────────────────────────
-  fleet_name          = var.fleet_name
-  agent_names         = var.agent_names
-  agent_orchestrators = var.agent_orchestrators
-  agent_providers     = var.agent_providers
-  agent_github_apps   = var.agent_github_apps
+  fleet_name             = var.fleet_name
+  agent_names            = var.agent_names
+  agent_orchestrators    = var.agent_orchestrators
+  agent_providers        = var.agent_providers
+  agent_github_apps      = var.agent_github_apps
+  agent_aws_access_roles = var.agent_aws_access_roles
 
   # ── Operator-owned infrastructure knobs ─────────────────────────────────────
   aws_region                  = var.aws_region

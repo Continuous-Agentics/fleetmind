@@ -250,3 +250,9 @@ variable "nats_rollout_trigger" {
   type        = string
   default     = ""
 }
+
+variable "agent_aws_access_roles" {
+  description = "Exact application role ARNs per agent; independent host IAM extension."
+  type        = map(set(string))
+  default     = {}
+}
