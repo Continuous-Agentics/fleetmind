@@ -27,6 +27,10 @@ function trustedDirectory(directory: string, uid: number): void {
   const stat = fs.lstatSync(directory);
   if (!stat.isDirectory() || stat.uid !== uid || (stat.mode & 0o022)) throw new Error("Untrusted host identity directory");
 }
+function syncDirectory(directory: string): void {
+  const fd = fs.openSync(directory, fs.constants.O_RDONLY);
+  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+}
 function trustedRead(file: string, uid: number): string {
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
@@ -75,7 +79,12 @@ export async function publishAccess(catalog: RuntimeAwsAccessConfig | null, inpu
     trustedDirectory(directory, uid);
     verifyHostFile(directory, uid, host);
     if (!body) {
-      try { fs.unlinkSync(destination); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      try { fs.unlinkSync(destination); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return "removed";
+        throw error;
+      }
+      syncDirectory(directory);
       return "removed";
     }
     try {
@@ -85,11 +94,12 @@ export async function publishAccess(catalog: RuntimeAwsAccessConfig | null, inpu
     try { fs.writeFileSync(fd, body); fs.fchmodSync(fd, 0o644); fs.fsyncSync(fd); }
     finally { fs.closeSync(fd); }
     fs.renameSync(temporary, destination);
-    const directoryFd = fs.openSync(directory, fs.constants.O_RDONLY);
-    try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+    syncDirectory(directory);
     return "published";
   } finally {
-    try { fs.unlinkSync(temporary); } catch { /* Renamed/already removed. */ }
-    fs.rmdirSync(lock);
+    try {
+      try { fs.unlinkSync(temporary); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    } finally { fs.rmdirSync(lock); }
   }
 }
