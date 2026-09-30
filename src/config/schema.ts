@@ -14,6 +14,7 @@
  */
 
 import { z } from "zod";
+import { AwsAccessCatalog, AwsAgentAccess } from "./aws-access.js";
 import {
   FleetNameSchema,
   AgentIdSchema,
@@ -296,6 +297,7 @@ export const AgentSchema = z.object({
   github_app: GitHubAppConfigSchema.optional(),
   /** Explicit desired-state Apps. `project: {}` preserves its legacy namespace. */
   github_apps: AgentGitHubAppsSchema.optional(),
+  aws_access: AwsAgentAccess.optional(),
 }).superRefine((agent, ctx) => {
   if (agent.github_apps && (agent.github_access !== undefined || agent.github_app_aliases !== undefined)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["github_apps"], message:
@@ -554,6 +556,7 @@ export const FleetMetaSchema = z.object({
 
 export const FleetSchema = z.object({
   fleet: FleetMetaSchema,
+  aws_access: AwsAccessCatalog.optional(),
   delegation: DelegationFleetSchema.optional(),
   /** Runtime hosts, keyed by id. Agents reference these via `target`. */
   targets: TargetsSchema,

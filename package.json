@@ -69,7 +69,8 @@
     "nats": "^2.29.3",
     "simple-git": "^3.25.0",
     "yaml": "^2.9.0",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "@smithy/credential-provider-imds": "^4.5.0"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
@@ -94,7 +95,8 @@
     "nats",
     "simple-git",
     "yaml",
-    "zod"
+    "zod",
+    "@smithy/credential-provider-imds"
   ],
   "bundleDependencies": [
     "@aws-sdk/client-dynamodb",
@@ -112,6 +114,7 @@
     "nats",
     "simple-git",
     "yaml",
-    "zod"
+    "zod",
+    "@smithy/credential-provider-imds"
   ]
 }

@@ -162,12 +162,18 @@ export function normalizeFleet(input: FleetFile): FleetModel {
   // problems so the operator sees them in one pass.
   const errors: string[] = [];
   for (const agent of data.agents.list) {
+    for (const alias of agent.aws_access?.targets ?? []) {
+      if (!Object.hasOwn(data.aws_access ?? {}, alias)) errors.push(`Agent "${agent.id}" has unknown AWS access grant "${alias}".`);
+    }
     let targetId: TargetId;
     try {
       targetId = resolveAgentTargetId(agent, data);
     } catch (e) {
       errors.push((e as Error).message);
       continue;
+    }
+    if (agent.aws_access && targetMap.get(targetId)?.provider !== "aws-ssm") {
+      errors.push(`Agent "${agent.id}" AWS access requires an aws-ssm host (IMDS workload identity).`);
     }
     if (!targetMap.has(targetId)) {
       errors.push(
