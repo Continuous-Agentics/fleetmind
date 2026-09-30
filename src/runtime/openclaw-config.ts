@@ -7,6 +7,38 @@ export const TESTED_OPENCLAW_VERSION = "2026.9.5";
 type Json = Record<string, any>;
 const object = (v: unknown): v is Json => v !== null && typeof v === "object" && !Array.isArray(v);
 
+export type ConfigSource = "incoming" | "live" | "base";
+/** Never surface parser/fs diagnostics: malformed config can contain secrets. */
+export function readOpenClawConfig(file: string, source: ConfigSource): Json {
+  try {
+    const value: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!object(value)) throw new Error();
+    // Guard the structures traversed by normalization/merge. The target CLI
+    // remains authoritative for the full schema and plugin contract.
+    const cfg = value;
+    for (const key of ["agents", "channels"]) if (key in cfg && !object(cfg[key])) throw new Error();
+    if (cfg.bindings !== undefined && (!Array.isArray(cfg.bindings) || cfg.bindings.some((b: unknown) => !object(b) || !object(b.match)))) throw new Error();
+    const agents = cfg.agents;
+    if (agents) {
+      if (agents.list !== undefined && (!Array.isArray(agents.list) || agents.list.some((a: unknown) => !object(a)))) throw new Error();
+      if (agents.entries !== undefined && (!object(agents.entries) || Object.values(agents.entries).some((a) => !object(a)))) throw new Error();
+      if (agents.defaults !== undefined && !object(agents.defaults)) throw new Error();
+    }
+    return cfg;
+  } catch {
+    throw new Error(`Cannot read ${source} OpenClaw config: expected a readable JSON object with valid config structure; repair that source and retry (contents withheld)`);
+  }
+}
+
+/** Snapshot the normalized input before any validation callback/subprocess. */
+export function freezeIncomingConfig(file: string): Json {
+  const freeze = (value: any): any => {
+    if (value && typeof value === "object") { Object.values(value).forEach(freeze); Object.freeze(value); }
+    return value;
+  };
+  return freeze(normalizeOpenClawConfig(readOpenClawConfig(file, "incoming")));
+}
+
 /** Normalize FleetMind's historical roster only. Ambiguous/include-based legacy
  * ownership must be repaired by OpenClaw/operator, never guessed here. */
 export function normalizeOpenClawConfig(input: Json): Json {
@@ -87,6 +119,57 @@ function merge(base: any, live: any, incoming: any): any {
   return structuredClone(live);
 }
 
+// Only these per-agent values belong wholly to the fleet. In particular model
+// primary/fallbacks form one billing/routing policy unit, not a leaf-level patch.
+const FLEET_AGENT_FIELDS = ["name", "workspace", "agentDir", "model"] as const;
+const routingConflict = () => new Error("OpenClaw binding ownership conflict: a fleet-managed match was changed/deleted, or an operator match collides with incoming routing. Reconcile fleet.yaml and live bindings to the same route/removal, then retry (binding values withheld)");
+const stable = (v: any): any => Array.isArray(v) ? v.map(stable) : object(v)
+  ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, stable(v[k])])) : v;
+const sameRoute = (a: any, b: any) => JSON.stringify(stable(a)) === JSON.stringify(stable(b));
+/** Match identity follows the tested target's routing normalizations. This is
+ * ownership comparison, not a substitute for the target CLI schema validator. */
+function routeKey(route: Json): string {
+  const match = route.match ?? {};
+  const text = (v: any) => String(v ?? "").trim();
+  const rawAccount = text(match.accountId);
+  const account = rawAccount === "*" ? "*" : rawAccount.toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+  const kind = text(match.peer?.kind).toLowerCase();
+  return JSON.stringify(stable({
+    channel: text(match.channel).toLowerCase(),
+    accountId: !account || ["__proto__", "prototype", "constructor"].includes(account) ? "default" : account,
+    peer: match.peer ? { kind: kind === "channel" ? "group" : kind === "dm" ? "direct" : kind, id: text(match.peer.id) } : null,
+    guildId: text(match.guildId), teamId: text(match.teamId),
+    roles: Array.isArray(match.roles) ? [...new Set(match.roles)].sort() : [],
+  }));
+}
+function routeMap(routes: Json[]): Map<string, Json> {
+  const out = new Map<string, Json>();
+  for (const route of routes) {
+    // Omitted accountId and "default" have the same match semantics. Type is
+    // deliberately not a discriminator: route/acp cannot silently shadow each other.
+    const key = routeKey(route);
+    if (out.has(key)) throw routingConflict();
+    out.set(key, route);
+  }
+  return out;
+}
+function mergeBindings(base: Json[], live: Json[], incoming: Json[]): Json[] {
+  const b = routeMap(base), l = routeMap(live), n = routeMap(incoming);
+  for (const [key, route] of b) {
+    if (!sameRoute(route, l.get(key)) && !sameRoute(l.get(key), n.get(key))) throw routingConflict();
+  }
+  for (const [key, route] of l) {
+    if (!b.has(key) && n.has(key) && !sameRoute(route, n.get(key))) throw routingConflict();
+  }
+  // Fleet-owned matches follow incoming (including removals); unmanaged live
+  // routes retain their relative order. Distinct narrower matches keep their tier.
+  return [...incoming, ...live.filter((route) => {
+    const key = routeKey(route);
+    return !b.has(key) && !n.has(key);
+  })];
+}
+
 export function mergeCanonicalConfigs(incomingRaw: Json, liveRaw?: Json, baseRaw?: Json): Json {
   const incoming = normalizeOpenClawConfig(incomingRaw);
   if (!liveRaw) return incoming;
@@ -101,16 +184,18 @@ export function mergeCanonicalConfigs(incomingRaw: Json, liveRaw?: Json, baseRaw
     if (!Object.hasOwn(incoming.agents?.entries ?? {}, id)) delete result.agents.entries[id];
   }
   for (const [id, fields] of Object.entries(incoming.agents?.entries ?? {})) {
+    const entry = { ...result.agents.entries[id] };
+    for (const field of FLEET_AGENT_FIELDS) {
+      if (Object.hasOwn(fields as Json, field)) entry[field] = structuredClone((fields as Json)[field]);
+      else if (Object.hasOwn(base.agents?.entries?.[id] ?? {}, field)) delete entry[field];
+    }
     Object.defineProperty(result.agents.entries, id, {
-      value: { ...result.agents.entries[id], ...(fields as Json) }, enumerable: true, writable: true, configurable: true,
+      value: entry, enumerable: true, writable: true, configurable: true,
     });
   }
   if (incoming.agents?.ownership) result.agents.ownership = incoming.agents.ownership;
-  // Replace only bindings shipped in the previous baseline; retain unmanaged routing.
-  if (incoming.bindings) {
-    const old = new Set((base.bindings ?? []).map((b: Json) => JSON.stringify(b)));
-    const routes = [...incoming.bindings, ...(live.bindings ?? []).filter((b: Json) => !old.has(JSON.stringify(b)))];
-    result.bindings = [...new Map(routes.map((b: Json) => [JSON.stringify(b), b])).values()];
+  if (incoming.bindings !== undefined || base.bindings !== undefined || live.bindings !== undefined) {
+    result.bindings = mergeBindings(base.bindings ?? [], live.bindings ?? [], incoming.bindings ?? []);
   }
   if (JSON.stringify(result) !== JSON.stringify(incoming)) result._patched = true;
   return result;
@@ -152,8 +237,15 @@ export function publishOpenClawConfig(destination: string, config: Json,
   const candidate = path.join(path.dirname(destination), `.fleetmind-config-${randomUUID()}.json`);
   try {
     const clean = { ...config }; delete clean._patched;
-    fs.writeFileSync(candidate, JSON.stringify(clean, null, 2), { mode: 0o600, flag: "wx" });
+    const expected = Buffer.from(JSON.stringify(clean, null, 2));
+    fs.writeFileSync(candidate, expected, { mode: 0o600, flag: "wx" });
+    const identity = fs.lstatSync(candidate);
     validate(candidate);
+    const after = fs.lstatSync(candidate);
+    if (!after.isFile() || after.ino !== identity.ino || after.dev !== identity.dev ||
+        (after.mode & 0o777) !== 0o600 || !fs.readFileSync(candidate).equals(expected)) {
+      throw new Error("Config candidate changed during validation; retry with an unchanged candidate");
+    }
     const current = fs.existsSync(destination) ? fs.readFileSync(destination) : undefined;
     if ((fs.existsSync(destination) && fs.lstatSync(destination).isSymbolicLink()) ||
         (previous ? !current?.equals(previous) : current !== undefined)) {

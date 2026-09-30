@@ -38,7 +38,7 @@ import { serviceManagerFor } from "../../deploy/service.js";
 import { log } from "../../utils/log.js";
 import { applyWorkspacePatches } from "../../runtime/patch-engine.js";
 
-import { mergeCanonicalConfigs, publishOpenClawConfig, normalizeOpenClawConfig, type ConfigValidator } from "../../runtime/openclaw-config.js";
+import { mergeCanonicalConfigs, publishOpenClawConfig, freezeIncomingConfig, readOpenClawConfig, type ConfigValidator } from "../../runtime/openclaw-config.js";
 
 export { ManifestFile, DeployManifest };
 
@@ -659,12 +659,26 @@ export function verifyTarball(tarballPath: string, expectedSha256: string): void
   }
 }
 
-/** Normalize all merge inputs before comparing operator changes. */
-export function mergeOpenClawConfig(incomingPath: string, livePath: string, configDir: string): Record<string, unknown> {
-  const read = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
+/** Normalize/read incoming once so validation cannot replace its baseline. */
+export function prepareOpenClawConfig(incomingPath: string, livePath: string, configDir: string) {
+  const incoming = freezeIncomingConfig(incomingPath);
   const basePath = path.join(configDir, "openclaw.base.json");
-  return mergeCanonicalConfigs(read(incomingPath), fs.existsSync(livePath) ? read(livePath) : undefined,
-    fs.existsSync(basePath) ? read(basePath) : undefined);
+  const candidate = mergeCanonicalConfigs(incoming,
+    fs.existsSync(livePath) ? readOpenClawConfig(livePath, "live") : undefined,
+    fs.existsSync(basePath) ? readOpenClawConfig(basePath, "base") : undefined);
+  return { incoming, candidate };
+}
+
+export function mergeOpenClawConfig(incomingPath: string, livePath: string, configDir: string): Record<string, unknown> {
+  return prepareOpenClawConfig(incomingPath, livePath, configDir).candidate;
+}
+
+/** One invocation owns its archive and extraction root, including failures. */
+export function createPullStaging() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "fleetmind-pull-"));
+  const stagingDir = path.join(root, "staging");
+  fs.mkdirSync(stagingDir);
+  return { root, stagingDir, tarballPath: path.join(root, "archive.tar.gz") };
 }
 
 /**
@@ -720,10 +734,10 @@ export function applyDiff(
       (files.some((f) => f.path === baselineRel) && fs.existsSync(path.join(stagingDir, configRel)))) {
     const source = path.join(stagingDir, configRel);
     const destination = path.join(configDir, "openclaw.json");
-    publishOpenClawConfig(destination, mergeOpenClawConfig(source, destination, configDir), validateConfig);
-    // Baseline always matches the config just published, never an independently supplied snapshot.
-    const baseline = normalizeOpenClawConfig(JSON.parse(fs.readFileSync(source, "utf8")));
-    publishOpenClawConfig(path.join(configDir, "openclaw.base.json"), baseline, () => {});
+    const prepared = prepareOpenClawConfig(source, destination, configDir);
+    publishOpenClawConfig(destination, prepared.candidate, validateConfig);
+    // Frozen input that produced this candidate, never a postvalidation reread.
+    publishOpenClawConfig(path.join(configDir, "openclaw.base.json"), prepared.incoming, () => {});
   } else if (files.some((f) => f.path === baselineRel)) {
     throw new Error("Refusing baseline-only update without its config candidate");
   }
@@ -979,35 +993,23 @@ export async function runPullSelf(
   // Step 6: Download tarball
   log.step("Downloading tarball...");
   const tarballBuf = await fetchArtifact(keys.tarball);
-  const tmpBase = os.tmpdir();
-  const tarballPath = path.join(tmpBase, `${agentId}.tar.gz`);
-  fs.writeFileSync(tarballPath, tarballBuf);
-
-  // Step 7: Verify tarball hash
-  log.step("Verifying tarball integrity...");
-  verifyTarball(tarballPath, incomingManifest.tarball.sha256);
-  log.ok(`  sha256 verified`);
-
-  // Step 8: Extract to staging dir
-  const stagingDir = path.join(tmpBase, `fleetmind-pull-staging-${agentId}`);
-  if (fs.existsSync(stagingDir)) fs.rmSync(stagingDir, { recursive: true });
-  fs.mkdirSync(stagingDir, { recursive: true });
-
-  log.step("Extracting tarball...");
-  execFileSync("tar", ["xzf", tarballPath, "-C", stagingDir], { stdio: "pipe" });
-
-  // Show per-file diffs if --show-diffs
-  if (opts.showDiffs && diff.modified.length > 0) {
-    showFileDiffs(stagingDir, workspaceDir, diff.modified, opts.showDiffsFilter, opts.showDiffsFull, configDir);
+  const { root: pullRoot, stagingDir, tarballPath } = createPullStaging();
+  try {
+    fs.writeFileSync(tarballPath, tarballBuf, { mode: 0o600 });
+    // Step 7: Verify the private archive before extraction.
+    log.step("Verifying tarball integrity...");
+    verifyTarball(tarballPath, incomingManifest.tarball.sha256);
+    log.ok(`  sha256 verified`);
+    log.step("Extracting tarball...");
+    execFileSync("tar", ["xzf", tarballPath, "-C", stagingDir], { stdio: "pipe" });
+    if (opts.showDiffs && diff.modified.length > 0) {
+      showFileDiffs(stagingDir, workspaceDir, diff.modified, opts.showDiffsFilter, opts.showDiffsFull, configDir);
+    }
+    log.step("Applying changes...");
+    applyChangesImpl(stagingDir, workspaceDir, diff, configDir);
+  } finally {
+    fs.rmSync(pullRoot, { recursive: true, force: true });
   }
-
-  // Step 9: Apply diff
-  log.step("Applying changes...");
-  applyChangesImpl(stagingDir, workspaceDir, diff, configDir);
-
-  // Cleanup
-  fs.rmSync(stagingDir, { recursive: true, force: true });
-  fs.unlinkSync(tarballPath);
 
   const appliedCount = diff.added.length + diff.modified.length + diff.deleted.length;
   log.success(`\n✓ Applied ${appliedCount} change${appliedCount !== 1 ? "s" : ""} to ${workspaceDir}`);

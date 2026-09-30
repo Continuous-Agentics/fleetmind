@@ -30,7 +30,7 @@ import { renderHostOpenClawJson, agentsForTarget } from "../../runtime/renderer.
 import { provisionFleet } from "../../runtime/provisioner.js";
 import { materializeHostEnv } from "./populate.js";
 import { log } from "../../utils/log.js";
-import { mergeCanonicalConfigs, publishOpenClawConfig, type ConfigValidator } from "../../runtime/openclaw-config.js";
+import { mergeCanonicalConfigs, publishOpenClawConfig, readOpenClawConfig, type ConfigValidator } from "../../runtime/openclaw-config.js";
 
 /**
  * The single `local` target a `fleetmind up` runs against. Errors loudly when
@@ -81,12 +81,13 @@ async function stageWorkspaces(
 
 /** Merge/validate before publication. The baseline is FleetMind-owned, not an
  * OpenClaw requirement; existing local auth and operator policy stay intact. */
-function writeOpenClawConfig(fleet: Fleet, targetId: string, openclawHome: string, validate?: ConfigValidator): void {
+export function writeOpenClawConfig(fleet: Fleet, targetId: string, openclawHome: string, validate?: ConfigValidator): void {
   const configPath = path.join(openclawHome, "openclaw.json");
   const basePath = path.join(openclawHome, "openclaw.base.json");
-  const read = (file: string) => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : undefined;
   const incoming = renderHostOpenClawJson(fleet, targetId);
-  publishOpenClawConfig(configPath, mergeCanonicalConfigs(incoming, read(configPath), read(basePath)), validate);
+  publishOpenClawConfig(configPath, mergeCanonicalConfigs(incoming,
+    fs.existsSync(configPath) ? readOpenClawConfig(configPath, "live") : undefined,
+    fs.existsSync(basePath) ? readOpenClawConfig(basePath, "base") : undefined), validate);
   publishOpenClawConfig(basePath, incoming, () => {});
   log.ok(`config → ${configPath}`);
 }

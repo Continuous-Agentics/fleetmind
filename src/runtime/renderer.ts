@@ -56,7 +56,7 @@ function buildModelsMap(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-/** Required bundled provider IDs. Unknown/custom providers must declare their
+/** Known owning provider plugin IDs (bundled or external). Unknown/custom providers must declare their
  * plugin explicitly: provider IDs are not generally plugin IDs. */
 const PROVIDER_PLUGINS: Record<string, string> = {
   anthropic: "anthropic", openai: "openai", google: "google",
@@ -755,6 +755,7 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
   }
 
   const selfEntry = {
+    id: agent.id,
     name: agent.name,
     emoji: agent.emoji,
     role: agent.role,
