@@ -144,26 +144,26 @@ export function renderAgentOpenClawJson(
     model: modelConfig(agent.model ?? defaults.model, agentFallbacks(agent, defaults)),
   };
 
-  // Bindings — only this agent's binding
-  const bindings = [
+  // Only an authored Slack channel creates a route/account.
+  const bindings = slack ? [
     {
       agentId: agent.id,
       match: {
         channel: "slack",
-        accountId: slack?.account_id,
+        accountId: slack.account_id,
       },
     },
-  ];
+  ] : [];
 
   // Slack accounts — only this agent's account (no groupPolicy here; it lives at top level)
-  const slackAccounts: Record<string, unknown> = {
-    [slack?.account_id ?? agent.id]: {
+  const slackAccounts: Record<string, unknown> = slack ? {
+    [slack.account_id]: {
       enabled: true,
-      botToken: slack?.bot_token,
-      appToken: slack?.app_token,
-      webhookPath: `/slack/${slack?.account_id}`,
+      botToken: slack.bot_token,
+      appToken: slack.app_token,
+      webhookPath: `/slack/${slack.account_id}`,
     },
-  };
+  } : {};
 
   // Per-channel config — derive inter-bot users allowlists
   // For each channel this agent operates in, find all OTHER agents that share it
@@ -216,7 +216,7 @@ export function renderAgentOpenClawJson(
   for (const plugin of [...agentPlugins].sort()) {
     pluginEntries[plugin] = { enabled: true };
   }
-  pluginEntries["slack"] = { enabled: true };
+  if (slack) pluginEntries["slack"] = { enabled: true };
   // Webhooks plugin — NATS subscriber wake endpoint.
   // The NATS subscriber POSTs create_flow to /plugins/webhooks/nats-wake with
   // Authorization: Bearer ${OPENCLAW_HOOKS_TOKEN}. The gateway validates it
@@ -286,7 +286,7 @@ export function renderAgentOpenClawJson(
       visibleReplies: "automatic",
       groupChat: { visibleReplies: "automatic" },
     },
-    channels: {
+    channels: slack ? {
       slack: {
         mode: oc.slack.mode,
         enabled: true,
@@ -305,7 +305,7 @@ export function renderAgentOpenClawJson(
         accounts: slackAccounts,
         ...(Object.keys(perChannelEntries).length > 0 ? { channels: perChannelEntries } : {}),
       },
-    },
+    } : {},
     gateway: {
       port: oc.gateway.port,
       mode: oc.gateway.mode,
@@ -390,24 +390,22 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
     };
   });
 
-  // Bindings: one per agent, matched on Slack accountId
-  const bindings = hostAgents.map((agent) => ({
-    agentId: agent.id,
-    match: {
-      channel: "slack",
-      accountId: slackChannel(agent)?.account_id,
-    },
-  }));
+  // Bindings: only agents with an authored Slack channel have a route.
+  const bindings = hostAgents.flatMap((agent) => {
+    const slack = slackChannel(agent);
+    return slack ? [{ agentId: agent.id, match: { channel: "slack", accountId: slack.account_id } }] : [];
+  });
 
   // Slack accounts (no per-account groupPolicy; lives at top level as "allowlist")
   const slackAccounts: Record<string, unknown> = {};
   for (const agent of hostAgents) {
     const slack = slackChannel(agent);
-    slackAccounts[slack?.account_id ?? agent.id] = {
+    if (!slack) continue;
+    slackAccounts[slack.account_id] = {
       enabled: true,
-      botToken: slack?.bot_token,
-      appToken: slack?.app_token,
-      webhookPath: `/slack/${slack?.account_id}`,
+      botToken: slack.bot_token,
+      appToken: slack.app_token,
+      webhookPath: `/slack/${slack.account_id}`,
     };
   }
 
@@ -432,7 +430,7 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
     pluginEntries[plugin] = { enabled: true };
   }
 
-  pluginEntries["slack"] = { enabled: true };
+  if (bindings.length) pluginEntries["slack"] = { enabled: true };
   const modelsMap = buildModelsMap(hostAgents, defaults);
   const owner = hostAgents.find((a) => a.orchestrator)?.id;
   return {
@@ -467,7 +465,7 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
       visibleReplies: "automatic",
       groupChat: { visibleReplies: "automatic" },
     },
-    channels: {
+    channels: bindings.length ? {
       slack: {
         mode: oc.slack.mode,
         enabled: true,
@@ -485,7 +483,7 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
         },
         accounts: slackAccounts,
       },
-    },
+    } : {},
     gateway: {
       port: oc.gateway.port,
       mode: oc.gateway.mode,

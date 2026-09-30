@@ -43,7 +43,7 @@ describe("current OpenClaw contract", () => {
     assert.equal(c.auth, undefined, "renderer must not pretend profile metadata provisions credentials");
     assert.ok(!JSON.stringify(c).includes("OPENAI_API_KEY"), "provider secrets are not rendered inline");
     assert.equal(c.agents.defaults.systemAgent.agentId, "alpha");
-    assert.deepEqual(c.bindings.map((b: any) => b.agentId), ["alpha", "beta"]);
+    assert.deepEqual(c.bindings, [], "channel-less agents have no authored route");
   });
 
   it("legacy base + migrated live + current incoming migrate twice without losing unmanaged leaves", () => {
