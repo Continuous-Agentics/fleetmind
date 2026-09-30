@@ -10,8 +10,14 @@ const object = (v: unknown): v is Json => v !== null && typeof v === "object" &&
 export type ConfigSource = "incoming" | "live" | "base";
 /** Never surface parser/fs diagnostics: malformed config can contain secrets. */
 export function readOpenClawConfig(file: string, source: ConfigSource): Json {
+  return readOpenClawSnapshot(file, source).config;
+}
+
+/** Parse the exact bytes retained for optimistic publication, never a second read. */
+export function readOpenClawSnapshot(file: string, source: ConfigSource): { config: Json; bytes: Buffer } {
   try {
-    const value: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    const bytes = fs.readFileSync(file);
+    const value: unknown = JSON.parse(bytes.toString("utf8"));
     if (!object(value)) throw new Error();
     // Guard the structures traversed by normalization/merge. The target CLI
     // remains authoritative for the full schema and plugin contract.
@@ -24,7 +30,7 @@ export function readOpenClawConfig(file: string, source: ConfigSource): Json {
       if (agents.entries !== undefined && (!object(agents.entries) || Object.values(agents.entries).some((a) => !object(a)))) throw new Error();
       if (agents.defaults !== undefined && !object(agents.defaults)) throw new Error();
     }
-    return cfg;
+    return { config: cfg, bytes };
   } catch {
     throw new Error(`Cannot read ${source} OpenClaw config: expected a readable JSON object with valid config structure; repair that source and retry (contents withheld)`);
   }
@@ -65,7 +71,7 @@ export function normalizeOpenClawConfig(input: Json): Json {
     const { id, default: retired, ...rest } = entry;
     Object.defineProperty(entries, id, { value: rest, enumerable: true, writable: true, configurable: true });
   }
-  if (agents.entries && JSON.stringify(agents.entries) !== JSON.stringify(entries)) {
+  if (agents.entries && !sameStructure(agents.entries, entries)) {
     throw new Error("Conflicting legacy and canonical agent rosters; reconcile with OpenClaw first");
   }
   const marked = agents.list.filter((a: Json) => a.default === true);
@@ -125,7 +131,7 @@ const FLEET_AGENT_FIELDS = ["name", "workspace", "agentDir", "model"] as const;
 const routingConflict = () => new Error("OpenClaw binding ownership conflict: a fleet-managed match was changed/deleted, or an operator match collides with incoming routing. Reconcile fleet.yaml and live bindings to the same route/removal, then retry (binding values withheld)");
 const stable = (v: any): any => Array.isArray(v) ? v.map(stable) : object(v)
   ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, stable(v[k])])) : v;
-const sameRoute = (a: any, b: any) => JSON.stringify(stable(a)) === JSON.stringify(stable(b));
+const sameStructure = (a: any, b: any) => JSON.stringify(stable(a)) === JSON.stringify(stable(b));
 /** Match identity follows the tested target's routing normalizations. This is
  * ownership comparison, not a substitute for the target CLI schema validator. */
 function routeKey(route: Json): string {
@@ -157,10 +163,10 @@ function routeMap(routes: Json[]): Map<string, Json> {
 function mergeBindings(base: Json[], live: Json[], incoming: Json[]): Json[] {
   const b = routeMap(base), l = routeMap(live), n = routeMap(incoming);
   for (const [key, route] of b) {
-    if (!sameRoute(route, l.get(key)) && !sameRoute(l.get(key), n.get(key))) throw routingConflict();
+    if (!sameStructure(route, l.get(key)) && !sameStructure(l.get(key), n.get(key))) throw routingConflict();
   }
   for (const [key, route] of l) {
-    if (!b.has(key) && n.has(key) && !sameRoute(route, n.get(key))) throw routingConflict();
+    if (!b.has(key) && n.has(key) && !sameStructure(route, n.get(key))) throw routingConflict();
   }
   // Fleet-owned matches follow incoming (including removals); unmanaged live
   // routes retain their relative order. Distinct narrower matches keep their tier.
@@ -230,27 +236,41 @@ export function validateOpenClawCandidate(candidatePath: string): void {
 export type ConfigValidator = (candidatePath: string) => void;
 /** Exclusive private sibling + rename. Candidate failure never changes live bytes. */
 export function publishOpenClawConfig(destination: string, config: Json,
-  validate: ConfigValidator = validateOpenClawCandidate): void {
+  validate: ConfigValidator = validateOpenClawCandidate, expectedLive?: Buffer | null): void {
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   if (fs.existsSync(destination) && fs.lstatSync(destination).isSymbolicLink()) throw new Error("Refusing symlink config");
-  const previous = fs.existsSync(destination) ? fs.readFileSync(destination) : undefined;
+  // Merge callers supply their exact source bytes (null means originally absent).
+  // Unmerged writes, such as the baseline, snapshot at publication entry.
+  const previous = expectedLive === undefined ? readDestination() : expectedLive;
+  function readDestination(): Buffer | null {
+    try {
+      if (!fs.existsSync(destination)) return null;
+      if (fs.lstatSync(destination).isSymbolicLink()) throw new Error();
+      return fs.readFileSync(destination);
+    } catch {
+      throw new Error("Cannot read publication destination safely (contents withheld)");
+    }
+  }
+  function assertUnchanged(phase: string): void {
+    const current = readDestination();
+    if (previous === null ? current !== null : !current?.equals(previous)) {
+      throw new Error(`Config changed ${phase}; retry from the current live file`);
+    }
+  }
   const candidate = path.join(path.dirname(destination), `.fleetmind-config-${randomUUID()}.json`);
   try {
     const clean = { ...config }; delete clean._patched;
     const expected = Buffer.from(JSON.stringify(clean, null, 2));
     fs.writeFileSync(candidate, expected, { mode: 0o600, flag: "wx" });
     const identity = fs.lstatSync(candidate);
+    assertUnchanged("before validation");
     validate(candidate);
     const after = fs.lstatSync(candidate);
     if (!after.isFile() || after.ino !== identity.ino || after.dev !== identity.dev ||
         (after.mode & 0o777) !== 0o600 || !fs.readFileSync(candidate).equals(expected)) {
       throw new Error("Config candidate changed during validation; retry with an unchanged candidate");
     }
-    const current = fs.existsSync(destination) ? fs.readFileSync(destination) : undefined;
-    if ((fs.existsSync(destination) && fs.lstatSync(destination).isSymbolicLink()) ||
-        (previous ? !current?.equals(previous) : current !== undefined)) {
-      throw new Error("Config changed during validation; retry from the current live file");
-    }
+    assertUnchanged("during validation");
     fs.renameSync(candidate, destination);
   } finally { fs.rmSync(candidate, { force: true }); }
 }

@@ -30,7 +30,7 @@ import { renderHostOpenClawJson, agentsForTarget } from "../../runtime/renderer.
 import { provisionFleet } from "../../runtime/provisioner.js";
 import { materializeHostEnv } from "./populate.js";
 import { log } from "../../utils/log.js";
-import { mergeCanonicalConfigs, publishOpenClawConfig, readOpenClawConfig, type ConfigValidator } from "../../runtime/openclaw-config.js";
+import { mergeCanonicalConfigs, publishOpenClawConfig, readOpenClawConfig, readOpenClawSnapshot, type ConfigValidator } from "../../runtime/openclaw-config.js";
 
 /**
  * The single `local` target a `fleetmind up` runs against. Errors loudly when
@@ -85,9 +85,9 @@ export function writeOpenClawConfig(fleet: Fleet, targetId: string, openclawHome
   const configPath = path.join(openclawHome, "openclaw.json");
   const basePath = path.join(openclawHome, "openclaw.base.json");
   const incoming = renderHostOpenClawJson(fleet, targetId);
-  publishOpenClawConfig(configPath, mergeCanonicalConfigs(incoming,
-    fs.existsSync(configPath) ? readOpenClawConfig(configPath, "live") : undefined,
-    fs.existsSync(basePath) ? readOpenClawConfig(basePath, "base") : undefined), validate);
+  const live = fs.existsSync(configPath) ? readOpenClawSnapshot(configPath, "live") : undefined;
+  publishOpenClawConfig(configPath, mergeCanonicalConfigs(incoming, live?.config,
+    fs.existsSync(basePath) ? readOpenClawConfig(basePath, "base") : undefined), validate, live?.bytes ?? null);
   publishOpenClawConfig(basePath, incoming, () => {});
   log.ok(`config → ${configPath}`);
 }
@@ -143,6 +143,13 @@ export async function runUp(opts: UpOptions): Promise<void> {
   );
   if (opts.dryRun) log.warn("Dry run — no files written, daemon untouched.\n");
 
+  // A real CLI invocation requires OpenClaw even with --no-daemon: config
+  // validation happens before any writes. Dry runs need no installed runtime.
+  if (!opts.dryRun && !opts.validateConfig && !onPath("openclaw")) {
+    throw new Error("`openclaw` not found on PATH. Install it, then re-run `fleetmind up`:\n" +
+      "  npm install -g openclaw@2026.9.5   # Node 24.16+ (24.x) or 26.1+, safe SQLite");
+  }
+
   // 1. Workspaces → <standard-workspace-base>/<id>
   // Staging follows candidate validation below: an unsupported runtime must not
   // modify config, env or workspaces.
@@ -165,12 +172,6 @@ export async function runUp(opts: UpOptions): Promise<void> {
   if (!opts.daemon) {
     log.info("Config staged. Start the gateway daemon with:");
     log.info("  openclaw onboard --install-daemon   # then: openclaw gateway status");
-    return;
-  }
-  if (!onPath("openclaw")) {
-    log.warn("`openclaw` not found on PATH. Install it, then re-run `fleetmind up`:");
-    log.info("  npm install -g openclaw@2026.9.5   # Node 24.16+ (24.x) or 26.1+, safe SQLite");
-    if (!onPath("node")) log.info("  (Node is also missing — install Node first, e.g. `brew install node`)");
     return;
   }
   log.info("Delegating daemon install to OpenClaw (`openclaw onboard --install-daemon`)…");

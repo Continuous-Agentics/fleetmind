@@ -38,7 +38,7 @@ import { serviceManagerFor } from "../../deploy/service.js";
 import { log } from "../../utils/log.js";
 import { applyWorkspacePatches } from "../../runtime/patch-engine.js";
 
-import { mergeCanonicalConfigs, publishOpenClawConfig, freezeIncomingConfig, readOpenClawConfig, type ConfigValidator } from "../../runtime/openclaw-config.js";
+import { mergeCanonicalConfigs, publishOpenClawConfig, freezeIncomingConfig, readOpenClawConfig, readOpenClawSnapshot, type ConfigValidator } from "../../runtime/openclaw-config.js";
 
 export { ManifestFile, DeployManifest };
 
@@ -663,10 +663,10 @@ export function verifyTarball(tarballPath: string, expectedSha256: string): void
 export function prepareOpenClawConfig(incomingPath: string, livePath: string, configDir: string) {
   const incoming = freezeIncomingConfig(incomingPath);
   const basePath = path.join(configDir, "openclaw.base.json");
-  const candidate = mergeCanonicalConfigs(incoming,
-    fs.existsSync(livePath) ? readOpenClawConfig(livePath, "live") : undefined,
+  const live = fs.existsSync(livePath) ? readOpenClawSnapshot(livePath, "live") : undefined;
+  const candidate = mergeCanonicalConfigs(incoming, live?.config,
     fs.existsSync(basePath) ? readOpenClawConfig(basePath, "base") : undefined);
-  return { incoming, candidate };
+  return { incoming, candidate, liveBytes: live?.bytes ?? null };
 }
 
 export function mergeOpenClawConfig(incomingPath: string, livePath: string, configDir: string): Record<string, unknown> {
@@ -735,7 +735,7 @@ export function applyDiff(
     const source = path.join(stagingDir, configRel);
     const destination = path.join(configDir, "openclaw.json");
     const prepared = prepareOpenClawConfig(source, destination, configDir);
-    publishOpenClawConfig(destination, prepared.candidate, validateConfig);
+    publishOpenClawConfig(destination, prepared.candidate, validateConfig, prepared.liveBytes);
     // Frozen input that produced this candidate, never a postvalidation reread.
     publishOpenClawConfig(path.join(configDir, "openclaw.base.json"), prepared.incoming, () => {});
   } else if (files.some((f) => f.path === baselineRel)) {
