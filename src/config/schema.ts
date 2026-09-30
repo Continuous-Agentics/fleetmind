@@ -14,7 +14,7 @@
  */
 
 import { z } from "zod";
-import { AwsAccessCatalog, AwsAgentAccess } from "./aws-access.js";
+import { AwsAccessCatalog, AwsAgentAccess, AwsRoleArn } from "./aws-access.js";
 import {
   FleetNameSchema,
   AgentIdSchema,
@@ -361,7 +361,13 @@ export const AgentDefaultsSchema = z.object({
 
 export const AgentsConfigSchema = z.object({
   defaults: AgentDefaultsSchema.default({}),
-  list: z.array(AgentSchema),
+  list: z.array(AgentSchema).superRefine((agents, ctx) => {
+    const seen = new Set<string>();
+    agents.forEach((agent, index) => {
+      if (seen.has(agent.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [index, "id"], message: "Duplicate agent ID" });
+      seen.add(agent.id);
+    });
+  }),
 });
 
 // ── Targets (runtime hosts) ──────────────────────────────────────────────────
@@ -380,6 +386,9 @@ export const AwsSsmTargetSchema = z.object({
   ...TargetCommonSchema,
   aws: z.object({
     region: z.string(),
+    /** Independent host binding required by aws-access sync, including revocation. */
+    account_id: z.string().regex(/^[0-9]{12}$/).optional(),
+    workload_role_arn: AwsRoleArn.optional(),
     /** Linux account that owns the OpenClaw user-systemd services on this
      * target. Set `ec2-user` for existing pre-user-systemd hosts during a
      * migration; new FleetMind AWS hosts use `openclaw`. */

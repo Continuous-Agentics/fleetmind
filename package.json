@@ -55,12 +55,16 @@
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1037.0",
+    "@aws-sdk/client-ec2": "^3.1061.0",
+    "@aws-sdk/client-iam": "^3.1061.0",
     "@aws-sdk/client-s3": "^3.1037.0",
     "@aws-sdk/client-secrets-manager": "^3.1045.0",
     "@aws-sdk/client-ssm": "^3.1045.0",
     "@aws-sdk/client-sts": "^3.1061.0",
+    "@aws-sdk/credential-provider-node": "^3.972.79",
     "@aws-sdk/lib-dynamodb": "^3.1037.0",
     "@continuous-agentics/delegation-core": "0.1.2",
+    "@smithy/credential-provider-imds": "^4.5.0",
     "@smithy/node-http-handler": "^4.6.1",
     "chalk": "^5.3.0",
     "clawhub": "^0.16.0",
@@ -69,8 +73,7 @@
     "nats": "^2.29.3",
     "simple-git": "^3.25.0",
     "yaml": "^2.9.0",
-    "zod": "^3.23.8",
-    "@smithy/credential-provider-imds": "^4.5.0"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
@@ -96,7 +99,10 @@
     "simple-git",
     "yaml",
     "zod",
-    "@smithy/credential-provider-imds"
+    "@smithy/credential-provider-imds",
+    "@aws-sdk/client-ec2",
+    "@aws-sdk/client-iam",
+    "@aws-sdk/credential-provider-node"
   ],
   "bundleDependencies": [
     "@aws-sdk/client-dynamodb",
@@ -115,6 +121,9 @@
     "simple-git",
     "yaml",
     "zod",
-    "@smithy/credential-provider-imds"
+    "@smithy/credential-provider-imds",
+    "@aws-sdk/client-ec2",
+    "@aws-sdk/client-iam",
+    "@aws-sdk/credential-provider-node"
   ]
 }

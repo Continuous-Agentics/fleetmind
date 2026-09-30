@@ -8,6 +8,13 @@ change NATS, or switch the credentials of FleetMind's host services.
 ## Declare access
 
 ```yaml
+targets:
+  agent-host:
+    provider: aws-ssm
+    aws:
+      region: us-west-2
+      account_id: '111111111111'
+      workload_role_arn: arn:aws:iam::111111111111:role/myfleet-worker-role
 aws_access:
   orders-staging-read:
     app: orders
@@ -36,7 +43,7 @@ agents:
 ```
 
 Only commercial AWS IAM role ARNs are supported initially. Account mismatch,
-wildcards, duplicate grants, and unknown aliases fail validation. AWS access is
+wildcards, duplicate agent IDs/grants, and unknown aliases fail validation. AWS access is
 opt-in; configurations without it retain their previous rendering and behavior.
 This implementation requires an `aws-ssm` host with IMDSv2. The explicit source ARN
 must match that host's assigned workload role, including the exact account. It is
@@ -79,16 +86,34 @@ After review and explicit infrastructure authorization:
 3. Apply source policies and have each app administrator provision target trust
    and permissions through their independently authorized workflow.
 4. Preview `fleetmind aws-access sync --fleet fleet.yaml --agent worker --dry-run`.
-   Then submit without `--dry-run`. This uses the existing SSM resolver/runner,
-   as root, to atomically publish `/etc/fleetmind/aws-access.json`. Only that
+   Then submit without `--dry-run`. This command resolves operator credentials
+   once, verifies their account against the independent target `aws.account_id`,
+   discovers all SSM match pages and requires exactly one EC2 host. It verifies
+   EC2 account/tags and the IAM instance profile's exact `aws.workload_role_arn`
+   before submitting root publication. These two target fields are mandatory for
+   sync, **including removal**; keep them when deleting the `aws_access` block.
+   Use a separate named target per distinct workload role. Legacy configurations
+   remain valid for other commands but cannot use sync without this binding.
+   The operator needs STS identity, SSM discovery/submission, EC2 DescribeInstances,
+   and IAM GetInstanceProfile permissions; this change grants none automatically.
+   Root publication checks trusted `/etc/fleetmind/agent.env` fleet/agent metadata
+   and independently verifies the IMDS workload identity before modifying
+   `/etc/fleetmind/aws-access.json`. Catalog contents cannot authorize themselves.
+   Only that
    agent's allowed targets are sent; the full catalog and peer grants are not
    put in its workspace slice. There is no runtime path/env override for this
    file. It is root-owned, readable, and not agent-writable; all ancestors are
-   checked. An identical sync leaves the file unchanged. Removing the agent's
+   checked. An identical sync leaves its inode unchanged. A bounded root-owned directory
+   lock serializes publication, with complete same-directory atomic replacement.
+   A crashed publication can leave `.aws-access.lock`; sync then fails closed until
+   an operator verifies no publisher is active and removes the stale lock.
+   Removing the agent's
    `aws_access` block and syncing removes the catalog.
 5. Sync reports an SSM **submission ID**, not success. Inspect command completion
    using your normal SSM operator workflow. The host checks exact CLI version
-   against the operator before publication. Module tag matching is an operator
+   against the operator **and** the `fleetmind-aws-access-sync-v2` capability before
+   publication; version `1.2.1` alone is insufficient. Publish an appropriately new
+   same-tag runtime/module release before rollout. Module tag matching is an operator
    invariant (the runtime cannot inspect the consumer's Terraform source tag).
    Neither sync nor task execution restarts OpenClaw or modifies sessions,
    memory, workspaces, service environment or OpenClaw config.
@@ -113,7 +138,10 @@ verifies target account, role and generated session identity. Unknown targets,
 credential errors, expired credentials, wrong identities and grants changed
 during authorization fail closed **before the task starts**. SDK IMDS stale
 credential extensions are rejected using original expiration. There is no
-default credential chain and no host/operator fallback.
+default credential chain and no host/operator fallback. STS request timeouts throw
+rather than warn; a total 30-second authorization deadline covers source lookup,
+STS requests, retries and response consumption, destroys clients, and prevents
+child start on timeout. Operator sync has a separate 60-second total deadline.
 
 The child receives temporary credentials only in its own environment. No
 credential files, `credential_process` output, profile switching or tokens in

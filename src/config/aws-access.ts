@@ -30,3 +30,15 @@ export const RuntimeAwsAccess = z.object({
 }).strict();
 export type RuntimeAwsAccessConfig = z.infer<typeof RuntimeAwsAccess>;
 export type AwsAccessTargetConfig = z.infer<typeof AwsAccessTarget>;
+
+/** Host authority is operator-owned target configuration, independent of grants. */
+export const AwsAccessHost = z.object({
+  fleet: AwsAccessAlias,
+  agent: AwsAccessAlias,
+  account_id: z.string().regex(/^[0-9]{12}$/),
+  role_arn: AwsRoleArn,
+  region: z.string().regex(/^[a-z]{2}-[a-z]+-[0-9]+$/),
+}).strict().superRefine((host, ctx) => {
+  if (host.role_arn.split(":")[4] !== host.account_id) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Host role/account mismatch" });
+});
+export type AwsAccessHostConfig = z.infer<typeof AwsAccessHost>;

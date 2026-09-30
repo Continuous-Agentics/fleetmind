@@ -155,6 +155,9 @@ function applyNatsDefault(data: FleetFile): FleetFile {
 
 /** Validate and wrap a parsed fleet file. */
 export function normalizeFleet(input: FleetFile): FleetModel {
+  if (new Set(input.agents.list.map(a => a.id)).size !== input.agents.list.length) {
+    throw new Error("Duplicate agent ID");
+  }
   const data = applyNatsDefault(input);
   const targetMap = buildTargetMap(data);
 

@@ -1,13 +1,23 @@
 import { Command } from "commander";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadFleet } from "../../config/loader.js";
 import { cleanAccessEnvironment } from "../../runtime/aws-access.js";
-import { agentAccessCatalog, accessSyncCommand } from "../../deploy/aws-access.js";
-import { transportFor } from "../../deploy/factory.js";
+import { agentAccessCatalog, agentAccessHost, accessSyncCommand } from "../../deploy/aws-access.js";
+import { syncAccess } from "../../deploy/aws-access-sync.js";
+import { ACCESS_CAPABILITY } from "../../runtime/aws-access-publication.js";
 
 export function registerAwsAccess(program: Command): void {
   const access = program.command("aws-access").description("Explicit scoped application-account tasks (not host-service credentials)");
+  access.command("capability").description("Print installed catalog publication capability")
+    .action(() => { console.log(ACCESS_CAPABILITY); });
+  access.command("publish <payload>", { hidden: true }).action((payload: string) => {
+    if (process.getuid?.() !== 0) throw new Error("Catalog publication requires root");
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL("../../runtime/aws-access-publication-entry.js", import.meta.url)), payload], {
+      env: cleanAccessEnvironment(process.env), stdio: "inherit", shell: false,
+    });
+    process.exitCode = result.status ?? 1;
+  });
   access.command("exec <target> <command...>")
     .description("Run a command under an allowed target role; use -- before the command")
     .action(async (target: string, command: string[]) => {
@@ -36,12 +46,11 @@ export function registerAwsAccess(program: Command): void {
         for (const agent of fleet.agents.list.filter(a => !opts.agent || a.id === opts.agent)) {
           const host = fleet.targetForAgent(agent);
           if (host.provider !== "aws-ssm") continue;
-          const command = accessSyncCommand(agentAccessCatalog(fleet, agent.id), program.version()!);
+          const binding = agentAccessHost(fleet, agent.id);
+          const catalog = agentAccessCatalog(fleet, agent.id);
+          const command = accessSyncCommand(catalog, program.version()!, binding);
           if (opts.dryRun) { console.log(`# ${agent.id}\n${command}`); continue; }
-          const { resolver, runner } = transportFor("aws-ssm", { fleetName: fleet.fleet.name, region: host.aws.region });
-          const instance = await resolver.resolveHost(agent.id);
-          if (!instance) throw new Error(`No host found for ${agent.id}`);
-          const id = await runner.run(instance, [command]);
+          const id = await syncAccess(binding, catalog, program.version()!);
           console.log(`${agent.id}: catalog sync submitted ${id} (verify SSM command completion; submission is not success)`);
         }
       } catch (err) { console.error(String(err)); process.exitCode = 1; }

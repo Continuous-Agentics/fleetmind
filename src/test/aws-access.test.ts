@@ -160,12 +160,14 @@ test("actual child execution gets isolated credentials; failure cannot spawn; ex
   assert.equal(await executeTask([process.execPath, "-e", "setTimeout(() => {}, 5000)"], { ...creds, expiration: new Date(Date.now() + 30_300) }, "us-west-2"), 124);
 });
 
-test("sync has root-owned atomic no-op publication and revocation, no workspace authority", () => {
-  const command = accessSyncCommand(agentAccessCatalog(fleet(), "worker"), "1.2.1");
-  for (const text of ["cmp -s", "mktemp /etc/fleetmind", "mv -fT", "chmod 0644", "fleetmind --version", "chown root:root"]) assert.ok(command.includes(text));
+test("sync has independent binding, capability and clean root publication", () => {
+  const host = { fleet: "fleet", agent: "worker", account_id: "111111111111", role_arn: sourceRole, region: "us-west-2" };
+  const command = accessSyncCommand(agentAccessCatalog(fleet(), "worker"), "1.2.1", host);
+  for (const text of ["fleetmind aws-access capability", "fleetmind-aws-access-sync-v2", "fleetmind aws-access publish", "env -i", "fleetmind --version"]) assert.ok(command.includes(text));
   for (const text of ["workspace", "systemctl", "restart", "user_data"]) assert.ok(!command.includes(text));
-  assert.ok(accessSyncCommand(null, "1.2.1").includes("rm -f /etc/fleetmind/aws-access.json"));
-  assert.throws(() => accessSyncCommand(null, "latest"));
+  assert.ok(accessSyncCommand(null, "1.2.1", host).includes("aws-access publish"));
+  assert.throws(() => accessSyncCommand(null, "latest", host));
+  assert.throws(() => accessSyncCommand(agentAccessCatalog(fleet(), "worker"), "1.2.1", { ...host, agent: "peer" }));
 });
 
 test("static IAM nonreplacement regression: access touches independent exact-role policy only", () => {
