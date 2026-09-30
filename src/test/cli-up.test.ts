@@ -98,12 +98,12 @@ agents:
       skills: []
 `.trimStart());
 
-    await runUp({ fleet: fleetPath, dryRun: false, daemon: false, openclawHome: ochome });
+    await runUp({ fleet: fleetPath, dryRun: false, daemon: false, validateConfig: () => {}, openclawHome: ochome });
 
     // openclaw.json: workspace points to the fixed standard workspace
     // base (~/.openclaw/workspace); secrets stay as ${VAR}.
     const cfg = JSON.parse(fs.readFileSync(path.join(ochome, "openclaw.json"), "utf-8"));
-    assert.equal(cfg.agents.list[0].workspace, ws);
+    assert.equal(cfg.agents.entries.solo.workspace, ws);
     assert.equal(cfg.channels.slack.accounts.solo.botToken, "${SOLO_BOT_TOKEN}");
 
     // .env: 0600, values resolved (incl. the derived ANTHROPIC_API_KEY).

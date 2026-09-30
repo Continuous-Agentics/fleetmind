@@ -30,6 +30,7 @@ import { renderHostOpenClawJson, agentsForTarget } from "../../runtime/renderer.
 import { provisionFleet } from "../../runtime/provisioner.js";
 import { materializeHostEnv } from "./populate.js";
 import { log } from "../../utils/log.js";
+import { mergeCanonicalConfigs, publishOpenClawConfig, readOpenClawConfig, readOpenClawSnapshot, type ConfigValidator } from "../../runtime/openclaw-config.js";
 
 /**
  * The single `local` target a `fleetmind up` runs against. Errors loudly when
@@ -78,19 +79,16 @@ async function stageWorkspaces(
   }
 }
 
-/** Write the host's openclaw.json (+ openclaw.base.json, which OpenClaw requires
- *  as a baseline), backing up any existing config first. */
-function writeOpenClawConfig(fleet: Fleet, targetId: string, openclawHome: string): void {
-  fs.mkdirSync(openclawHome, { recursive: true });
+/** Merge/validate before publication. The baseline is FleetMind-owned, not an
+ * OpenClaw requirement; existing local auth and operator policy stay intact. */
+export function writeOpenClawConfig(fleet: Fleet, targetId: string, openclawHome: string, validate?: ConfigValidator): void {
   const configPath = path.join(openclawHome, "openclaw.json");
-  if (fs.existsSync(configPath)) {
-    const backup = `${configPath}.bak-${Date.now()}`;
-    fs.copyFileSync(configPath, backup);
-    log.dim(`backed up existing config → ${backup}`);
-  }
-  const json = JSON.stringify(renderHostOpenClawJson(fleet, targetId), null, 2);
-  fs.writeFileSync(configPath, json);
-  fs.writeFileSync(path.join(openclawHome, "openclaw.base.json"), json);
+  const basePath = path.join(openclawHome, "openclaw.base.json");
+  const incoming = renderHostOpenClawJson(fleet, targetId);
+  const live = fs.existsSync(configPath) ? readOpenClawSnapshot(configPath, "live") : undefined;
+  publishOpenClawConfig(configPath, mergeCanonicalConfigs(incoming, live?.config,
+    fs.existsSync(basePath) ? readOpenClawConfig(basePath, "base") : undefined), validate, live?.bytes ?? null);
+  publishOpenClawConfig(basePath, incoming, () => {});
   log.ok(`config → ${configPath}`);
 }
 
@@ -121,6 +119,8 @@ export interface UpOptions {
   daemon: boolean;
   /** Override the OpenClaw home (defaults to ~/.openclaw). Mainly for tests. */
   openclawHome?: string;
+  /** Unit-test seam; CLI always uses target OpenClaw validation. */
+  validateConfig?: ConfigValidator;
 }
 
 export async function runUp(opts: UpOptions): Promise<void> {
@@ -143,8 +143,16 @@ export async function runUp(opts: UpOptions): Promise<void> {
   );
   if (opts.dryRun) log.warn("Dry run — no files written, daemon untouched.\n");
 
+  // A real CLI invocation requires OpenClaw even with --no-daemon: config
+  // validation happens before any writes. Dry runs need no installed runtime.
+  if (!opts.dryRun && !opts.validateConfig && !onPath("openclaw")) {
+    throw new Error("`openclaw` not found on PATH. Install it, then re-run `fleetmind up`:\n" +
+      "  npm install -g openclaw@2026.9.5   # Node 24.16+ (24.x) or 26.1+, safe SQLite");
+  }
+
   // 1. Workspaces → <standard-workspace-base>/<id>
-  await stageWorkspaces(fleet, hostAgents.map((a) => a.id), workspaceBase, opts.dryRun);
+  // Staging follows candidate validation below: an unsupported runtime must not
+  // modify config, env or workspaces.
 
   // 2 + 3. Config + secrets (skipped on dry-run)
   const { vars, missing } = materializeHostEnv(fleet, target.id, process.env as Record<string, string>);
@@ -152,22 +160,18 @@ export async function runUp(opts: UpOptions): Promise<void> {
     log.warn(`Unresolved secrets (set via \`fleetmind secrets set\` or env): ${missing.join(", ")}`);
   }
   if (!opts.dryRun) {
-    writeOpenClawConfig(fleet, target.id, openclawHome);
+    writeOpenClawConfig(fleet, target.id, openclawHome, opts.validateConfig);
     const envPath = writeEnvFile(vars, openclawHome);
     log.ok(`secrets → ${envPath} (${Object.keys(vars).length} var${Object.keys(vars).length === 1 ? "" : "s"}, chmod 600)`);
   }
+
+  await stageWorkspaces(fleet, hostAgents.map((a) => a.id), workspaceBase, opts.dryRun);
 
   // 4. Daemon — delegate to OpenClaw (it owns the launchd/systemd service).
   if (opts.dryRun) return;
   if (!opts.daemon) {
     log.info("Config staged. Start the gateway daemon with:");
     log.info("  openclaw onboard --install-daemon   # then: openclaw gateway status");
-    return;
-  }
-  if (!onPath("openclaw")) {
-    log.warn("`openclaw` not found on PATH. Install it, then re-run `fleetmind up`:");
-    log.info("  npm install -g openclaw@latest   # requires Node 24 (or 22.19+)");
-    if (!onPath("node")) log.info("  (Node is also missing — install Node first, e.g. `brew install node`)");
     return;
   }
   log.info("Delegating daemon install to OpenClaw (`openclaw onboard --install-daemon`)…");

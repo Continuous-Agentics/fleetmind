@@ -262,15 +262,15 @@ describe("deploy local-render-path regression", () => {
     fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
 
     const json = renderOpenClawJson(fleet) as {
-      agents: { list: Array<{ id: string; workspace: string }> };
+      agents: { entries: Record<string, { id: string; workspace: string }> };
     };
 
-    for (const entry of json.agents.list) {
+    for (const [id, entry] of Object.entries(json.agents.entries)) {
       // EC2 workspace path must be exactly <standard-workspace-base> — no per-agent subdir.
       assert.equal(
         entry.workspace,
         EC2_WORKSPACE_BASE,
-        `EC2-side workspace for ${entry.id} must be the flat standard base (no /<id> suffix)`
+        `EC2-side workspace for ${id} must be the flat standard base (no /<id> suffix)`
       );
     }
   });
@@ -285,11 +285,11 @@ describe("deploy local-render-path regression", () => {
     fleet.agents.list = [makeConductorAgent()];
 
     const json = renderOpenClawJson(fleet) as {
-      agents: { list: Array<{ id: string; workspace: string }> };
+      agents: { entries: Record<string, { id: string; workspace: string }> };
     };
 
     assert.equal(
-      json.agents.list[0]!.workspace,
+      Object.values(json.agents.entries)[0]!.workspace,
       EC2_WORKSPACE_BASE,
       "a stray workspace_base value on the resolved target must not change the rendered path"
     );
@@ -318,11 +318,11 @@ describe("renderAgentOpenClawJson — per-agent slice", () => {
     fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
 
     const json = renderAgentOpenClawJson(fleet, "conductor") as {
-      agents: { list: Array<{ id: string }> };
+      agents: { entries: Record<string, { id: string }> };
     };
 
-    assert.equal(json.agents.list.length, 1, "agents.list must have exactly one entry");
-    assert.equal(json.agents.list[0]!.id, "conductor");
+    assert.equal(Object.keys(json.agents.entries).length, 1, "agents.list must have exactly one entry");
+    assert.equal(Object.keys(json.agents.entries)[0], "conductor");
   });
 
   test("forge slice contains only forge in agents.list", () => {
@@ -330,24 +330,24 @@ describe("renderAgentOpenClawJson — per-agent slice", () => {
     fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
 
     const json = renderAgentOpenClawJson(fleet, "forge") as {
-      agents: { list: Array<{ id: string }> };
+      agents: { entries: Record<string, { id: string }> };
     };
 
-    assert.equal(json.agents.list.length, 1);
-    assert.equal(json.agents.list[0]!.id, "forge");
+    assert.equal(Object.keys(json.agents.entries).length, 1);
+    assert.equal(Object.keys(json.agents.entries)[0], "forge");
   });
 
   // ── default: true only on orchestrator ────────────────────────────────────
 
-  test("orchestrator slice has default:true", () => {
+  test("orchestrator slice omits retired default marker", () => {
     const fleet = makeFleet();
     fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
 
     const json = renderAgentOpenClawJson(fleet, "conductor") as {
-      agents: { list: Array<{ id: string; default?: boolean }> };
+      agents: { entries: Record<string, { id: string; default?: boolean }> };
     };
 
-    assert.equal(json.agents.list[0]!.default, true, "orchestrator slice must have default: true");
+    assert.equal(Object.values(json.agents.entries)[0]!.default, undefined);
   });
 
   test("non-orchestrator slice does NOT have default:true", () => {
@@ -355,11 +355,11 @@ describe("renderAgentOpenClawJson — per-agent slice", () => {
     fleet.agents.list = [makeConductorAgent(), makeForgeAgent()];
 
     const json = renderAgentOpenClawJson(fleet, "forge") as {
-      agents: { list: Array<{ id: string; default?: boolean }> };
+      agents: { entries: Record<string, { id: string; default?: boolean }> };
     };
 
     assert.ok(
-      json.agents.list[0]!.default !== true,
+      Object.values(json.agents.entries)[0]!.default !== true,
       "non-orchestrator slice must NOT have default: true"
     );
   });
@@ -746,17 +746,17 @@ describe("writeOutputs — per-agent file layout", () => {
 
     const conductorJson = JSON.parse(
       fs.readFileSync(path.join(tmpDir, "rendered", "openclaw", "conductor", "openclaw.json"), "utf8")
-    ) as { agents: { list: Array<{ id: string }> } };
+    ) as { agents: { entries: Record<string, { id: string }> } };
 
-    assert.equal(conductorJson.agents.list.length, 1);
-    assert.equal(conductorJson.agents.list[0]!.id, "conductor");
+    assert.equal(Object.keys(conductorJson.agents.entries).length, 1);
+    assert.equal(Object.keys(conductorJson.agents.entries)[0], "conductor");
 
     const forgeJson = JSON.parse(
       fs.readFileSync(path.join(tmpDir, "rendered", "openclaw", "forge", "openclaw.json"), "utf8")
-    ) as { agents: { list: Array<{ id: string }> } };
+    ) as { agents: { entries: Record<string, { id: string }> } };
 
-    assert.equal(forgeJson.agents.list.length, 1);
-    assert.equal(forgeJson.agents.list[0]!.id, "forge");
+    assert.equal(Object.keys(forgeJson.agents.entries).length, 1);
+    assert.equal(Object.keys(forgeJson.agents.entries)[0], "forge");
   });
 
   test("writeOutputs result keys include openclaw_json:<agent_id> for each agent", () => {

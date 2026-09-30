@@ -28,21 +28,16 @@ function agentDefaults(cfg: Record<string, unknown>): Record<string, unknown> {
 }
 
 function assertContextSafetyDefaults(defaults: Record<string, unknown>): void {
-  assert.deepEqual(defaults.contextLimits, {
-    toolResultMaxChars: 6000,
-  });
+  assert.equal(defaults.contextLimits, undefined);
   assert.deepEqual(defaults.contextPruning, {
     mode: "cache-ttl",
     ttl: "90s",
   });
   assert.deepEqual(defaults.compaction, {
-    reserveTokens: 60000,
-    maxHistoryShare: 0.35,
     recentTurnsPreserve: 2,
     midTurnPrecheck: {
       enabled: true,
     },
-    truncateAfterCompaction: true,
   });
   assert.deepEqual(defaults.subagents, {
     archiveAfterMinutes: 15,

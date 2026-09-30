@@ -523,6 +523,11 @@ export const GatewayConfigSchema = z.object({
 });
 
 export const OpenClawConfigSchema = z.object({
+  /** Optional operator-owned plugin policy; omission derives the narrow required set. */
+  plugins: z.object({
+    allow: z.array(z.string()).optional(),
+    deny: z.array(z.string()).default([]),
+  }).optional(),
   gateway: GatewayConfigSchema.default({}),
   hooks: OpenClawHooksSchema,
   session: z.object({ dm_scope: z.string().default("per-channel-peer") }).default({}),
