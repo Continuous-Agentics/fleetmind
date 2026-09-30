@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { AwsAccessHost, RuntimeAwsAccess, type AwsAccessHostConfig, type RuntimeAwsAccessConfig } from "../config/aws-access.js";
+import { AwsAccessHost, AwsAccessPublication, AwsAccessRevision, RuntimeAwsAccess, type AwsAccessHostConfig, type RuntimeAwsAccessConfig } from "../config/aws-access.js";
 import { requireFresh, verifyRole } from "./aws-access.js";
 import { withAwsAuthorization, type AuthorizationOptions } from "./aws-access-aws.js";
 
-export const ACCESS_CAPABILITY = "fleetmind-aws-access-sync-v2";
+export const ACCESS_CAPABILITY = "fleetmind-aws-access-sync-v3";
 export function validatePublication(catalog: RuntimeAwsAccessConfig | null, input: AwsAccessHostConfig): void {
   const host = AwsAccessHost.parse(input);
   if (catalog !== null) {
@@ -49,9 +49,10 @@ function verifyHostFile(directory: string, uid: number, host: AwsAccessHostConfi
 
 /** Verify independent root-owned bootstrap metadata AND actual IMDS workload
  * identity before touching the catalog. Catalog contents never authorize writes. */
-export async function publishAccess(catalog: RuntimeAwsAccessConfig | null, input: AwsAccessHostConfig, options: PublicationOptions = {}): Promise<"unchanged" | "published" | "removed"> {
+export async function publishAccess(catalog: RuntimeAwsAccessConfig | null, input: AwsAccessHostConfig, revision: number, options: PublicationOptions = {}): Promise<"unchanged" | "published" | "removed"> {
   const host = AwsAccessHost.parse(input);
   validatePublication(catalog, host);
+  AwsAccessRevision.parse(revision);
   const directory = options.directory ?? "/etc/fleetmind";
   const uid = options.ownerUid ?? 0;
   if (!options.directory) { trustedDirectory("/", 0); trustedDirectory("/etc", 0); }
@@ -62,8 +63,9 @@ export async function publishAccess(catalog: RuntimeAwsAccessConfig | null, inpu
     requireFresh(credentials, Date.now());
     verifyRole(await deps.identity(credentials, host.region), host.role_arn);
   }, options);
-  const body = catalog ? JSON.stringify(RuntimeAwsAccess.parse(catalog), null, 2) + "\n" : null;
-  if (body && Buffer.byteLength(body) > 65536) throw new Error("AWS access catalog exceeds 64 KiB");
+  const publication = AwsAccessPublication.parse({ version: 1, revision, catalog });
+  const body = JSON.stringify(publication, null, 2) + "\n";
+  if (Buffer.byteLength(body) > 65536) throw new Error("AWS access catalog exceeds 64 KiB");
   const lock = path.join(directory, ".aws-access.lock");
   const deadline = Date.now() + (options.lockTimeoutMs ?? 5000);
   while (true) {
@@ -78,24 +80,27 @@ export async function publishAccess(catalog: RuntimeAwsAccessConfig | null, inpu
   try {
     trustedDirectory(directory, uid);
     verifyHostFile(directory, uid, host);
-    if (!body) {
-      try { fs.unlinkSync(destination); }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return "removed";
-        throw error;
+    // Fail closed on corrupt/untrusted state: replacing it could erase a newer
+    // revision. Only a genuinely absent file is an initial publication.
+    let previous: ReturnType<typeof AwsAccessPublication.parse> | undefined;
+    try { previous = AwsAccessPublication.parse(JSON.parse(trustedRead(destination, uid))); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (previous) {
+      if (revision < previous.revision) throw new Error("Stale AWS access revision");
+      if (revision === previous.revision) {
+        if (JSON.stringify(previous) !== JSON.stringify(publication)) throw new Error("Conflicting AWS access revision");
+        // A prior rename may have succeeded while its directory sync failed.
+        // Even an identical retry (including a tombstone) must prove durability.
+        syncDirectory(directory);
+        return catalog === null ? "removed" : "unchanged";
       }
-      syncDirectory(directory);
-      return "removed";
     }
-    try {
-      if (trustedRead(destination, uid) === body && (fs.statSync(destination).mode & 0o777) === 0o644) return "unchanged";
-    } catch { /* Missing/untrusted destination is atomically replaced, never followed. */ }
     const fd = fs.openSync(temporary, "wx", 0o600);
     try { fs.writeFileSync(fd, body); fs.fchmodSync(fd, 0o644); fs.fsyncSync(fd); }
     finally { fs.closeSync(fd); }
     fs.renameSync(temporary, destination);
     syncDirectory(directory);
-    return "published";
+    return catalog === null ? "removed" : "published";
   } finally {
     try {
       try { fs.unlinkSync(temporary); }

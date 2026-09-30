@@ -390,7 +390,7 @@ Releases are gated through GitHub Releases. Pushing a `v*` tag as `ggettert` cre
 
 MIT. See [LICENSE](LICENSE).
 
-### Scoped AWS application access
+## Scoped AWS application access
 
 Agents can run explicit task-local commands under named application-account roles,
 without moving hosts or switching FleetMind service credentials. See

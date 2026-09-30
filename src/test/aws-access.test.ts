@@ -162,12 +162,17 @@ test("actual child execution gets isolated credentials; failure cannot spawn; ex
 
 test("sync has independent binding, capability and clean root publication", () => {
   const host = { fleet: "fleet", agent: "worker", account_id: "111111111111", role_arn: sourceRole, region: "us-west-2" };
-  const command = accessSyncCommand(agentAccessCatalog(fleet(), "worker"), "1.2.1", host);
-  for (const text of ["fleetmind aws-access capability", "fleetmind-aws-access-sync-v2", "fleetmind aws-access publish", "env -i", "fleetmind --version"]) assert.ok(command.includes(text));
+  const command = accessSyncCommand(agentAccessCatalog(fleet(), "worker"), "1.2.1", host, 1);
+  for (const text of ["fleetmind aws-access capability", "fleetmind-aws-access-sync-v3", "fleetmind aws-access publish", "env -i", "fleetmind --version"]) assert.ok(command.includes(text));
   for (const text of ["workspace", "systemctl", "restart", "user_data"]) assert.ok(!command.includes(text));
-  assert.ok(accessSyncCommand(null, "1.2.1", host).includes("aws-access publish"));
-  assert.throws(() => accessSyncCommand(null, "latest", host));
-  assert.throws(() => accessSyncCommand(agentAccessCatalog(fleet(), "worker"), "1.2.1", { ...host, agent: "peer" }));
+  assert.ok(accessSyncCommand(null, "1.2.1", host, 1).includes("aws-access publish"));
+  assert.throws(() => accessSyncCommand(null, "latest", host, 1));
+  for (const revision of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, undefined]) {
+    assert.throws(() => accessSyncCommand(null, "1.2.1", host, revision as number));
+  }
+  const readme = fs.readFileSync("README.md", "utf8");
+  assert.match(readme, /^## Scoped AWS application access$/m);
+  assert.throws(() => accessSyncCommand(agentAccessCatalog(fleet(), "worker"), "1.2.1", { ...host, agent: "peer" }, 1));
 });
 
 test("static IAM nonreplacement regression: access touches independent exact-role policy only", () => {
@@ -207,9 +212,15 @@ test("fixed root catalog rejects writable files/directories and symlink traversa
     return 42;
   });
   t.mock.method(fs, "fstatSync", () => ({ uid, mode, size: 100, isFile: () => true }));
-  t.mock.method(fs, "readFileSync", () => JSON.stringify(config));
+  let publication: any = { version: 1, revision: 1, catalog: config };
+  t.mock.method(fs, "readFileSync", () => JSON.stringify(publication));
   t.mock.method(fs, "closeSync", () => {});
   assert.deepEqual(readAccessCatalog(), config);
+  publication = { version: 1, revision: 2, catalog: null };
+  assert.throws(readAccessCatalog, /revoked/);
+  publication = config; assert.throws(readAccessCatalog, "legacy unrevisioned catalogs fail closed");
+  publication = { version: 1, revision: 0, catalog: config }; assert.throws(readAccessCatalog);
+  publication = { version: 1, revision: 1, catalog: config };
   uid = 1000; assert.throws(readAccessCatalog, /Untrusted AWS access catalog/);
   uid = 0; mode = 0o664; assert.throws(readAccessCatalog, /Untrusted AWS access catalog/);
   mode = 0o644; directoryMode = 0o775; assert.throws(readAccessCatalog, /Untrusted AWS access directory/);

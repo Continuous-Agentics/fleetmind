@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { RuntimeAwsAccess, type RuntimeAwsAccessConfig } from "../config/aws-access.js";
+import { AwsAccessPublication, RuntimeAwsAccess, type RuntimeAwsAccessConfig } from "../config/aws-access.js";
 
 export const AWS_ACCESS_PATH = "/etc/fleetmind/aws-access.json";
 export interface Credentials {
@@ -32,7 +32,9 @@ export function readAccessCatalog(): RuntimeAwsAccessConfig {
   try {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile() || stat.uid !== 0 || (stat.mode & 0o022) || stat.size > 65536) throw new Error("Untrusted AWS access catalog");
-    return RuntimeAwsAccess.parse(JSON.parse(fs.readFileSync(fd, "utf8")));
+    const publication = AwsAccessPublication.parse(JSON.parse(fs.readFileSync(fd, "utf8")));
+    if (publication.catalog === null) throw new Error("AWS access revoked");
+    return publication.catalog;
   } finally { fs.closeSync(fd); }
 }
 

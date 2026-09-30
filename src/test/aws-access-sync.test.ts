@@ -75,7 +75,7 @@ test("MF2: production Commander/loader/sync SDK path pins credentials and reject
     calls.push("iam"); await pinned(this);
     return { InstanceProfile: { Arn: profile, Roles: [{ Arn: mode === "wrong-role" ? role + "-other" : role }] } };
   });
-  for (mode of ["wrong-account", "wrong-account-revoke", "zero", "ambiguous", "ambiguous-pages", "repeated-token", "wrong-agent", "wrong-role", "mismatched-catalog", "missing-binding-revoke", "duplicates", "duplicates-reversed", "different-duplicates", "different-duplicates-reversed", "ok", "pagination", "revoke"]) {
+  for (mode of ["wrong-account", "wrong-account-revoke", "zero", "ambiguous", "ambiguous-pages", "repeated-token", "wrong-agent", "wrong-role", "mismatched-catalog", "missing-binding-revoke", "duplicates", "duplicates-reversed", "different-duplicates", "different-duplicates-reversed", "invalid-revision", "unsafe-revision", "ok", "pagination", "revoke"]) {
     calls = []; submitted = undefined; process.exitCode = 0;
     process.env.AWS_ACCESS_KEY_ID = "SYNTHETIC_OPERATOR";
     const config = raw();
@@ -88,18 +88,19 @@ test("MF2: production Commander/loader/sync SDK path pins credentials and reject
     }
     const file = path.join(directory, "fleet.yaml"); fs.writeFileSync(file, JSON.stringify(config));
     const program = new Command().version("1.2.1"); registerAwsAccess(program);
-    await program.parseAsync(["node", "test", "aws-access", "sync", "--fleet", file, "--agent", "worker"]);
+    await program.parseAsync(["node", "test", "aws-access", "sync", "--fleet", file, "--agent", "worker", "--revision", mode === "invalid-revision" ? "1e3" : mode === "unsafe-revision" ? "9007199254740992" : "42"]);
     const success = ["ok", "pagination", "revoke"].includes(mode);
     assert.equal(process.exitCode, success ? 0 : 1, mode);
     assert.equal(!!submitted, success, mode);
     if (mode.startsWith("wrong-account")) assert.deepEqual(calls, ["identity"]);
-    if (mode.includes("duplicates") || mode === "mismatched-catalog" || mode === "missing-binding-revoke") assert.deepEqual(calls, []);
+    if (mode.includes("duplicates") || mode === "mismatched-catalog" || mode === "missing-binding-revoke" || mode.endsWith("revision")) assert.deepEqual(calls, []);
     if (mode === "pagination" || mode === "ambiguous-pages") assert.equal(calls.filter(c => c === "discover").length, 2);
     if (success) {
       assert.deepEqual(submitted.InstanceIds, ["i-abc"]);
-      assert.match(submitted.Parameters.commands[0], /fleetmind-aws-access-sync-v2/);
+      assert.match(submitted.Parameters.commands[0], /fleetmind-aws-access-sync-v3/);
       const encoded = submitted.Parameters.commands[0].match(/aws-access publish '([^']+)'/)[1];
       const payload = JSON.parse(Buffer.from(encoded, "base64").toString());
+      assert.equal(payload.revision, 42);
       assert.equal(payload.host.account_id, "111111111111"); assert.equal(payload.host.role_arn, role);
       assert.equal(payload.catalog === null, mode === "revoke");
     }

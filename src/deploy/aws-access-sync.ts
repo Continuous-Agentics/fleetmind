@@ -4,14 +4,15 @@ import { SSMClient, DescribeInstanceInformationCommand, SendCommandCommand } fro
 import { EC2Client, DescribeInstancesCommand } from "@aws-sdk/client-ec2";
 import { IAMClient, GetInstanceProfileCommand } from "@aws-sdk/client-iam";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
-import type { AwsAccessHostConfig, RuntimeAwsAccessConfig } from "../config/aws-access.js";
+import { AwsAccessRevision, type AwsAccessHostConfig, type RuntimeAwsAccessConfig } from "../config/aws-access.js";
 import { validatePublication } from "../runtime/aws-access-publication.js";
 import { accessSyncCommand } from "./aws-access.js";
 
 /** Resolve operator credentials once. The immutable result is used by STS,
  * SSM, EC2 and IAM in exactly one verified account/region context. */
-export async function syncAccess(host: AwsAccessHostConfig, catalog: RuntimeAwsAccessConfig | null, version: string): Promise<string> {
+export async function syncAccess(host: AwsAccessHostConfig, catalog: RuntimeAwsAccessConfig | null, version: string, revision: number): Promise<string> {
   validatePublication(catalog, host);
+  AwsAccessRevision.parse(revision);
   const controller = new AbortController();
   const clients: Array<{ destroy(): void }> = [];
   let timer: ReturnType<typeof setTimeout>;
@@ -66,7 +67,7 @@ export async function syncAccess(host: AwsAccessHostConfig, catalog: RuntimeAwsA
     if (profile.InstanceProfile?.Arn !== profileArn || profile.InstanceProfile.Roles?.length !== 1 || profile.InstanceProfile.Roles[0].Arn !== host.role_arn) throw new Error("Host workload role mismatch");
     if (controller.signal.aborted) throw new Error("AWS access sync aborted");
     const sent = await ssm.send(new SendCommandCommand({ InstanceIds: [instanceId], DocumentName: "AWS-RunShellScript",
-      Parameters: { commands: [accessSyncCommand(catalog, version, host)] } }), options);
+      Parameters: { commands: [accessSyncCommand(catalog, version, host, revision)] } }), options);
     if (!sent.Command?.CommandId) throw new Error("Missing SSM submission receipt");
     return sent.Command.CommandId;
   };

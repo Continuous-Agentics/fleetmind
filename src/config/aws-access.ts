@@ -42,3 +42,12 @@ export const AwsAccessHost = z.object({
   if (host.role_arn.split(":")[4] !== host.account_id) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Host role/account mismatch" });
 });
 export type AwsAccessHostConfig = z.infer<typeof AwsAccessHost>;
+
+/** Operator-assigned desired-state sequence; never generated from delivery time. */
+export const AwsAccessRevision = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+/** One atomic file preserves the revision even when all grants are revoked. */
+export const AwsAccessPublication = z.object({
+  version: z.literal(1),
+  revision: AwsAccessRevision,
+  catalog: RuntimeAwsAccess.nullable(),
+}).strict();

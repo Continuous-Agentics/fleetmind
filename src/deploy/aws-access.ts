@@ -1,5 +1,5 @@
 import type { Fleet } from "../config/schema.js";
-import { AwsAccessHost, RuntimeAwsAccess, type AwsAccessHostConfig, type RuntimeAwsAccessConfig } from "../config/aws-access.js";
+import { AwsAccessHost, AwsAccessPublication, RuntimeAwsAccess, type AwsAccessHostConfig, type RuntimeAwsAccessConfig } from "../config/aws-access.js";
 import { ACCESS_CAPABILITY, validatePublication } from "../runtime/aws-access-publication.js";
 
 /** Only this agent's grants reach its host. No complete fleet catalog or peer grants. */
@@ -27,11 +27,12 @@ export function agentAccessHost(fleet: Fleet, agentId: string): AwsAccessHostCon
 
 /** Root helper is capability-gated separately from the package version. The new
  * process drops ambient SDK/process overrides before any SDK is initialized. */
-export function accessSyncCommand(catalog: RuntimeAwsAccessConfig | null, version: string, host: AwsAccessHostConfig): string {
+export function accessSyncCommand(catalog: RuntimeAwsAccessConfig | null, version: string, host: AwsAccessHostConfig, revision: number): string {
   if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/.test(version)) throw new Error("Pin FleetMind runtime version for AWS access sync");
   validatePublication(catalog, host);
-  const payload = Buffer.from(JSON.stringify({ host, catalog })).toString("base64");
-  if (Buffer.byteLength(JSON.stringify(catalog)) > 65536) throw new Error("AWS access catalog exceeds 64 KiB");
+  const publication = AwsAccessPublication.parse({ version: 1, revision, catalog });
+  const payload = Buffer.from(JSON.stringify({ host, catalog: publication.catalog, revision: publication.revision })).toString("base64");
+  if (Buffer.byteLength(JSON.stringify(publication, null, 2) + "\n") > 65536) throw new Error("AWS access catalog exceeds 64 KiB");
   const clean = "env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/nonexistent/fleetmind-aws-access LANG=C.UTF-8";
   return ["set -eu", '[ "$(id -u)" = 0 ]',
     `[ "$(${clean} fleetmind --version)" = '${version}' ] || { echo 'FleetMind runtime/module release must match before AWS access sync' >&2; exit 1; }`,

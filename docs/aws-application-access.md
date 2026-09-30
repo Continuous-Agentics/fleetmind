@@ -85,8 +85,14 @@ After review and explicit infrastructure authorization:
    module does not feed access variables into the agent instance module.
 3. Apply source policies and have each app administrator provision target trust
    and permissions through their independently authorized workflow.
-4. Preview `fleetmind aws-access sync --fleet fleet.yaml --agent worker --dry-run`.
-   Then submit without `--dry-run`. This command resolves operator credentials
+4. Preview `fleetmind aws-access sync --fleet fleet.yaml --agent worker --revision 1 --dry-run`.
+   Then submit without `--dry-run`, using the same revision and desired state.
+   `--revision` is a required positive safe integer, allocated monotonically per
+   agent by the operator's desired-state workflow, not by clocks or host arrival.
+   Coordinate allocation across operators: every changed desired state (including
+   revocation) needs a greater revision; retries must reuse the original revision
+   and payload. Never assign a fresh revision to an old queued/retried grant.
+   This command resolves operator credentials
    once, verifies their account against the independent target `aws.account_id`,
    discovers all SSM match pages and requires exactly one EC2 host. It verifies
    EC2 account/tags and the IAM instance profile's exact `aws.workload_role_arn`
@@ -103,15 +109,24 @@ After review and explicit infrastructure authorization:
    agent's allowed targets are sent; the full catalog and peer grants are not
    put in its workspace slice. There is no runtime path/env override for this
    file. It is root-owned, readable, and not agent-writable; all ancestors are
-   checked. An identical sync leaves its inode unchanged. A bounded root-owned directory
+   checked. The file atomically contains both revision and catalog; removal writes
+   a durable null-catalog tombstone rather than deleting the revision watermark.
+   Under the publication lock, older revisions and same-revision conflicting
+   payloads are rejected. Corrupt/untrusted state fails closed instead of being
+   overwritten. Never delete or restore an old copy of this file during rollback:
+   doing so discards the revocation watermark. The task reader denies tombstones
+   and old unrevisioned catalogs; upgrade both publisher and task runner together.
+   An identical retry leaves its inode unchanged but still fsyncs the directory
+   before acknowledging success, including after a prior failed durability barrier.
+   A bounded root-owned directory
    lock serializes publication, with complete same-directory atomic replacement.
    A crashed publication can leave `.aws-access.lock`; sync then fails closed until
    an operator verifies no publisher is active and removes the stale lock.
    Removing the agent's
-   `aws_access` block and syncing removes the catalog.
+   `aws_access` block and syncing with a greater revision revokes the catalog.
 5. Sync reports an SSM **submission ID**, not success. Inspect command completion
    using your normal SSM operator workflow. The host checks exact CLI version
-   against the operator **and** the `fleetmind-aws-access-sync-v2` capability before
+   against the operator **and** the `fleetmind-aws-access-sync-v3` capability before
    publication; version `1.2.1` alone is insufficient. Publish an appropriately new
    same-tag runtime/module release before rollout. Module tag matching is an operator
    invariant (the runtime cannot inspect the consumer's Terraform source tag).
