@@ -53,8 +53,8 @@ describe("agentsForTarget", () => {
 describe("renderHostOpenClawJson", () => {
   it("renders one multi-agent gateway for a host with several agents", () => {
     const cfg = renderHostOpenClawJson(makeFleet(), "mac-1");
-    const list = (cfg.agents as { list: Array<{ id: string }> }).list;
-    assert.deepEqual(list.map((a) => a.id), ["conductor", "pixel"]);
+    const entries = (cfg.agents as { entries: Record<string, unknown> }).entries;
+    assert.deepEqual(Object.keys(entries), ["conductor", "pixel"]);
 
     const bindings = cfg.bindings as Array<{ agentId: string }>;
     assert.deepEqual(bindings.map((b) => b.agentId), ["conductor", "pixel"]);
@@ -65,8 +65,8 @@ describe("renderHostOpenClawJson", () => {
 
   it("excludes other hosts' agents AND their Slack credentials", () => {
     const cfg = renderHostOpenClawJson(makeFleet(), "mac-2");
-    const list = (cfg.agents as { list: Array<{ id: string }> }).list;
-    assert.deepEqual(list.map((a) => a.id), ["forge"]);
+    const entries = (cfg.agents as { entries: Record<string, unknown> }).entries;
+    assert.deepEqual(Object.keys(entries), ["forge"]);
 
     // mac-1 agents' Slack accounts must NOT leak into mac-2's gateway config.
     const accounts = (cfg.channels as { slack: { accounts: Record<string, unknown> } }).slack.accounts;

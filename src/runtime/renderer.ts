@@ -35,8 +35,8 @@ function agentModels(agent: AgentConfig, defaults: Fleet["agents"]["defaults"]):
  *  - per-model param overrides from `agents.defaults.models` (e.g. cacheRetention)
  *  - an `agentRuntime: { id: "openclaw" }` override for every `openai/*` model
  *    used. OpenClaw routes `openai/*` to the Codex (subscription/OAuth) harness
- *    by default; forcing the openclaw runtime is what makes the injected
- *    OPENAI_API_KEY actually used (see OpenClaw docs/providers/openai).
+ *    by default. This selects execution only: agent API-key auth separately
+ *    requires a saved API-key profile and explicit auth order (see compatibility docs).
  */
 function buildModelsMap(
   agents: AgentConfig[],
@@ -56,22 +56,46 @@ function buildModelsMap(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+/** Required bundled provider IDs. Unknown/custom providers must declare their
+ * plugin explicitly: provider IDs are not generally plugin IDs. */
+const PROVIDER_PLUGINS: Record<string, string> = {
+  anthropic: "anthropic", openai: "openai", google: "google",
+  "google-vertex": "google", "amazon-bedrock": "amazon-bedrock",
+  openrouter: "openrouter", ollama: "ollama", xai: "xai", mistral: "mistral",
+};
+
+function pluginPolicy(fleet: Fleet, agents: AgentConfig[], entries: Record<string, unknown>) {
+  for (const agent of agents) {
+    for (const model of agentModels(agent, fleet.agents.defaults)) {
+      const plugin = PROVIDER_PLUGINS[modelProvider(model) ?? ""];
+      if (plugin) entries[plugin] ??= { enabled: true };
+    }
+  }
+  if (fleet.openclaw.tools.web_search.enabled) {
+    const search = fleet.openclaw.tools.web_search.provider;
+    const plugin = ({ gemini: "google", grok: "xai", "firecrawl-free": "firecrawl", "parallel-free": "parallel" } as Record<string, string>)[search] ?? search;
+    entries[plugin] ??= { enabled: true };
+  }
+  const policy = fleet.openclaw.plugins;
+  const deny = policy?.deny ?? [];
+  // Explicit allow replaces inference; deny always wins, including dependencies.
+  const allow = (policy?.allow ?? Object.keys(entries)).filter((id) => !deny.includes(id));
+  for (const id of Object.keys(entries)) {
+    if (!allow.includes(id)) entries[id] = { ...(entries[id] as object), enabled: false };
+  }
+  return { allow: [...new Set(allow)].sort(), ...(deny.length ? { deny } : {}), entries };
+}
+
 const OPENCLAW_CONTEXT_SAFETY_DEFAULTS = {
-  contextLimits: {
-    toolResultMaxChars: 6000,
-  },
   contextPruning: {
     mode: "cache-ttl",
     ttl: "90s",
   },
   compaction: {
-    reserveTokens: 60000,
-    maxHistoryShare: 0.35,
     recentTurnsPreserve: 2,
     midTurnPrecheck: {
       enabled: true,
     },
-    truncateAfterCompaction: true,
   },
   subagents: {
     archiveAfterMinutes: 15,
@@ -86,7 +110,7 @@ const OPENCLAW_CONTEXT_SAFETY_DEFAULTS = {
  * full fleet-wide config is wrong. This function returns a config slice that
  * contains only what the named agent's gateway needs:
  *
- *  - agents.list:               only this agent's entry
+ *  - agents.entries:            only this agent's entry
  *  - bindings:                  only this agent's binding
  *  - channels.slack.accounts:   only this agent's Slack account
  *  - tools.agentToAgent.allow:  only entries where from === agentId
@@ -114,12 +138,10 @@ export function renderAgentOpenClawJson(
   const workspace = agentWorkspaceBase;
   const agentDir = `${agentWorkspaceBase}/agent`;
   const agentListEntry = {
-    id: agent.id,
     name: agent.name,
     workspace,
     agentDir,
     model: modelConfig(agent.model ?? defaults.model, agentFallbacks(agent, defaults)),
-    ...(agent.orchestrator ? { default: true } : {}),
   };
 
   // Bindings — only this agent's binding
@@ -241,7 +263,7 @@ export function renderAgentOpenClawJson(
         ...(defaultsParams ? { params: defaultsParams } : {}),
         ...(modelsMap ? { models: modelsMap } : {}),
       },
-      list: [agentListEntry],
+      entries: { [agent.id]: agentListEntry },
     },
     bindings,
     tools: {
@@ -253,7 +275,7 @@ export function renderAgentOpenClawJson(
       web: {
         search: {
           enabled: oc.tools.web_search.enabled,
-          provider: oc.tools.web_search.provider,
+          ...(oc.tools.web_search.enabled ? { provider: oc.tools.web_search.provider } : {}),
         },
       },
     },
@@ -318,8 +340,7 @@ export function renderAgentOpenClawJson(
     },
     plugins: {
       // allow list prevents "non-bundled plugins may auto-load" warning.
-      allow: ["slack", "webhooks"],
-      entries: pluginEntries,
+      ...pluginPolicy(fleet, [agent], pluginEntries),
     },
     commands: {
       native: "auto",
@@ -358,14 +379,14 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
     const model = agent.model ?? defaults.model;
     const agentWorkspaceBase = standardWorkspaceBase(fleet.targetForAgent(agent));
     const workspace = agentWorkspaceBase;
-    const agentDir = `${agentWorkspaceBase}/agent`;
+    const agentDir = hostAgents.length > 1
+      ? `${agentWorkspaceBase}/agents/${agent.id}/agent`
+      : `${agentWorkspaceBase}/agent`;
     return {
-      id: agent.id,
       name: agent.name,
       workspace,
       agentDir,
       model: modelConfig(model, agentFallbacks(agent, defaults)),
-      ...(agent.orchestrator ? { default: true } : {}),
     };
   });
 
@@ -411,15 +432,19 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
     pluginEntries[plugin] = { enabled: true };
   }
 
+  pluginEntries["slack"] = { enabled: true };
   const modelsMap = buildModelsMap(hostAgents, defaults);
+  const owner = hostAgents.find((a) => a.orchestrator)?.id;
   return {
     agents: {
       defaults: {
         model: modelConfig(defaults.model, defaults.fallback_models ?? []),
+        ...(owner && hostAgents.length > 1 ? { systemAgent: { agentId: owner }, heartbeat: { agentId: owner } } : {}),
         ...OPENCLAW_CONTEXT_SAFETY_DEFAULTS,
         ...(modelsMap ? { models: modelsMap } : {}),
       },
-      list: agentList,
+      ownership: "explicit",
+      entries: Object.fromEntries(hostAgents.map((agent, index) => [agent.id, agentList[index]])),
     },
     bindings,
     tools: {
@@ -431,7 +456,7 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
       web: {
         search: {
           enabled: oc.tools.web_search.enabled,
-          provider: oc.tools.web_search.provider,
+          ...(oc.tools.web_search.enabled ? { provider: oc.tools.web_search.provider } : {}),
         },
       },
     },
@@ -478,8 +503,7 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
     },
     plugins: {
       // allow list prevents "non-bundled plugins may auto-load" warning.
-      allow: ["slack"],
-      entries: pluginEntries,
+      ...pluginPolicy(fleet, hostAgents, pluginEntries),
     },
     commands: {
       native: "auto",
@@ -731,7 +755,6 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
   }
 
   const selfEntry = {
-    id: agent.id,
     name: agent.name,
     emoji: agent.emoji,
     role: agent.role,

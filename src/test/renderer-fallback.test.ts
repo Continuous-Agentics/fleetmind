@@ -44,8 +44,7 @@ function makeFleet(opts: {
 /** The conductor's model object from the per-agent openclaw.json. */
 function conductorModel(fleet: Fleet): { primary: string; fallbacks?: string[] } {
   const cfg = renderAgentOpenClawJson(fleet, "conductor");
-  const list = (cfg.agents as { list: Array<{ id: string; model: { primary: string; fallbacks?: string[] } }> }).list;
-  return list.find((a) => a.id === "conductor")!.model;
+  return (cfg.agents as { entries: Record<string, { model: { primary: string; fallbacks?: string[] } }> }).entries.conductor!.model;
 }
 
 function defaultsModel(fleet: Fleet): { primary: string; fallbacks?: string[] } {
@@ -79,8 +78,7 @@ describe("renderer model fallbacks", () => {
     assert.equal(conductorModel(fleet).fallbacks, undefined, "empty list → no fallbacks emitted");
     // The fleet default still applies to agents that didn't opt out (forge).
     const full = renderOpenClawJson(fleet);
-    const forge = (full.agents as { list: Array<{ id: string; model: { fallbacks?: string[] } }> }).list
-      .find((a) => a.id === "forge")!;
+    const forge = (full.agents as { entries: Record<string, { model: { fallbacks?: string[] } }> }).entries.forge!;
     assert.deepEqual(forge.model.fallbacks, ["openai/gpt-4o"]);
   });
 });

@@ -2,8 +2,8 @@
  * Tests for OpenAI agent-runtime routing in the renderer.
  *
  * OpenClaw routes `openai/*` models to the Codex (subscription/OAuth) harness by
- * default; to bill against an injected OPENAI_API_KEY the model must carry
- * `agentRuntime: { id: "openclaw" }` (see OpenClaw docs/providers/openai). The
+ * default. The embedded runtime override does NOT provision agent auth: a
+ * saved API-key profile and explicit order are independently required. The
  * renderer emits that override for every openai/* model a fleet uses — primary
  * or fallback — in both render paths, and leaves other providers untouched.
  */

@@ -1,3 +1,4 @@
+import { normalizeOpenClawConfig } from "../runtime/openclaw-config.js";
 /**
  * Unit tests for `fleetmind pull-self`.
  *
@@ -1049,7 +1050,7 @@ describe("applyDiff — protected paths (defence-in-depth)", () => {
       added: [],
       modified: [{ incoming: { path: `${CONFIG_STAGING_PREFIX}/openclaw.json`, size: 100, sha256: "new", mode: 644 }, currentSize: 80 }],
       deleted: [],
-    }, configDir);
+    }, configDir, () => {});
 
     // Never written under the workspace's own (protected) .openclaw/ dir.
     assert.ok(
@@ -1059,7 +1060,7 @@ describe("applyDiff — protected paths (defence-in-depth)", () => {
 
     const result = JSON.parse(fs.readFileSync(ocJsonPath, "utf-8"));
     assert.equal(
-      result.agents.list[0].workspace,
+      result.agents.entries.bot.workspace,
       "/home/openclaw/.openclaw/workspace",
       "openclaw.json (at configDir) must be updated by applyDiff"
     );
@@ -1087,11 +1088,11 @@ describe("applyDiff — protected paths (defence-in-depth)", () => {
       added: [],
       modified: [{ incoming: { path: `${CONFIG_STAGING_PREFIX}/openclaw.json`, size: 100, sha256: "new2", mode: 644 }, currentSize: 80 }],
       deleted: [],
-    }, configDir);
+    }, configDir, () => {});
 
     const result = JSON.parse(fs.readFileSync(ocJsonPath, "utf-8"));
     assert.equal(
-      result.agents.list[0].workspace,
+      result.agents.entries.bot.workspace,
       "/home/openclaw/.openclaw/workspace",
       "workspace from incoming must win even when base had it but live didn't (array-replacement regression)"
     );
@@ -1115,10 +1116,9 @@ describe("applyDiff — protected paths (defence-in-depth)", () => {
       deleted: [],
     };
 
-    applyDiff(stagingDir, workspaceDir, diff, configDir);
-
-    const result = JSON.parse(fs.readFileSync(ocBasePath, "utf-8"));
-    assert.equal(result.version, 2, "openclaw.base.json must be atomically updated by applyDiff");
+    fs.rmSync(path.join(stagingConfigDir, "openclaw.json"), { force: true });
+    assert.throws(() => applyDiff(stagingDir, workspaceDir, diff, configDir), /baseline-only/);
+    assert.equal(JSON.parse(fs.readFileSync(ocBasePath, "utf8")).version, 1);
   });
 });
 
@@ -1156,7 +1156,7 @@ describe("mergeOpenClawConfig — workspace field preservation", () => {
     const incomingPath = writeJson(path.join(tmpDir, "incoming-no-base.json"), incoming);
     // No openclaw.base.json in configDir
     const result = mergeOpenClawConfig(incomingPath, "/nonexistent/live.json", configDir);
-    assert.deepEqual(result, incoming);
+    assert.deepEqual(result, normalizeOpenClawConfig(incoming));
   });
 
   test("workspace field preserved when base=live=no-workspace (patches empty, incoming wins)", () => {
@@ -1171,7 +1171,7 @@ describe("mergeOpenClawConfig — workspace field preservation", () => {
     writeJson(path.join(configDir, "openclaw.base.json"), base);
 
     const result = mergeOpenClawConfig(incomingPath, livePath, configDir);
-    const agentsList = ((result.agents as Record<string, unknown>).list as Record<string, unknown>[]);
+    const agentsList = Object.values((result.agents as Record<string, unknown>).entries as Record<string, Record<string, unknown>>);
     assert.equal(
       agentsList?.[0]?.workspace,
       "/opt/openclaw/workspace/bot",
@@ -1196,7 +1196,7 @@ describe("mergeOpenClawConfig — workspace field preservation", () => {
     writeJson(path.join(configDir, "openclaw.base.json"), base);
 
     const result = mergeOpenClawConfig(incomingPath, livePath, configDir);
-    const agentsList = ((result.agents as Record<string, unknown>).list as Record<string, unknown>[]);
+    const agentsList = Object.values((result.agents as Record<string, unknown>).entries as Record<string, Record<string, unknown>>);
     assert.equal(
       agentsList?.[0]?.workspace,
       "/opt/openclaw/workspace/bot",
@@ -1219,7 +1219,7 @@ describe("mergeOpenClawConfig — workspace field preservation", () => {
     const gw = result.gateway as Record<string, unknown>;
     assert.equal(gw.port, 19000, "operator-patched gateway.port must survive merge");
     // agents.list still from incoming
-    const agentsList = ((result.agents as Record<string, unknown>).list as Record<string, unknown>[]);
+    const agentsList = Object.values((result.agents as Record<string, unknown>).entries as Record<string, Record<string, unknown>>);
     assert.equal(
       agentsList?.[0]?.workspace,
       "/ws/bot",
@@ -1240,7 +1240,7 @@ describe("mergeOpenClawConfig — workspace field preservation", () => {
 
     const result = mergeOpenClawConfig(incomingPath, livePath, configDir);
     // No patches, so result == incoming
-    const agentsList = ((result.agents as Record<string, unknown>).list as Record<string, unknown>[]);
+    const agentsList = Object.values((result.agents as Record<string, unknown>).entries as Record<string, Record<string, unknown>>);
     assert.equal(agentsList?.[0]?.workspace, "/ws/bot-v2");
     assert.equal((result.gateway as Record<string, unknown>).port, 18790);
   });
