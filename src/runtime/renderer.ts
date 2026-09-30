@@ -581,6 +581,13 @@ export function renderTerraformVars(fleet: Fleet): string {
     githubAppEntries,
     `}`,
     ``,
+    ...(fleet.aws_access || fleet.agents.list.some(a => a.aws_access) ? [
+      `# Scoped application-account access; independent of EC2 lifecycle.`,
+      `agent_aws_access_roles = ${JSON.stringify(Object.fromEntries(fleet.agents.list
+        .filter(a => a.aws_access)
+        .map(a => [a.id, [...new Set(a.aws_access!.targets.map(alias => fleet.aws_access![alias].role_arn))]])), null, 2)}`,
+      ``,
+    ] : []),
     `# NOTE: instance_type, aws_region, and other infrastructure vars are not`,
     `# derived from fleet.yaml — set them in your workspace tfvars manually.`,
     `# See infra/terraform/variables.tf for all available variables.`,

@@ -3,6 +3,7 @@
  * FleetMind CLI
  */
 import { Command } from "commander";
+import { registerAwsAccess } from "./commands/aws-access.js";
 import { injectSecrets } from "../utils/secrets.js";
 import { registerInit } from "./commands/init.js";
 import { registerDeploy } from "./commands/deploy.js";
@@ -29,7 +30,8 @@ import { registerOnboard } from "./commands/onboard.js";
 import { registerSkill } from "./commands/skill.js";
 
 // Inject stored secrets into env before any command runs
-injectSecrets();
+// Task execution must not import the operator/host secret store into its parent.
+if (!(process.argv[2] === "aws-access" && process.argv[3] === "exec")) injectSecrets();
 
 // Read version from package.json so `fleetmind --version` reflects what was actually installed
 import { readFileSync } from "node:fs";
@@ -48,6 +50,7 @@ program
   .description("Deploy and manage OpenClaw multi-agent fleets")
   .version(pkg.version);
 
+registerAwsAccess(program);
 registerInit(program);
 registerDeploy(program);
 registerUp(program);
