@@ -4,21 +4,25 @@
 fleet_name  = "test-fleet"
 agent_names = ["conductor"]
 
+# OpenClaw runtime ownership. Default is infrastructure/root managed;
+# opt-in installs an exact seed version into a dedicated service-owned prefix.
+openclaw_runtime_mode = "root-managed"
+
 # PM (orchestrator) flag per agent — drives task-ledger IAM policy split.
 agent_orchestrators = {
-  conductor = true
+  "conductor" = true
 }
 
-# Per-agent gateway ports (sequential from 18789). Override in workspaces/*.tfvars
-# if you need specific ports.
-agent_ports = {
-  conductor = 18789
+# Per-agent model providers (drives per-provider Secrets Manager secrets
+# at <fleet>/agents/<agent>/providers/<provider>). REQUIRED.
+agent_providers = {
+  "conductor" = []
 }
 
-# Wake target derived from the PM agent's first Slack channel. Used by the
-# task-ledger EventBridge target to SSM-invoke the PM on terminal task events.
-# Empty until the PM's slack.channels is populated in fleet.yaml.
-wake_target_session_key = ""
+# Explicit GitHub Apps per agent. This grants IAM only: no credentials enter Terraform.
+agent_github_apps = {
+  "conductor" = []
+}
 
 # NOTE: instance_type, aws_region, and other infrastructure vars are not
 # derived from fleet.yaml — set them in your workspace tfvars manually.

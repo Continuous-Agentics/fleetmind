@@ -291,6 +291,14 @@ outputs:
 
 # ── Fleet-wide OpenClaw settings ──────────────────────────────────────────────
 openclaw:
+  # Secure default: false keeps the root-owned system npm installation.
+  # When true, render also selects the Terraform self-managed runtime mode and
+  # writes the explicit native OpenClaw update channel into openclaw.json.
+  # Self-managed provisioning requires an exact openclaw_version in workspace
+  # tfvars; `latest`, dist-tags, and ranges are rejected.
+  self_managed_updates:
+    enabled: false
+    channel: stable  # stable | extended-stable | beta | dev
   gateway:
     port: 18789
     mode: local

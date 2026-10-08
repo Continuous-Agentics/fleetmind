@@ -294,6 +294,16 @@ resource "aws_secretsmanager_secret_version" "gateway_placeholder" {
 
 resource "terraform_data" "agent_rollout" {
   input = var.rollout_trigger
+
+  lifecycle {
+    precondition {
+      condition = (
+        var.openclaw_runtime_mode == "root-managed" ||
+        can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$", var.openclaw_version))
+      )
+      error_message = "self-managed OpenClaw requires openclaw_version to be an exact version (for example 2026.9.5), never latest, a dist-tag, or a range."
+    }
+  }
 }
 
 # ── EC2 instance ─────────────────────────────────────────────────────────────
@@ -328,17 +338,18 @@ resource "aws_instance" "agent" {
   # do not trigger instance replacement. Reprovisioning is done by tainting the
   # resource explicitly when a bootstrap change must be applied to existing hosts.
   user_data_base64 = base64gzip(templatefile("${path.module}/user_data/agent_bootstrap.sh.tpl", {
-    fleet_name        = var.fleet_name
-    agent_id          = var.name
-    openclaw_version  = var.openclaw_version
-    node_version      = var.node_version
-    aws_region        = var.aws_region
-    fleetmind_version = var.fleetmind_version
-    fleetmind_package = var.fleetmind_package
-    is_orchestrator   = var.is_orchestrator
-    gateway_port      = var.gateway_port
-    agent_providers   = join(" ", var.model_providers)
-    github_apps_json  = jsonencode(var.github_apps)
+    fleet_name            = var.fleet_name
+    agent_id              = var.name
+    openclaw_version      = var.openclaw_version
+    openclaw_runtime_mode = var.openclaw_runtime_mode
+    node_version          = var.node_version
+    aws_region            = var.aws_region
+    fleetmind_version     = var.fleetmind_version
+    fleetmind_package     = var.fleetmind_package
+    is_orchestrator       = var.is_orchestrator
+    gateway_port          = var.gateway_port
+    agent_providers       = join(" ", var.model_providers)
+    github_apps_json      = jsonencode(var.github_apps)
   }))
 
   tags = {

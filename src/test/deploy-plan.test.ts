@@ -1,3 +1,4 @@
+import { AWS_RUNTIME_SELECTION } from "../deploy/aws-runtime-user.js";
 /**
  * Tests for the deploy planning module.
  *
@@ -70,11 +71,11 @@ describe("on-host command builders", () => {
   it("aws-ssm: runs as the user-systemd runtime account with XDG/DBus; --restart only when asked", () => {
     assert.equal(
       buildPullSelfCommand({ provider: "aws-ssm", restart: false, region: "us-west-2", agentId: "conductor" }),
-      "sudo -H -u openclaw env XDG_RUNTIME_DIR=/run/user/$(id -u openclaw) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u openclaw)/bus fleetmind pull-self --apply --region us-west-2 --user-systemd"
+      `sudo -H -u openclaw env XDG_RUNTIME_DIR=/run/user/$(id -u openclaw) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u openclaw)/bus ${AWS_RUNTIME_SELECTION} fleetmind pull-self --apply --region us-west-2 --user-systemd`
     );
     assert.equal(
       buildPullSelfCommand({ provider: "aws-ssm", restart: true, region: "eu-west-1", agentId: "conductor", runtimeUser: "ec2-user" }),
-      "sudo -H -u ec2-user env XDG_RUNTIME_DIR=/run/user/$(id -u ec2-user) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u ec2-user)/bus fleetmind pull-self --apply --restart --region eu-west-1 --user-systemd"
+      `sudo -H -u ec2-user env XDG_RUNTIME_DIR=/run/user/$(id -u ec2-user) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u ec2-user)/bus ${AWS_RUNTIME_SELECTION} fleetmind pull-self --apply --restart --region eu-west-1 --user-systemd`
     );
   });
 

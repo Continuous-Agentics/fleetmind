@@ -347,6 +347,9 @@ export function renderAgentOpenClawJson(
       nativeSkills: "auto",
       restart: true,
     },
+    ...(oc.self_managed_updates?.enabled
+      ? { update: { channel: oc.self_managed_updates.channel } }
+      : {}),
   };
 }
 
@@ -508,6 +511,9 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
       nativeSkills: "auto",
       restart: true,
     },
+    ...(oc.self_managed_updates?.enabled
+      ? { update: { channel: oc.self_managed_updates.channel } }
+      : {}),
   };
 }
 
@@ -564,6 +570,10 @@ export function renderTerraformVars(fleet: Fleet): string {
     ``,
     `fleet_name  = "${fleet.fleet.name}"`,
     `agent_names = [${agentNames}]`,
+    ``,
+    `# OpenClaw runtime ownership. Default is infrastructure/root managed;`,
+    `# opt-in installs an exact seed version into a dedicated service-owned prefix.`,
+    `openclaw_runtime_mode = "${fleet.openclaw.self_managed_updates?.enabled ? "self-managed" : "root-managed"}"`,
     ``,
     `# PM (orchestrator) flag per agent — drives task-ledger IAM policy split.`,
     `agent_orchestrators = {`,

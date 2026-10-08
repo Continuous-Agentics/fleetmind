@@ -47,8 +47,19 @@ variable "root_volume_size" {
 # ── User-data bootstrap inputs ───────────────────────────────────────────────
 
 variable "openclaw_version" {
-  description = "OpenClaw npm package version pin for the bootstrap script."
+  description = "OpenClaw npm package version pin for the bootstrap script. Self-managed mode requires an exact seed version."
   type        = string
+}
+
+variable "openclaw_runtime_mode" {
+  description = "OpenClaw installation ownership: root-managed or self-managed."
+  type        = string
+  default     = "root-managed"
+
+  validation {
+    condition     = contains(["root-managed", "self-managed"], var.openclaw_runtime_mode)
+    error_message = "openclaw_runtime_mode must be either \"root-managed\" or \"self-managed\"."
+  }
 }
 
 variable "node_version" {

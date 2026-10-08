@@ -516,6 +516,21 @@ export const OpenClawHooksSchema = z.object({
 
 export type OpenClawHooksConfig = z.infer<typeof OpenClawHooksSchema>;
 
+/**
+ * FleetMind-owned runtime/update policy for AWS hosts. This is translated into
+ * Terraform bootstrap inputs and OpenClaw's native `update.channel`; it is not
+ * emitted as a custom OpenClaw config key.
+ */
+export const OpenClawSelfManagedUpdatesSchema = z.object({
+  /** Keep false unless the runtime account should own the OpenClaw npm prefix. */
+  enabled: z.boolean().default(false),
+  /** Explicit channel used by OpenClaw's supervised update path. */
+  channel: z.enum(["stable", "extended-stable", "beta", "dev"]).optional(),
+}).superRefine((policy, ctx) => {
+  if (policy.enabled && !policy.channel) ctx.addIssue({ code: z.ZodIssueCode.custom,
+    path: ["channel"], message: "Self-managed updates require an explicit channel" });
+}).default({});
+
 export const GatewayConfigSchema = z.object({
   port: z.number().default(18789),
   mode: z.string().default("local"),
@@ -523,6 +538,8 @@ export const GatewayConfigSchema = z.object({
 });
 
 export const OpenClawConfigSchema = z.object({
+  /** Opt-in service-owned runtime and supervised update policy for AWS hosts. */
+  self_managed_updates: OpenClawSelfManagedUpdatesSchema,
   /** Optional operator-owned plugin policy; omission derives the narrow required set. */
   plugins: z.object({
     allow: z.array(z.string()).optional(),

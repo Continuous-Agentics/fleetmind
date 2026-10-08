@@ -49,6 +49,10 @@ variables {
 # Default configuration: created VPC, NATS enabled, delegation enabled.
 run "default_plan_succeeds" {
   command = plan
+  assert {
+    condition     = var.openclaw_runtime_mode == "root-managed"
+    error_message = "Runtime ownership must remain root-managed by default."
+  }
 }
 
 # BYO-VPC path: exercises the existing_private_subnet_ids validation branch
@@ -85,4 +89,29 @@ run "interface_endpoints_plan_succeeds" {
   variables {
     enable_interface_endpoints = true
   }
+}
+
+# Opt-in runtime ownership must plan only with an exact bootstrap seed. The
+# service-owned prefix can then advance through OpenClaw's supervised updater
+# without Terraform reconciling it on ordinary applies.
+run "self_managed_runtime_plan_succeeds" {
+  command = plan
+
+  variables {
+    agent_names           = ["solo"]
+    agent_providers       = { solo = ["anthropic"] }
+    agent_orchestrators   = {}
+    delegation_enabled    = false
+    nats_enabled          = false
+    openclaw_runtime_mode = "self-managed"
+    openclaw_version      = "2026.9.5"
+  }
+}
+
+run "invalid_runtime_mode_rejected" {
+  command = plan
+  variables {
+    openclaw_runtime_mode = "shared-prefix"
+  }
+  expect_failures = [var.openclaw_runtime_mode]
 }

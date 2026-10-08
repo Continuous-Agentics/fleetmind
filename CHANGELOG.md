@@ -6,6 +6,10 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in service-owned OpenClaw runtime mode with an exact bootstrap seed, explicit update channel, supervised user-systemd update handoff, and an in-place migration/rollback helper; the root-owned installation remains the default.
+
 ## [1.2.1] — 2026-08-20
 
 ### Fixed

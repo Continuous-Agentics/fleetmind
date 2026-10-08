@@ -11,8 +11,9 @@ set -euo pipefail
 # Variables (injected by Terraform templatefile):
 #   fleet_name       – fleet namespace (used for SecretsManager paths)
 #   agent_id         – unique agent identifier (matches fleet.yaml id)
-#   openclaw_version – npm version to install ("latest" or pinned)
-#   node_version     – Node.js major version (currently "24")
+#   openclaw_version      – npm version to install (exact in self-managed mode)
+#   openclaw_runtime_mode – "root-managed" (default) or "self-managed"
+#   node_version          – Node.js major version (currently "24")
 #   aws_region       – AWS region for SecretsManager calls
 # =============================================================================
 
@@ -21,6 +22,7 @@ AGENT_ID="${agent_id}"
 AWS_REGION="${aws_region}"
 NODE_VERSION="${node_version}"
 OPENCLAW_VERSION="${openclaw_version}"
+OPENCLAW_RUNTIME_MODE="${openclaw_runtime_mode}"
 FLEETMIND_VERSION="${fleetmind_version}"
 GITHUB_APPS_JSON='${github_apps_json}'
 
@@ -34,7 +36,14 @@ OPENCLAW_USER="openclaw"
 # targets already use; AWS is no longer a special case.
 OPENCLAW_HOME="/home/openclaw"
 WORKSPACE_DIR="$OPENCLAW_HOME/.openclaw/workspace"
-RUNTIME_PATH="/usr/local/bin:/usr/bin:/bin"
+# The opt-in runtime prefix is deliberately dedicated to OpenClaw. It does not
+# make /usr/lib/node_modules, /usr/local, or a general user npm prefix writable.
+OPENCLAW_RUNTIME_PREFIX="$OPENCLAW_HOME/.local/share/fleetmind/openclaw-runtime"
+if [ "$OPENCLAW_RUNTIME_MODE" = "self-managed" ]; then
+  RUNTIME_PATH="$OPENCLAW_RUNTIME_PREFIX/bin:/usr/local/bin:/usr/bin:/bin"
+else
+  RUNTIME_PATH="/usr/local/bin:/usr/bin:/bin"
+fi
 ENV_FILE="$OPENCLAW_HOME/.config/fleetmind/agent.env"
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -78,22 +87,134 @@ echo "[bootstrap] Node $(node --version) installed at $NODE_BIN"
 echo "[bootstrap] npm $(npm --version) available on $RUNTIME_PATH"
 
 # ── OpenClaw runtime account ─────────────────────────────────────────────────
-# Root owns only machine bootstrap. Gateway and subscriber are user units under
-# this account, which has a persistent systemd user manager via lingering.
+# Root owns machine bootstrap. Gateway and subscriber are user units under this
+# account; opt-in self-managed mode also gives it one dedicated OpenClaw prefix,
+# never a shared npm prefix. Lingering keeps its user manager persistent.
 echo "[bootstrap] STAGE 4b: OpenClaw runtime account at $(date)"
 if ! id -u "$OPENCLAW_USER" >/dev/null 2>&1; then
   useradd --create-home --home-dir "$OPENCLAW_HOME" --shell /bin/bash --groups docker "$OPENCLAW_USER"
 else
-  usermod --home "$OPENCLAW_HOME" --move-home --shell /bin/bash --append --groups docker "$OPENCLAW_USER"
+  [ "$(getent passwd "$OPENCLAW_USER" | cut -d: -f6)" = "$OPENCLAW_HOME" ] || { echo "[bootstrap] Unexpected account home; reconcile explicitly" >&2; exit 1; }
+  usermod --shell /bin/bash --append --groups docker "$OPENCLAW_USER"
 fi
+# All bootstrap-owned writes in the account tree execute unprivileged. The
+# helper walks from / using pinned directory descriptors and O_NOFOLLOW; it
+# never follows account-provided symlinks, hard links, or shared-writable paths.
+cat > /usr/local/bin/fleetmind-home-write << 'HOME_WRITE_EOF'
+#!/usr/bin/python3
+import os, stat, sys, secrets
+
+def checked(info, owner, directory=False):
+    if info.st_uid != owner or info.st_mode & 0o022:
+        raise RuntimeError("Unsafe home path ownership/permissions")
+    if directory:
+        if not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError("Expected directory")
+    elif not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise RuntimeError("Expected unlinked regular file")
+
+def main():
+    if os.geteuid() == 0:
+        raise RuntimeError("Home writes must run unprivileged")
+    home, action, target = sys.argv[1:4]
+    if not target.startswith(home + "/") or any(p in (".", "..", "") for p in target.split("/")[1:]):
+        raise RuntimeError("Path outside runtime home")
+    parts = target.split("/")[1:]
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        checked(os.fstat(fd), 0, True)
+        current = ""
+        for part in parts if action == "mkdir" else parts[:-1]:
+            current += "/" + part
+            owner = os.getuid() if current == home or current.startswith(home + "/") else 0
+            try:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                if not current.startswith(home + "/"):
+                    raise
+                os.mkdir(part, 0o700, dir_fd=fd)
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            checked(os.fstat(child), owner, True)
+            os.close(fd)
+            fd = child
+        if action == "mkdir":
+            os.fchmod(fd, 0o700)
+            return
+        name = parts[-1]
+        old = b""
+        try:
+            source = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        except FileNotFoundError:
+            source = None
+        if source is not None:
+            with os.fdopen(source, "rb") as stream:
+                checked(os.fstat(stream.fileno()), os.getuid())
+                if action == "append":
+                    old = stream.read()
+        if action == "remove":
+            if source is not None:
+                os.unlink(name, dir_fd=fd)
+        elif action in ("write", "append"):
+            content = sys.stdin.buffer.read()
+            if action == "append":
+                # Append is used for one active profile source directive. Match
+                # the complete line (never a comment/sub-string), preserve all
+                # unrelated bytes, remove duplicate active lines, and append
+                # only when no exact active line exists.
+                desired = content.rstrip(b"\r\n")
+                if not desired or b"\n" in desired or b"\r" in desired:
+                    raise RuntimeError("Append requires exactly one non-empty line")
+                found = False
+                output = []
+                for line in old.splitlines(keepends=True):
+                    if line.rstrip(b"\r\n") == desired:
+                        if found:
+                            continue
+                        found = True
+                    output.append(line)
+                if found:
+                    content = b"".join(output)
+                else:
+                    separator = b"" if not old or old.endswith((b"\n", b"\r")) else b"\n"
+                    content = old + separator + desired + b"\n"
+            temp = ".fleetmind-" + secrets.token_hex(16)
+            out = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+            try:
+                with os.fdopen(out, "wb") as stream:
+                    stream.write(content)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                # Recheck the destination immediately before atomic replacement.
+                try:
+                    checked(os.stat(name, dir_fd=fd, follow_symlinks=False), os.getuid())
+                except FileNotFoundError:
+                    pass
+                os.replace(temp, name, src_dir_fd=fd, dst_dir_fd=fd)
+            finally:
+                try:
+                    os.unlink(temp, dir_fd=fd)
+                except FileNotFoundError:
+                    pass
+        else:
+            raise RuntimeError("Unknown operation")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+if __name__ == "__main__":
+    main()
+HOME_WRITE_EOF
+chmod 0755 /usr/local/bin/fleetmind-home-write
+home_write() {
+  runuser -u "$OPENCLAW_USER" -- /usr/bin/python3 -I /usr/local/bin/fleetmind-home-write "$OPENCLAW_HOME" "$@"
+}
 # Holds the fetched secret environment file and user-owned operational profile.
 # Keep the directory private even when it already exists from a prior bootstrap.
-install -d -o "$OPENCLAW_USER" -g "$OPENCLAW_USER" -m 0700 "$OPENCLAW_HOME/.config/fleetmind"
-chmod 0700 "$OPENCLAW_HOME/.config/fleetmind"
+home_write mkdir "$OPENCLAW_HOME/.config/fleetmind"
 # Workspace lives under the OS account home (standard OpenClaw layout), as a
 # plain sibling of $OPENCLAW_HOME/.openclaw/openclaw.json — not nested inside
 # it, and with no per-agent subdirectory (one agent per host).
-install -d -o "$OPENCLAW_USER" -g "$OPENCLAW_USER" -m 0755 "$WORKSPACE_DIR"
+home_write mkdir "$WORKSPACE_DIR"
 loginctl enable-linger "$OPENCLAW_USER"
 
 # ── AWS CLI v2 ────────────────────────────────────────────────────────────────
@@ -113,10 +234,34 @@ OPENCLAW_PKG="openclaw@${openclaw_version}"
 %{ endif ~}
 
 echo "[bootstrap] STAGE 6: openclaw install starting at $(date)"
+echo "[bootstrap] Runtime ownership: $OPENCLAW_RUNTIME_MODE"
 echo "[bootstrap] Installing $OPENCLAW_PKG ..."
-npm install -g "$OPENCLAW_PKG"
-OPENCLAW_BIN=$(which openclaw)
+if [ "$OPENCLAW_RUNTIME_MODE" = "self-managed" ]; then
+  if ! [[ "$OPENCLAW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+    echo "[bootstrap] ERROR: self-managed mode requires an exact openclaw_version, never latest, a dist-tag, or a range" >&2
+    exit 1
+  fi
+  [ ! -e "$OPENCLAW_RUNTIME_PREFIX" ] || { echo "[bootstrap] Refusing to overwrite an existing dedicated runtime; use the native updater" >&2; exit 1; }
+  home_write mkdir "$OPENCLAW_RUNTIME_PREFIX"
+  runuser -u "$OPENCLAW_USER" -- env \
+    HOME="$OPENCLAW_HOME" \
+    PATH="/usr/local/bin:/usr/bin:/bin" \
+    NPM_CONFIG_PREFIX="$OPENCLAW_RUNTIME_PREFIX" \
+    npm install -g "$OPENCLAW_PKG"
+  OPENCLAW_BIN="$OPENCLAW_RUNTIME_PREFIX/bin/openclaw"
+  actual=$(runuser -u "$OPENCLAW_USER" -- env HOME="$OPENCLAW_HOME" "$OPENCLAW_BIN" --version | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?')
+  [ "$actual" = "$OPENCLAW_VERSION" ] || { echo "[bootstrap] Exact seed verification failed" >&2; exit 1; }
+else
+  npm install -g "$OPENCLAW_PKG"
+  OPENCLAW_BIN=$(which openclaw)
+fi
+[ -x "$OPENCLAW_BIN" ] || { echo "[bootstrap] ERROR: OpenClaw launcher missing at $OPENCLAW_BIN" >&2; exit 1; }
 echo "[bootstrap] openclaw installed at: $OPENCLAW_BIN"
+printf '{"binary":"%s","mode":"%s"}\n' "$OPENCLAW_BIN" "$OPENCLAW_RUNTIME_MODE" | home_write write "$OPENCLAW_HOME/.config/fleetmind/openclaw-runtime.json"
+{
+  printf 'export FLEETMIND_OPENCLAW_BIN=%s\nexport PATH=%s\nexport OPENCLAW_SYSTEMD_UNIT=%s\n' "$OPENCLAW_BIN" "$RUNTIME_PATH" "openclaw-$AGENT_ID.service"
+  if [ "$OPENCLAW_RUNTIME_MODE" = self-managed ]; then printf 'export NPM_CONFIG_PREFIX=%s\n' "$OPENCLAW_RUNTIME_PREFIX"; fi
+} | home_write write "$OPENCLAW_HOME/.config/fleetmind/openclaw-runtime.sh"
 
 # ── fleetmind CLI ─────────────────────────────────────────────────────────────
 # Install @continuous-agentics/fleetmind from public npm.
@@ -134,13 +279,10 @@ fleetmind --version
 # Workspace lives on the EC2 root volume. Persistent state belongs in the
 # shared substrates (task-ledger DDB, context-store DDB, narratives S3).
 echo "[bootstrap] STAGE 7: workspace mkdir starting at $(date)"
-# Creating the workspace as root can also create the `.openclaw` state root.
-# Hand the complete private state tree to the runtime account before any
-# unprivileged OpenClaw command creates plugin or npm state beneath it.
-mkdir -p "$WORKSPACE_DIR"
-chown -R "$OPENCLAW_USER:$OPENCLAW_USER" "$OPENCLAW_HOME/.openclaw"
-chmod 0700 "$OPENCLAW_HOME/.openclaw"
-echo "[bootstrap] Workspace dir: $WORKSPACE_DIR (root volume)"
+# Re-attest the state directories after package installation, without root
+# traversing or recursively taking ownership of the runtime tree.
+home_write mkdir "$WORKSPACE_DIR"
+home_write mkdir "$OPENCLAW_HOME/.openclaw"
 
 echo "[bootstrap] STAGE 7a: @openclaw/slack plugin install starting at $(date)"
 # Must run after the runtime account and workspace exist. Standard OpenClaw
@@ -149,11 +291,11 @@ echo "[bootstrap] STAGE 7a: @openclaw/slack plugin install starting at $(date)"
 # it — so the gateway process's real HOME is $OPENCLAW_HOME itself (see the
 # systemd units below), same as the OS account's own HOME. The explicit
 # HOME= here is just defensive/explicit under runuser, not an override.
-runuser -u "$OPENCLAW_USER" -- env HOME="$OPENCLAW_HOME" PATH="$RUNTIME_PATH" openclaw plugins install @openclaw/slack --force
+runuser -u "$OPENCLAW_USER" -- env HOME="$OPENCLAW_HOME" PATH="$RUNTIME_PATH" FLEETMIND_OPENCLAW_BIN="$OPENCLAW_BIN" "$OPENCLAW_BIN" plugins install @openclaw/slack --force
 # Remove the stub openclaw.json created by plugins install — it only contains
 # the plugin entry and lacks gateway.mode, causing OpenClaw to refuse startup.
 # The real openclaw.json is delivered by 'fleetmind push fleet'.
-rm -f "$OPENCLAW_HOME/.openclaw/openclaw.json"
+home_write remove "$OPENCLAW_HOME/.openclaw/openclaw.json"
 echo "[bootstrap] @openclaw/slack installed"
 
 # ── Gateway auth token ───────────────────────────────────────────────────────
@@ -224,7 +366,7 @@ AGENT="$2"
 OUT="$3"
 REGION="$4"
 
-install -m 600 /dev/null "$OUT"
+[ "$(id -u)" != 0 ] || { echo "Secret refresh must run as the runtime user" >&2; exit 1; }
 
 fetch_secret() {
   aws secretsmanager get-secret-value \
@@ -250,7 +392,7 @@ for prov in $AGENT_PROVIDERS; do
 $blob"
 done
 
-python3 - << PYEOF > "$OUT"
+python3 - << PYEOF | /usr/bin/python3 -I /usr/local/bin/fleetmind-home-write "$HOME" write "$OUT"
 import json
 
 def parse(s):
@@ -290,7 +432,7 @@ for k, v in combined.items():
         print(f"{agent_upper}_{alias_key}={v_str}")
 PYEOF
 
-echo "[secrets] Loaded $(wc -l < "$OUT") vars for agent: $AGENT"
+echo "[secrets] Refreshed environment for agent: $AGENT"
 FETCH_EOF
 
 chmod +x /usr/local/bin/fetch-agent-secrets
@@ -313,8 +455,11 @@ cat > /etc/fleetmind/agent.env << AGENTENV_EOF
 FLEET_NAME=$FLEET_NAME
 AGENT_ID=$AGENT_ID
 WORKSPACE_BASE=$WORKSPACE_DIR
+OPENCLAW_RUNTIME_MODE=$OPENCLAW_RUNTIME_MODE
+FLEETMIND_OPENCLAW_BIN=$OPENCLAW_BIN
 AGENTENV_EOF
-chmod 644 /etc/fleetmind/agent.env
+chown root:root /etc/fleetmind/agent.env
+chmod 0644 /etc/fleetmind/agent.env
 
 # Install the non-secret declaration allowlist and token helper.
 install -d -m 0755 /etc/fleetmind
@@ -484,9 +629,10 @@ echo "[bootstrap] STAGE 9: systemd user unit write starting at $(date)"
 echo "[bootstrap] Creating OpenClaw user services for agent: $AGENT_ID"
 
 USER_SYSTEMD_DIR="$OPENCLAW_HOME/.config/systemd/user"
-install -d -o "$OPENCLAW_USER" -g "$OPENCLAW_USER" -m 0755 "$USER_SYSTEMD_DIR"
+home_write mkdir "$USER_SYSTEMD_DIR"
 
-cat > "$USER_SYSTEMD_DIR/openclaw-$AGENT_ID.service" << EOF
+%{ if openclaw_runtime_mode == "root-managed" ~}
+home_write write "$USER_SYSTEMD_DIR/openclaw-$AGENT_ID.service" << EOF
 [Unit]
 Description=OpenClaw Agent ($AGENT_ID) — $FLEET_NAME fleet
 # Workspace config is deployed by 'fleetmind push fleet' (after bootstrap completes).
@@ -527,6 +673,31 @@ SyslogIdentifier=openclaw-$AGENT_ID
 WantedBy=default.target
 EOF
 
+%{ else ~}
+# OpenClaw owns the replaceable base unit. FleetMind owns only policy, never
+# ExecStart/WorkingDirectory overrides (these would pin the old launcher).
+home_write mkdir "$USER_SYSTEMD_DIR/openclaw-$AGENT_ID.service.d"
+home_write write "$USER_SYSTEMD_DIR/openclaw-$AGENT_ID.service.d/50-fleetmind.conf" << EOF
+[Unit]
+ConditionPathExists=$OPENCLAW_HOME/.openclaw/openclaw.json
+StartLimitBurst=5
+StartLimitIntervalSec=60
+[Service]
+Environment=HOME=$OPENCLAW_HOME
+Environment=PATH=$RUNTIME_PATH
+Environment=FLEETMIND_OPENCLAW_BIN=$OPENCLAW_BIN
+Environment=NPM_CONFIG_PREFIX=$OPENCLAW_RUNTIME_PREFIX
+ExecStartPre=/usr/local/bin/fetch-agent-secrets $FLEET_NAME $AGENT_ID $ENV_FILE $AWS_REGION
+EnvironmentFile=-$ENV_FILE
+Restart=always
+RestartSec=10
+SyslogIdentifier=openclaw-$AGENT_ID
+EOF
+# First `pull-self --apply --restart --user-systemd` installs the native base
+# after config validation/publication. Installing now would synthesize config
+# and auth before the fleet's first push. No placeholder base is written.
+%{ endif ~}
+
 # ── STAGE 12b: gh CLI install (non-critical, after core bootstrap) ───────────
 # Moved after Node.js/openclaw/fleetmind so a network timeout here never
 # aborts the bootstrap. The gh CLI is useful for gh-app-token but the bot
@@ -565,7 +736,7 @@ NATS_MODE="%{ if is_orchestrator }pm%{ else }worker%{ endif }"
 NATS_SVC_NAME="fleetmind-nats-$AGENT_ID"
 
 # Path unit: fires once when fleet.yaml appears
-cat > "$USER_SYSTEMD_DIR/$${NATS_SVC_NAME}.path" << EOF
+home_write write "$USER_SYSTEMD_DIR/$${NATS_SVC_NAME}.path" << EOF
 [Unit]
 Description=Watch for fleet.yaml — start NATS subscriber for $AGENT_ID once config is deployed
 StartLimitIntervalSec=0
@@ -579,7 +750,7 @@ WantedBy=default.target
 EOF
 
 # Service unit: long-running fleetmind nats subscribe
-cat > "$USER_SYSTEMD_DIR/$${NATS_SVC_NAME}.service" << EOF
+home_write write "$USER_SYSTEMD_DIR/$${NATS_SVC_NAME}.service" << EOF
 [Unit]
 Description=FleetMind NATS subscriber ($AGENT_ID, mode=$NATS_MODE) — $FLEET_NAME fleet
 After=openclaw-$AGENT_ID.service
@@ -628,7 +799,6 @@ SyslogIdentifier=$${NATS_SVC_NAME}
 WantedBy=default.target
 EOF
 
-chown "$OPENCLAW_USER:$OPENCLAW_USER" "$USER_SYSTEMD_DIR/openclaw-$AGENT_ID.service" "$USER_SYSTEMD_DIR/$${NATS_SVC_NAME}.path" "$USER_SYSTEMD_DIR/$${NATS_SVC_NAME}.service"
 
 # With lingering enabled, this user manager survives logout and starts at boot.
 # Use its bus directly only during root bootstrap; all later service management
@@ -640,8 +810,16 @@ OPENCLAW_RUNTIME_DIR="/run/user/$OPENCLAW_UID"
 # These target the real per-agent units and journald; no root-owned gateway unit,
 # /var/log path, or sudo is involved.
 OPENCLAW_ALIAS_PROFILE="$OPENCLAW_HOME/.config/fleetmind/openclaw-aliases.sh"
-cat > "$OPENCLAW_ALIAS_PROFILE" << EOF
+home_write write "$OPENCLAW_ALIAS_PROFILE" << EOF
 # FleetMind OpenClaw controls for agent $AGENT_ID. Generated by bootstrap.
+export PATH=$RUNTIME_PATH
+export FLEETMIND_OPENCLAW_BIN=$OPENCLAW_BIN
+export OPENCLAW_SYSTEMD_UNIT=openclaw-$AGENT_ID.service
+%{ if openclaw_runtime_mode == "self-managed" ~}
+export NPM_CONFIG_PREFIX=$OPENCLAW_RUNTIME_PREFIX
+%{ endif ~}
+# No PATH fallback to a retained system package if the selected runtime breaks.
+openclaw() { "$OPENCLAW_BIN" "\$@"; }
 # `sudo -iu openclaw` loads this profile. Keep the user-manager connection
 # details here so operators only need the concise aliases below.
 fleetmind_userctl() {
@@ -673,32 +851,16 @@ alias openclaw-nats-status='ocnatsstatus'
 alias openclaw-nats-restart='ocnatsrestart'
 alias openclaw-nats-logs='ocnatstail'
 EOF
-chown "$OPENCLAW_USER:$OPENCLAW_USER" "$OPENCLAW_ALIAS_PROFILE"
-chmod 0600 "$OPENCLAW_ALIAS_PROFILE"
 
 OPENCLAW_BASHRC="$OPENCLAW_HOME/.bashrc"
 OPENCLAW_BASH_PROFILE="$OPENCLAW_HOME/.bash_profile"
-touch "$OPENCLAW_BASHRC"
-if ! grep -qxF 'source "$HOME/.config/fleetmind/openclaw-aliases.sh"' "$OPENCLAW_BASHRC"; then
-  cat >> "$OPENCLAW_BASHRC" << 'BASHRC_EOF'
-# FleetMind OpenClaw user-service aliases.
+home_write append "$OPENCLAW_BASHRC" << 'BASHRC_EOF'
 source "$HOME/.config/fleetmind/openclaw-aliases.sh"
 BASHRC_EOF
-fi
-chown "$OPENCLAW_USER:$OPENCLAW_USER" "$OPENCLAW_BASHRC"
-chmod 0600 "$OPENCLAW_BASHRC"
-
-# `sudo -iu openclaw` starts a login shell, which may not source .bashrc on
-# every AMI. Source the FleetMind-only profile directly from .bash_profile too.
-touch "$OPENCLAW_BASH_PROFILE"
-if ! grep -qxF 'source "$HOME/.config/fleetmind/openclaw-aliases.sh"' "$OPENCLAW_BASH_PROFILE"; then
-  cat >> "$OPENCLAW_BASH_PROFILE" << 'BASH_PROFILE_EOF'
-# FleetMind OpenClaw login-shell aliases.
+# Login shells also load only the FleetMind profile.
+home_write append "$OPENCLAW_BASH_PROFILE" << 'BASH_PROFILE_EOF'
 source "$HOME/.config/fleetmind/openclaw-aliases.sh"
 BASH_PROFILE_EOF
-fi
-chown "$OPENCLAW_USER:$OPENCLAW_USER" "$OPENCLAW_BASH_PROFILE"
-chmod 0600 "$OPENCLAW_BASH_PROFILE"
 
 runuser -u "$OPENCLAW_USER" -- env \
   XDG_RUNTIME_DIR="$OPENCLAW_RUNTIME_DIR" \

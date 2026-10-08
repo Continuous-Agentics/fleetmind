@@ -30,7 +30,7 @@ import { renderHostOpenClawJson, agentsForTarget } from "../../runtime/renderer.
 import { provisionFleet } from "../../runtime/provisioner.js";
 import { materializeHostEnv } from "./populate.js";
 import { log } from "../../utils/log.js";
-import { mergeCanonicalConfigs, publishOpenClawConfig, readOpenClawConfig, readOpenClawSnapshot, type ConfigValidator } from "../../runtime/openclaw-config.js";
+import { mergeCanonicalConfigs, publishOpenClawConfig, readOpenClawConfig, readOpenClawSnapshot, resolveOpenClawBinary, type ConfigValidator } from "../../runtime/openclaw-config.js";
 
 /**
  * The single `local` target a `fleetmind up` runs against. Errors loudly when
@@ -145,7 +145,7 @@ export async function runUp(opts: UpOptions): Promise<void> {
 
   // A real CLI invocation requires OpenClaw even with --no-daemon: config
   // validation happens before any writes. Dry runs need no installed runtime.
-  if (!opts.dryRun && !opts.validateConfig && !onPath("openclaw")) {
+  if (!opts.dryRun && !opts.validateConfig && resolveOpenClawBinary() === "openclaw" && !onPath("openclaw")) {
     throw new Error("`openclaw` not found on PATH. Install it, then re-run `fleetmind up`:\n" +
       "  npm install -g openclaw@2026.9.5   # Node 24.16+ (24.x) or 26.1+, safe SQLite");
   }
@@ -175,7 +175,7 @@ export async function runUp(opts: UpOptions): Promise<void> {
     return;
   }
   log.info("Delegating daemon install to OpenClaw (`openclaw onboard --install-daemon`)…");
-  execFileSync("openclaw", ["onboard", "--install-daemon"], { stdio: "inherit" });
+  execFileSync(resolveOpenClawBinary(), ["onboard", "--install-daemon"], { stdio: "inherit" });
   log.success("Fleet is up. Check it with: openclaw gateway status");
 }
 

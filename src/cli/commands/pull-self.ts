@@ -978,6 +978,9 @@ export async function runPullSelf(
 
   if (!hasChanges && !opts.force) {
     log.ok(`No update — workspace matches latest deploy-staging.`);
+    // Artifacts and service activation are independent. A prior apply may not
+    // have requested restart, or the first native install may have failed.
+    if (opts.apply && !opts.dryRun && opts.restart) restart();
     return { changed: false, applied: false, diff };
   }
 
