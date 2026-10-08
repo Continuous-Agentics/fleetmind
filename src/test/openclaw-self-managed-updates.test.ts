@@ -101,7 +101,13 @@ describe("authoritative runtime validation", () => {
   it("selects the persistent user launcher in sanitized SSM environments and fails closed", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "fm-launcher-"));
     const before = { ...process.env };
+    const versionDescriptor = Object.getOwnPropertyDescriptor(process, "version");
+    assert.ok(versionDescriptor);
     try {
+      // This test exercises launcher/version/capability behavior, not the host
+      // running the FleetMind CI matrix. Production still reads the immutable
+      // real process.version; only this fixture observation is replaced.
+      Object.defineProperty(process, "version", { ...versionDescriptor, value: "v24.16.0" });
       process.env.HOME = home;
       delete process.env.FLEETMIND_OPENCLAW_BIN;
       const directory = path.join(home, ".config/fleetmind");
@@ -131,6 +137,7 @@ describe("authoritative runtime validation", () => {
       process.env.FLEETMIND_OPENCLAW_BIN = "relative/openclaw";
       assert.throws(() => resolveOpenClawBinary(), /absolute path/);
     } finally {
+      Object.defineProperty(process, "version", versionDescriptor);
       for (const key of Object.keys(process.env)) if (!(key in before)) delete process.env[key];
       Object.assign(process.env, before);
       fs.rmSync(home, { recursive: true, force: true });

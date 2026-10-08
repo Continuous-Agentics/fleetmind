@@ -67,14 +67,49 @@ class MigrationTests(unittest.TestCase):
         self.fail_ready = False
         self.interrupt_install = False
         self.version = "2026.9.5"
+        self.gateway_state = "active"
+        self.manager_base = BASE
+        self.manager_fragment = self.tx.base
+        self.manager_dropins = []
+
+        def reload_manager():
+            self.manager_base = self.tx.base.read_text()
+            self.manager_dropins = [path for path in [self.tx.dropin, self.tx.nats_dropin]
+                                    if path.exists()]
+        self.reload_manager = reload_manager
 
         def ctl(*args):
             self.events.append(args)
+            if args[:1] == ("stop",):
+                self.gateway_state = "inactive"
+                return ""
+            if args[:1] == ("restart",) and args[1:] == (self.tx.gateway,):
+                self.gateway_state = "active"
+                return ""
             if "DropInPaths" in " ".join(args):
-                paths = [self.tx.dropin] if self.tx.gateway in args else [self.tx.nats_dropin]
-                return " ".join(str(p) for p in paths if p.exists())
+                paths = self.manager_dropins if self.tx.gateway in args else []
+                return " ".join(str(p) for p in paths)
+            if "FragmentPath" in " ".join(args):
+                return str(self.manager_fragment)
+            if "ExecStart" in " ".join(args):
+                starts = m.re.findall(r"^ExecStart=(.+)$", self.manager_base, m.re.M)
+                return starts[0] if starts else ""
+            if "WorkingDirectory" in " ".join(args):
+                return str(self.home)
+            if "NeedDaemonReload" in " ".join(args):
+                return "no"
             if "ActiveState" in " ".join(args):
-                return "active"
+                return self.gateway_state
+            if "LoadState" in " ".join(args):
+                return "loaded"
+            if "SubState" in " ".join(args):
+                return "running" if self.gateway_state == "active" else "dead"
+            if "MainPID" in " ".join(args):
+                return "123" if self.gateway_state == "active" else "0"
+            if "ControlPID" in " ".join(args):
+                return "0"
+            if "ControlGroup" in " ".join(args):
+                return "/user.slice/openclaw-worker" if self.gateway_state == "active" else ""
             if "EnvironmentFiles" in " ".join(args):
                 return str(self.agent_env)
             if "--property=Environment" in args:
@@ -88,7 +123,7 @@ class MigrationTests(unittest.TestCase):
                     name, value = line.split("=", 1)
                     environment[name] = value
             return {
-                "rpc": {"ok": True}, "gateway": {"version": self.version},
+                "rpc": {"ok": self.gateway_state == "active"}, "gateway": {"version": self.version},
                 "service": {"targetRole": "target", "command": {
                     "programArguments": m.shlex.split(m.re.findall(r"^ExecStart=(.+)$", self.tx.base.read_text(), m.re.M)[0]),
                     "environment": environment}}}
@@ -109,6 +144,10 @@ class MigrationTests(unittest.TestCase):
             if argv[0] == "npm":
                 self.tx.binary.parent.mkdir(parents=True, exist_ok=True)
                 self.tx.binary.write_text("fixture")
+            elif argv[1:] == ["gateway", "stop", "--force"]:
+                self.gateway_state = "inactive"
+            elif argv[1:] == ["gateway", "restart", "--force"]:
+                self.gateway_state = "active"
             elif argv[1:3] == ["gateway", "install"]:
                 self.tx.base.write_text(f"[Service]\nExecStart=/usr/bin/node {self.tx.prefix}/lib/node_modules/openclaw/entry gateway\nEnvironment=OPENCLAW_SYSTEMD_UNIT=openclaw-worker.service\n")
                 (self.home / ".openclaw/gateway.systemd.env").write_text("native env changed\n")
@@ -128,6 +167,19 @@ class MigrationTests(unittest.TestCase):
         self.tx.launcher_facts = lambda binary, root=False: (
             {"version": self.launcher_versions.get(str(binary), self.version), "root": str(binary)}
             if root else launcher_facts(binary, root))
+
+        def operator_action(action, root_binary=None):
+            if action == "install-dedicated":
+                run([str(self.tx.binary), "gateway", "install", "--force"], self.tx.env, 120)
+            elif action == "install-root":
+                self.tx.base.write_text(BASE)
+                (self.home / ".openclaw/gateway.systemd.env").unlink(missing_ok=True)
+            elif action != "restart-target":
+                raise AssertionError(action)
+            self.gateway_state = "active"
+            reload_manager()
+        self.operator_action = operator_action
+        self.tx.operator_action = operator_action
         self.args = argparse.Namespace(agent_id="worker", version="2026.9.5", channel="stable", rollback=False)
 
     def test_migration_and_idempotent_rollback_restore_both_environments(self):
@@ -147,7 +199,6 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(self.tx.base.read_text(), BASE)
         for path in [self.tx.dropin, self.tx.nats_dropin, self.tx.selector, self.home / ".openclaw/gateway.systemd.env"]:
             self.assertFalse(path.exists())
-        self.assertIn(("restart", self.tx.nats), self.events)
         self.tx.migrate(self.args)  # already rolled back is a verified no-op
 
     def test_effective_launcher_and_exact_running_release_must_match(self):
@@ -161,70 +212,244 @@ class MigrationTests(unittest.TestCase):
             self.tx.migrate(self.args)
         self.assertFalse(self.tx.prefix.exists())
 
-    def test_failed_readiness_restores_base_nats_environment_and_selector(self):
+    def test_failed_readiness_preserves_native_image_for_retry(self):
         self.fail_ready = True
+        status = self.tx.status
+        def unready_after_install(binary):
+            value = status(binary)
+            if str(self.tx.prefix) in self.tx.base.read_text():
+                value["rpc"]["ok"] = False
+                value["gateway"].pop("version", None)
+            return value
+        self.tx.status = unready_after_install
         with self.assertRaisesRegex(RuntimeError, "not ready"):
             self.tx.migrate(self.args)
-        self.assertEqual(self.tx.base.read_text(), BASE)
-        self.assertFalse(self.tx.nats_dropin.exists())
-        self.assertFalse(self.tx.selector.exists())
-        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "recovered")
+        installed = self.tx.base.read_bytes()
+        self.assertIn(str(self.tx.prefix).encode(), installed)
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "native-install-required")
+        self.tx.status = status
         self.tx.migrate(self.args)
+        self.assertEqual(self.tx.base.read_bytes(), installed)
         self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "complete")
 
-    def test_interruption_is_durable_and_next_run_recovers_before_retry(self):
-        self.interrupt_install = True
+    def test_exact_install_boundary_preserves_foreign_definition_without_install_or_restart(self):
+        production_action = m.Migration.operator_action.__get__(self.tx, m.Migration)
+        boundary = []
+        def foreign_then_refuse(action, root_binary=None):
+            self.tx.base.write_text(BASE + "# supported native change\n")
+            boundary.append(len(self.events))
+            production_action(action, root_binary)
+        self.tx.operator_action = foreign_then_refuse
+        with self.assertRaisesRegex(RuntimeError, "Operator action required"):
+            self.tx.migrate(self.args)
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "native-install-required")
+        self.assert_no_recovery_service_mutation(boundary[0])
+        self.assertFalse(any(event[1:3] == ("gateway", "install") for event in self.events[boundary[0]:]))
+        self.assertEqual(self.tx.base.read_text(), BASE + "# supported native change\n")
+        with patch.object(m, "restore") as restore_spy:
+            retry_count = len(self.events)
+            with self.assertRaisesRegex(RuntimeError, "changed"):
+                self.tx.migrate(self.args)
+            restore_spy.assert_not_called()
+        self.assert_no_recovery_service_mutation(retry_count)
+        self.assertFalse(any(event[1:3] == ("gateway", "install") for event in self.events[retry_count:]))
+
+    def crash_after_stop(self):
+        save = self.tx.save
+        interrupted = False
+        def crash(data, phase):
+            nonlocal interrupted
+            save(data, phase)
+            if phase == "stopped" and not interrupted:
+                interrupted = True
+                raise Interrupted()
+        self.tx.save = crash
         with self.assertRaises(Interrupted):
             self.tx.migrate(self.args)
-        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "installing-service")
-        self.interrupt_install = False
-        with self.assertRaisesRegex(RuntimeError, "restored and verified"):
-            self.tx.migrate(self.args)
-        self.assertEqual(self.tx.base.read_text(), BASE)
+        self.tx.save = save
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "stopped")
+
+    def test_crash_after_stop_recovers_from_journaled_inactive_service_image(self):
+        self.crash_after_stop()
+        self.assertEqual(self.gateway_state, "inactive")
+        manager = json.loads(self.tx.journal.read_text())["stopped_manager"]
+        self.assertEqual(manager["definition"]["service_identity"], self.tx.gateway)
+        self.assertTrue({"FragmentPath", "fragment_file", "ExecStart", "DropInPaths", "dropin_files",
+                         "WorkingDirectory", "Environment", "EnvironmentFiles",
+                         "environment_file_launch_inputs", "UnsetEnvironment",
+                         "NeedDaemonReload", "LoadState"}.issubset(manager["definition"]))
+        self.assertEqual(manager["runtime"], {
+            "LoadState": "loaded", "ActiveState": "inactive-or-failed",
+            "MainPID": "0", "ControlPID": "0", "ControlGroup": "",
+        })
         self.tx.migrate(self.args)
+        self.assertEqual(self.tx.base.read_text(), BASE)
+        self.assertEqual(self.gateway_state, "active")
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "recovered")
+
+    def test_inactive_and_failed_manager_definition_drift_refuse_before_mutation(self):
+        self.crash_after_stop()
+        for state in ["inactive", "failed"]:
+            with self.subTest(state=state):
+                self.gateway_state = state
+                self.manager_fragment = self.home / "foreign.service"
+                self.manager_fragment.write_text(BASE.replace("/usr/bin/openclaw", "/other/openclaw"))
+                self.manager_base = BASE.replace("/usr/bin/openclaw", "/other/openclaw")
+                event_count = len(self.events)
+                with patch.object(m, "restore") as restore_spy:
+                    with self.assertRaisesRegex(RuntimeError, "loaded gateway definition changed"):
+                        self.tx.migrate(self.args)
+                    restore_spy.assert_not_called()
+                self.assert_no_recovery_service_mutation(event_count)
+                self.manager_fragment = self.tx.base
+                self.manager_base = BASE
+
+    def test_offline_nonzero_process_state_refuses_before_mutation(self):
+        self.crash_after_stop()
+        original = self.tx.ctl
+        for prop, value in [("MainPID", "91"), ("ControlPID", "92"),
+                            ("ControlGroup", "/user.slice/foreign")]:
+            with self.subTest(prop=prop):
+                self.gateway_state = "failed"
+                self.tx.ctl = lambda *args, prop=prop, value=value: (
+                    value if f"--property={prop}" in args else original(*args))
+                event_count = len(self.events)
+                with patch.object(m, "restore") as restore_spy:
+                    with self.assertRaisesRegex(RuntimeError, "process-free"):
+                        self.tx.migrate(self.args)
+                    restore_spy.assert_not_called()
+                self.assert_no_recovery_service_mutation(event_count)
+        self.tx.ctl = original
+
+    def test_crash_during_file_mutation_recovers_only_journaled_per_file_images(self):
+        atomic_write = m.atomic_write
+        interrupted = False
+        def crash_mid_image(path, content, home, mode=0o600):
+            nonlocal interrupted
+            atomic_write(path, content, home, mode)
+            if path == self.tx.nats_dropin and not interrupted:
+                interrupted = True
+                raise Interrupted()
+        with patch.object(m, "atomic_write", crash_mid_image):
+            with self.assertRaises(Interrupted):
+                self.tx.migrate(self.args)
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "mutating-files")
+        self.assertEqual(self.gateway_state, "inactive")
+        self.tx.migrate(self.args)
+        self.assertEqual(self.tx.base.read_text(), BASE)
+        self.assertFalse(self.tx.dropin.exists())
+        self.assertFalse(self.tx.nats_dropin.exists())
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "recovered")
+
+    def test_exact_recovery_restore_gap_preserves_foreign_native_image_and_stops(self):
+        atomic_write = m.atomic_write
+        interrupted = False
+        def crash_mid_image(path, content, home, mode=0o600):
+            nonlocal interrupted
+            atomic_write(path, content, home, mode)
+            if path == self.tx.nats_dropin and not interrupted:
+                interrupted = True
+                raise Interrupted()
+        with patch.object(m, "atomic_write", crash_mid_image):
+            with self.assertRaises(Interrupted):
+                self.tx.migrate(self.args)
+        real_restore = m.restore
+        boundary = []
+        def foreign_then_restore(image, home):
+            self.tx.base.write_text(BASE + "# native owner won recovery race\n")
+            boundary.append(len(self.events))
+            real_restore(image, home)
+        with patch.object(m, "restore", foreign_then_restore):
+            with self.assertRaisesRegex(RuntimeError, "Native service image changed"):
+                self.tx.migrate(self.args)
+        self.assertEqual(self.tx.base.read_text(), BASE + "# native owner won recovery race\n")
+        self.assert_no_recovery_service_mutation(boundary[0])
+        self.assertFalse(any(event[1:3] == ("gateway", "install") for event in self.events[boundary[0]:]))
+        with patch.object(m, "restore") as restore_spy:
+            retry_count = len(self.events)
+            with self.assertRaisesRegex(RuntimeError, "Native service image changed"):
+                self.tx.migrate(self.args)
+            restore_spy.assert_not_called()
+        self.assert_no_recovery_service_mutation(retry_count)
+        self.assertFalse(any(event[1:3] == ("gateway", "install") for event in self.events[retry_count:]))
+
+    def test_exact_rollback_restore_gap_preserves_foreign_native_image_and_stops(self):
+        self.tx.migrate(self.args)
+        self.args.rollback = True
+        real_restore = m.restore
+        boundary = []
+        foreign = BASE + "# native owner won rollback race\n"
+        def foreign_then_restore(image, home):
+            self.tx.base.write_text(foreign)
+            boundary.append(len(self.events))
+            real_restore(image, home)
+        with patch.object(m, "restore", foreign_then_restore):
+            with self.assertRaisesRegex(RuntimeError, "Native service image changed"):
+                self.tx.migrate(self.args)
+        self.assertEqual(self.tx.base.read_text(), foreign)
+        self.assert_no_recovery_service_mutation(boundary[0])
+        self.assertFalse(any(event[1:3] == ("gateway", "install") for event in self.events[boundary[0]:]))
+        with patch.object(m, "restore") as restore_spy:
+            retry_count = len(self.events)
+            with self.assertRaisesRegex(RuntimeError, "Native service image changed"):
+                self.tx.migrate(self.args)
+            restore_spy.assert_not_called()
+        self.assert_no_recovery_service_mutation(retry_count)
+        self.assertFalse(any(event[1:3] == ("gateway", "install") for event in self.events[retry_count:]))
+
+    def test_interrupted_rollback_owned_restore_recovers_dedicated_source(self):
+        self.tx.migrate(self.args)
+        migrated_base = self.tx.base.read_bytes()
+        self.args.rollback = True
+        real_restore = m.restore
+        interrupted = False
+        def remove_first_owned_file_then_crash(image, home):
+            nonlocal interrupted
+            if not interrupted:
+                interrupted = True
+                first = next(iter(image))
+                real_restore({first: image[first]}, home)
+                raise Interrupted()
+            real_restore(image, home)
+        with patch.object(m, "restore", remove_first_owned_file_then_crash):
+            with self.assertRaises(Interrupted):
+                self.tx.migrate(self.args)
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"],
+                         "rollback-mutating-owned-files")
+        self.assertEqual(self.gateway_state, "inactive")
+        self.tx.migrate(self.args)
+        self.assertEqual(self.tx.base.read_bytes(), migrated_base)
+        self.assertEqual(self.gateway_state, "active")
         self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "complete")
 
     def interrupt_forward_verification(self):
-        activate = self.tx.activate
-        interrupted = False
-        def interrupt_verifying(binary, version, nats_active):
-            nonlocal interrupted
-            if str(binary) == str(self.tx.binary) and not interrupted:
-                interrupted = True
+        ready = self.tx.ready
+        def interrupt(binary, version):
+            if str(binary) == str(self.tx.binary):
                 raise Interrupted()
-            return activate(binary, version, nats_active)
-        self.tx.activate = interrupt_verifying
-        try:
-            with self.assertRaises(Interrupted):
-                self.tx.migrate(self.args)
-        finally:
-            self.tx.activate = activate
-        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "verifying")
+            return ready(binary, version)
+        self.tx.ready = interrupt
+        with self.assertRaises(Interrupted):
+            self.tx.migrate(self.args)
+        self.tx.ready = ready
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "native-install-required")
         self.assertIn(str(self.tx.prefix), self.tx.base.read_text())
 
     def interrupt_reverse_activation(self):
         self.tx.migrate(self.args)
         self.args.rollback = True
-        activate = self.tx.activate
-        interrupted = False
-        def interrupt_root(binary, version, nats_active):
-            nonlocal interrupted
-            if str(binary) == "/usr/bin/openclaw" and not interrupted:
-                interrupted = True
-                raise Interrupted()
-            return activate(binary, version, nats_active)
-        self.tx.activate = interrupt_root
-        try:
-            with self.assertRaises(Interrupted):
-                self.tx.migrate(self.args)
-        finally:
-            self.tx.activate = activate
-        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "rollback-prepared")
-        self.assertEqual(self.tx.base.read_text(), BASE)
+        self.tx.operator_action = m.Migration.operator_action.__get__(self.tx, m.Migration)
+        with self.assertRaisesRegex(RuntimeError, "Operator action required"):
+            self.tx.migrate(self.args)
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "rollback-native-install-required")
+        self.tx.operator_action = self.operator_action
+        self.assertIn(str(self.tx.prefix), self.tx.base.read_text())
 
     def assert_no_recovery_service_mutation(self, event_count):
         recovery_events = self.events[event_count:]
-        self.assertFalse(any(event and event[0] in {"stop", "restart", "daemon-reload"}
+        self.assertFalse(any(event and (event[0] in {"stop", "restart", "daemon-reload"} or
+                                       event[1:] in (("gateway", "stop", "--force"),
+                                                    ("gateway", "restart", "--force")))
                              for event in recovery_events))
 
     def test_interrupted_verification_refuses_downgrade_after_native_runtime_advances(self):
@@ -232,14 +457,15 @@ class MigrationTests(unittest.TestCase):
 
         # Model a successful native update after the migration process died.
         self.version = "2026.10.1"
+        self.gateway_state = "active"
         self.tx.binary.write_text("advanced runtime")
         before_base = self.tx.base.read_bytes()
         event_count = len(self.events)
-        with self.assertRaisesRegex(RuntimeError, "gateway advanced"):
+        with self.assertRaisesRegex(RuntimeError, "launcher|advanced"):
             self.tx.migrate(self.args)
         self.assert_no_recovery_service_mutation(event_count)
         self.assertEqual(self.tx.base.read_bytes(), before_base)
-        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "verifying")
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "native-install-required")
 
     def test_forward_recovery_refuses_changed_destination_launcher_fingerprint_before_mutation(self):
         self.interrupt_forward_verification()
@@ -250,46 +476,46 @@ class MigrationTests(unittest.TestCase):
         self.tx.launcher_facts = drift_root
         before_base = self.tx.base.read_bytes()
         event_count = len(self.events)
-        with self.assertRaisesRegex(RuntimeError, "destination launcher changed"):
+        with self.assertRaisesRegex(RuntimeError, "launcher"):
             self.tx.migrate(self.args)
         self.assert_no_recovery_service_mutation(event_count)
         self.assertEqual(self.tx.base.read_bytes(), before_base)
-        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "verifying")
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "native-install-required")
 
     def test_forward_recovery_refuses_changed_destination_launcher_version_before_mutation(self):
         self.interrupt_forward_verification()
         self.launcher_versions["/usr/bin/openclaw"] = "2026.9.4"
         before_base = self.tx.base.read_bytes()
         event_count = len(self.events)
-        with self.assertRaisesRegex(RuntimeError, "destination launcher changed"):
+        with self.assertRaisesRegex(RuntimeError, "launcher"):
             self.tx.migrate(self.args)
         self.assert_no_recovery_service_mutation(event_count)
         self.assertEqual(self.tx.base.read_bytes(), before_base)
-        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "verifying")
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "native-install-required")
 
     def test_reverse_recovery_refuses_changed_destination_launcher_fingerprint_before_mutation(self):
         self.interrupt_reverse_activation()
         self.tx.binary.write_text("same-version destination drift")
         before_base = self.tx.base.read_bytes()
         event_count = len(self.events)
-        with self.assertRaisesRegex(RuntimeError, "destination launcher changed"):
+        with self.assertRaisesRegex(RuntimeError, "launcher"):
             self.tx.migrate(self.args)
         self.assert_no_recovery_service_mutation(event_count)
         self.assertEqual(self.tx.base.read_bytes(), before_base)
-        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "rollback-prepared")
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "rollback-native-install-required")
 
     def test_reverse_recovery_refuses_changed_destination_launcher_version_before_mutation(self):
         self.interrupt_reverse_activation()
         self.launcher_versions[str(self.tx.binary)] = "2026.9.4"
         before_base = self.tx.base.read_bytes()
         event_count = len(self.events)
-        with self.assertRaisesRegex(RuntimeError, "destination launcher changed"):
+        with self.assertRaisesRegex(RuntimeError, "launcher"):
             self.tx.migrate(self.args)
         self.assert_no_recovery_service_mutation(event_count)
         self.assertEqual(self.tx.base.read_bytes(), before_base)
-        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "rollback-prepared")
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "rollback-native-install-required")
 
-    def test_rollback_failure_restores_self_managed_definition_and_remains_retryable(self):
+    def test_rollback_readiness_failure_preserves_operator_installed_root_and_is_retryable(self):
         self.tx.migrate(self.args)
         migrated = self.tx.base.read_bytes()
         ready = self.tx.ready
@@ -304,9 +530,10 @@ class MigrationTests(unittest.TestCase):
         self.args.rollback = True
         with self.assertRaisesRegex(RuntimeError, "root readiness failed"):
             self.tx.migrate(self.args)
-        self.assertEqual(self.tx.base.read_bytes(), migrated)
-        self.assertTrue(self.tx.nats_dropin.exists())
-        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "complete")
+        self.assertNotEqual(self.tx.base.read_bytes(), migrated)
+        self.assertEqual(self.tx.base.read_text(), BASE)
+        self.assertFalse(self.tx.nats_dropin.exists())
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "rollback-native-install-required")
         self.tx.migrate(self.args)
         self.assertEqual(self.tx.base.read_text(), BASE)
 
@@ -373,7 +600,7 @@ class MigrationTests(unittest.TestCase):
         with patch.object(m, "run", run):
             with self.assertRaises(RuntimeError):
                 self.tx.migrate(self.args)
-        self.assertNotIn(("stop", self.tx.gateway), self.events)
+        self.assertFalse(any(event[1:] == ("gateway", "stop", "--force") for event in self.events))
         self.assertFalse(self.tx.journal.exists())
 
     def test_staging_base_drift_aborts_before_prepared(self):
@@ -415,6 +642,67 @@ class MigrationTests(unittest.TestCase):
         def mutate():
             self.tx.ctl = lambda *args: "/other/base" if "--property=FragmentPath" in args else ctl(*args)
         self.assert_staging_mutation_aborts(mutate)
+
+    def test_pre_stop_race_refuses_before_service_mutation(self):
+        save = self.tx.save
+        def drift_after_admission(data, phase):
+            save(data, phase)
+            if phase == "prepared":
+                self.tx.base.write_text(BASE + "# concurrent owner\n")
+        self.tx.save = drift_after_admission
+        with self.assertRaisesRegex(RuntimeError, "service image"):
+            self.tx.migrate(self.args)
+        self.assertFalse(any(event[1:] == ("gateway", "stop", "--force") for event in self.events))
+        self.assertEqual(self.tx.base.read_text(), BASE + "# concurrent owner\n")
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "prepared")
+
+    def test_pre_stop_loaded_manager_drift_refuses_before_service_mutation(self):
+        save = self.tx.save
+        def drift_loaded_manager(data, phase):
+            save(data, phase)
+            if phase == "prepared":
+                self.manager_fragment = self.home / "foreign.service"
+                self.manager_fragment.write_text(BASE.replace("/usr/bin/openclaw", "/other/openclaw"))
+                self.manager_base = BASE.replace("/usr/bin/openclaw", "/other/openclaw")
+        self.tx.save = drift_loaded_manager
+        with self.assertRaisesRegex(RuntimeError, "source manager changed before stop"):
+            self.tx.migrate(self.args)
+        self.assertFalse(any(event[1:] == ("gateway", "stop", "--force") for event in self.events))
+        self.assertEqual(self.tx.base.read_text(), BASE)
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "prepared")
+
+    def test_interruption_inside_stop_recovers_from_pre_stop_manager_attestation(self):
+        stop = self.tx.stop_gateway
+        interrupted = False
+        def stop_then_crash(binary):
+            nonlocal interrupted
+            stop(binary)
+            if not interrupted:
+                interrupted = True
+                raise Interrupted()
+        self.tx.stop_gateway = stop_then_crash
+        with self.assertRaises(Interrupted):
+            self.tx.migrate(self.args)
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "prepared")
+        self.assertEqual(self.gateway_state, "inactive")
+        self.tx.stop_gateway = stop
+        self.tx.migrate(self.args)
+        self.assertEqual(self.gateway_state, "active")
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "recovered")
+
+    def test_post_mutation_pre_activation_race_refuses_restart_and_recovery_overwrite(self):
+        action = self.tx.operator_action
+        def replace_after_operator_install(kind, root_binary=None):
+            action(kind, root_binary)
+            self.tx.binary.write_text("concurrent same-version runtime replacement")
+        self.tx.operator_action = replace_after_operator_install
+        restart_count = sum(event[1:] == ("gateway", "restart", "--force") for event in self.events)
+        with self.assertRaisesRegex(RuntimeError, "launcher"):
+            self.tx.migrate(self.args)
+        self.assertEqual(sum(event[1:] == ("gateway", "restart", "--force") for event in self.events), restart_count)
+        self.assertIn(str(self.tx.prefix), self.tx.base.read_text())
+        self.assertEqual(self.tx.binary.read_text(), "concurrent same-version runtime replacement")
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "native-install-required")
 
     def test_terminal_fingerprints_ignore_only_volatile_execution_metadata(self):
         ctl = self.tx.ctl
@@ -498,13 +786,22 @@ class MigrationTests(unittest.TestCase):
             m.fcntl.flock(stream, m.fcntl.LOCK_EX)
             with self.assertRaises(BlockingIOError):
                 self.tx.migrate(self.args)
-        self.interrupt_install = True
+        save = self.tx.save
+        interrupted = False
+        def crash_after_stop(data, phase):
+            nonlocal interrupted
+            save(data, phase)
+            if phase == "stopped" and not interrupted:
+                interrupted = True
+                raise Interrupted()
+        self.tx.save = crash_after_stop
         with self.assertRaises(Interrupted):
             self.tx.migrate(self.args)
+        self.tx.save = save
         with patch.object(m, "restore", side_effect=RuntimeError("restore failed")):
             with self.assertRaisesRegex(RuntimeError, "restore failed"):
                 self.tx.migrate(self.args)
-        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "recovering")
+        self.assertEqual(json.loads(self.tx.journal.read_text())["phase"], "recovering-owned-files")
 
 
 if __name__ == "__main__":

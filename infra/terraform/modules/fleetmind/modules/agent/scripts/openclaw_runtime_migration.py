@@ -124,6 +124,11 @@ def snapshot(paths, home):
     return result
 
 
+def saved_file(content, mode=0o600):
+    """Build a journal image entry without publishing it first."""
+    return {"data": base64.b64encode(content).decode(), "mode": mode}
+
+
 def restore(files, home):
     for name, saved in files.items():
         path = Path(name)
@@ -221,13 +226,238 @@ class Migration:
         data["phase"] = phase
         atomic_write(self.journal, json.dumps(data).encode(), self.home)
 
-    def activate(self, binary, version, nats_active):
-        self.ctl("daemon-reload")
-        self.ctl("restart", self.gateway)
-        if nats_active:
-            self.ctl("restart", self.nats)
-            self.ctl("is-active", "--quiet", self.nats)
-        self.ready(binary, version)
+    def stop_gateway(self, binary):
+        run([str(binary), "gateway", "stop", "--force"], self.env, 120)
+
+    def gateway_runtime_state(self):
+        """Read enough manager state to prove that no gateway process remains."""
+        values = {}
+        for prop in ["LoadState", "ActiveState", "SubState", "MainPID", "ControlPID", "ControlGroup"]:
+            values[prop] = self.ctl("show", self.gateway, f"--property={prop}", "--value").strip()
+        return values
+
+    def gateway_is_quiescent(self):
+        state = self.gateway_runtime_state()
+        return (state["LoadState"] == "loaded" and
+                state["ActiveState"] in {"inactive", "failed"} and
+                state["MainPID"] in {"", "0"} and
+                state["ControlPID"] in {"", "0"} and
+                state["ControlGroup"] == "")
+
+    def assert_gateway_quiescent(self):
+        if not self.gateway_is_quiescent():
+            raise RuntimeError("Gateway is not provably inactive and process-free; refusing service mutation")
+
+    @staticmethod
+    def offline_runtime_facts(state):
+        """Normalize the two admissible stopped states into one authority class."""
+        if (state.get("LoadState") != "loaded" or
+                state.get("ActiveState") not in {"inactive", "failed"} or
+                state.get("MainPID") not in {"", "0"} or
+                state.get("ControlPID") not in {"", "0"} or
+                state.get("ControlGroup") != ""):
+            raise RuntimeError("Gateway is not provably inactive and process-free; refusing service mutation")
+        return {"LoadState": "loaded", "ActiveState": "inactive-or-failed",
+                "MainPID": "0", "ControlPID": "0", "ControlGroup": ""}
+
+    def manager_definition_facts(self, unit, fingerprint_dropins=True):
+        """Fingerprint the loaded manager definition without requiring a process."""
+        properties = {"service_identity": unit}
+        for prop in ["FragmentPath", "DropInPaths", "ExecStart", "Environment", "EnvironmentFiles",
+                     "WorkingDirectory", "UnsetEnvironment", "NeedDaemonReload", "LoadState"]:
+            value = self.ctl("show", unit, f"--property={prop}", "--value").strip()
+            if prop == "ExecStart":
+                value = re.sub(r" ; (?:start_time|stop_time|pid|code|status)=[^;}]*", "", value)
+            if prop == "Environment":
+                value = selected_environment(value)
+            properties[prop] = value
+        if properties["LoadState"] != "loaded" or properties["NeedDaemonReload"] == "yes":
+            raise RuntimeError("Loaded service definition is stale or unavailable; operator reconciliation required")
+        def definition_file_hash(name):
+            file = Path(name)
+            if not file.is_absolute():
+                raise RuntimeError("Manager definition path is not absolute")
+            try:
+                if file.is_relative_to(self.home):
+                    safe_path(file, self.home)
+                else:
+                    for item in [file, *file.parents]:
+                        info = item.lstat()
+                        if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                            raise RuntimeError("Unsafe manager definition path")
+                return hashlib.sha256(file.read_bytes()).hexdigest()
+            except (FileNotFoundError, PermissionError, IsADirectoryError):
+                raise RuntimeError("Manager definition file is unavailable")
+        properties["fragment_file"] = definition_file_hash(properties["FragmentPath"])
+        properties["dropin_files"] = {}
+        for name in shlex.split(properties["DropInPaths"]):
+            if fingerprint_dropins:
+                properties["dropin_files"][name] = definition_file_hash(name)
+        properties["environment_file_launch_inputs"] = {}
+        names = re.findall(r"(?:^|[\s{;])(?:path=)?-?(/[^\s;}]+)", properties["EnvironmentFiles"])
+        for name in dict.fromkeys(names):
+            file = Path(name)
+            if file.is_relative_to(self.home):
+                safe_path(file, self.home)
+            else:
+                for item in [file, *file.parents]:
+                    info = item.lstat()
+                    if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                        raise RuntimeError("Unsafe manager environment-file path")
+            properties["environment_file_launch_inputs"][name] = (
+                environment_file_inputs(file) if file.exists() else None)
+        return properties
+
+    def gateway_manager_facts(self, offline=False, fingerprint_dropins=True):
+        """Bind a loaded definition to the phase-appropriate process state."""
+        definition = self.manager_definition_facts(
+            self.gateway, fingerprint_dropins=fingerprint_dropins)
+        runtime = self.gateway_runtime_state()
+        if offline:
+            runtime = self.offline_runtime_facts(runtime)
+        return {"definition": definition, "runtime": runtime}
+
+    def assert_gateway_manager(self, expected, offline=False, message="Gateway manager state changed"):
+        if not isinstance(expected, dict) or self.gateway_manager_facts(offline=offline) != expected:
+            raise RuntimeError(message)
+
+    def expected_offline_manager(self, data):
+        """Derive the stopped fingerprint even if interruption beat its save."""
+        if isinstance(data.get("stopped_manager"), dict):
+            return data["stopped_manager"]
+        source = data.get("source_manager")
+        if source is None:
+            source = data.get("before_attestation", {}).get("manager")
+        if not isinstance(source, dict) or not isinstance(source.get("definition"), dict):
+            raise RuntimeError("Recovery manager attestation is incomplete; operator reconciliation required")
+        return {"definition": source["definition"],
+                "runtime": {"LoadState": "loaded", "ActiveState": "inactive-or-failed",
+                            "MainPID": "0", "ControlPID": "0", "ControlGroup": ""}}
+
+    def assert_offline_manager(self, expected, allow_owned_transition=False):
+        """Offline authority is the exact loaded definition plus zero processes."""
+        if allow_owned_transition:
+            current = self.gateway_manager_facts(offline=True, fingerprint_dropins=False)
+            comparable = json.loads(json.dumps(expected)) if isinstance(expected, dict) else expected
+            if isinstance(comparable, dict):
+                comparable.get("definition", {}).update({"dropin_files": {}})
+            if current != comparable:
+                raise RuntimeError(
+                    "Recovery refused: loaded gateway definition changed or is not process-free while offline")
+            return
+        self.assert_gateway_manager(
+            expected, offline=True,
+            message="Recovery refused: loaded gateway definition changed or is not process-free while offline")
+
+    def assert_image(self, expected, message="Service image changed concurrently"):
+        if not isinstance(expected, dict) or snapshot([Path(name) for name in expected], self.home) != expected:
+            raise RuntimeError(message)
+
+    def assert_transition_image(self, source, target):
+        """Accept only journaled bytes during retry of a partially completed restore."""
+        if not isinstance(source, dict) or not isinstance(target, dict) or set(source) != set(target):
+            raise RuntimeError("Recovery service images are incomplete; operator reconciliation required")
+        current = snapshot([Path(name) for name in source], self.home)
+        if any(current[name] not in (source[name], target[name]) for name in source):
+            raise RuntimeError("Recovery service image drifted outside journaled pre/postimages; refusing mutation")
+
+    def assert_recorded_launchers(self, data):
+        """Both ends stay immutable; recovery never adopts a same-version replacement."""
+        prior = data.get("prior")
+        root_binary = prior.get("before_binary") if prior else data.get("before_binary")
+        root_expected = (prior or data).get("before_attestation", {}).get("launcher")
+        dedicated_expected = (prior or {}).get("after_launcher") or data.get("prepared_launcher")
+        if not root_binary or not root_expected or self.launcher_facts(root_binary, root=True) != root_expected:
+            raise RuntimeError("Recovery refused: root launcher changed or is incompatible; use native recovery/operator reconciliation")
+        if dedicated_expected:
+            if not self.binary.exists() or self.launcher_facts(self.binary) != dedicated_expected:
+                raise RuntimeError("Recovery refused: dedicated launcher advanced or changed; use native recovery/operator reconciliation")
+
+    def operator_action(self, action, root_binary=None):
+        """Stop at service-definition ownership boundaries lacking public CAS.
+
+        OpenClaw's public lifecycle commands serialize only their own operation;
+        neither OpenClaw nor systemd exposes a supported compare-and-swap or
+        lease spanning our validation and a native definition rewrite. The
+        helper therefore never performs install/reinstall/restart itself.
+        """
+        native_env = (f"env HOME={self.home} OPENCLAW_SYSTEMD_UNIT={self.gateway} "
+                      f"PATH={self.prefix}/bin:/usr/local/bin:/usr/bin:/bin "
+                      f"NPM_CONFIG_PREFIX={self.prefix}")
+        commands = {
+            "install-dedicated": f"{native_env} {self.binary} gateway install --force",
+            "install-root": f"{native_env} {root_binary or '<recorded-root-openclaw>'} gateway install --force",
+            "restart-target": f"{native_env} {root_binary or '<recorded-openclaw>'} gateway restart --preserve-definition",
+        }
+        raise RuntimeError(
+            f"Operator action required under exclusive service-maintenance quiescence: {commands[action]}; "
+            "then rerun this helper")
+
+    def native_paths(self):
+        return [self.base, self.units / self.nats, Path(str(self.base) + ".bak"),
+                self.home / ".openclaw/gateway.systemd.env"]
+
+    def owned_paths(self):
+        return [self.dropin, self.nats_dropin, self.selector, self.profile,
+                self.home / ".bashrc", self.home / ".bash_profile"]
+
+    def assert_native_image(self, data, expected_key="before_native"):
+        self.assert_image(data.get(expected_key),
+                          "Native service image changed; preserving it for operator reconciliation")
+
+    def root_terminal_ready(self, data):
+        self.assert_native_image(data)
+        self.assert_recorded_launchers(data)
+        self.ready(data["before_binary"], data["version"])
+        current = self.service_facts(data["before_binary"])
+        expected = data["before_attestation"]["service"]
+        if current != expected:
+            raise RuntimeError("Recovered root service does not match its admitted manager definition")
+
+    def recovery_terminal_ready(self, data):
+        """Verify the journaled destination selected by forward/reverse recovery."""
+        if data.get("prior"):
+            self.assert_native_image(data)
+            self.assert_recorded_launchers(data)
+            self.verify_terminal(data["prior"], migrated=True)
+            return
+        self.root_terminal_ready(data)
+
+    def finish_native_install(self, data):
+        """Adopt only an operator-completed native install; never invoke it."""
+        self.assert_recorded_launchers(data)
+        installed = self.base.read_text()
+        launch = re.findall(r"^ExecStart=(.+)$", installed, re.M)
+        if (f"OPENCLAW_SYSTEMD_UNIT={self.gateway}" not in installed or len(launch) != 1 or
+                str(self.prefix) + "/" not in launch[0]):
+            # If the exact stopped root definition remains, no destructive
+            # action has happened and the operator can safely perform handoff.
+            if self.gateway_is_quiescent():
+                self.assert_offline_manager(data.get("stopped_manager"))
+                self.assert_native_image(data)
+            self.operator_action("install-dedicated")
+        self.ready(self.binary, data["version"])
+        self.assert_image(data["planned_owned_image"],
+                          "FleetMind-owned migration image changed before native adoption")
+        data["after"] = snapshot([*self.native_paths(), *self.owned_paths()], self.home)
+        data["after_service"] = self.service_facts(self.binary)
+        data["after_launcher"] = self.launcher_facts(self.binary)
+        self.verify_terminal(data, migrated=True)
+        self.save(data, "complete")
+
+    def finish_root_install(self, reverse):
+        """Verify only an operator-completed root reinstall, then close rollback."""
+        prior = reverse["prior"]
+        root = prior["before_binary"]
+        self.assert_recorded_launchers(reverse)
+        self.ready(root, reverse["version"])
+        facts = self.service_facts(root)
+        if facts.get("command") != [root, "gateway"]:
+            self.operator_action("install-root", root)
+        self.assert_image(reverse["rollback_owned_image"],
+                          "FleetMind-owned rollback image changed before verification")
+        self.verify_terminal(prior, migrated=False)
+        self.save(reverse, "rolled-back")
 
     def effective_process_environment(self, unit, required=False):
         """Hash allowlisted values from the running process, never its secrets."""
@@ -263,34 +493,7 @@ class Migration:
             raise RuntimeError("Gateway probe is not authenticated/ready")
         units = {}
         for unit in [self.gateway, self.nats]:
-            properties = {}
-            for prop in ["FragmentPath", "DropInPaths", "ExecStart", "Environment", "EnvironmentFiles", "WorkingDirectory", "UnsetEnvironment", "NeedDaemonReload", "LoadState"]:
-                value = self.ctl("show", unit, f"--property={prop}", "--value").strip()
-                # ExecStart's textual structure includes volatile pid/timestamps
-                # and exit status. Only its command/ignore-errors fields define
-                # the effective launcher; retain those across service restarts.
-                if prop == "ExecStart":
-                    value = re.sub(r" ; (?:start_time|stop_time|pid|code|status)=[^;}]*", "", value)
-                # Never journal raw environment values. Keep only hashed values
-                # from the explicit non-secret launch-selection allowlist.
-                if prop == "Environment":
-                    value = selected_environment(value)
-                properties[prop] = value
-            if properties["NeedDaemonReload"] == "yes":
-                raise RuntimeError("Service manager has pending on-disk changes; reconcile first")
-            # Fingerprint every manager-reported drop-in, including global
-            # user-manager policy outside the account unit directory.
-            properties["dropin_files"] = {}
-            for name in shlex.split(properties["DropInPaths"]):
-                file = Path(name)
-                if file.is_relative_to(self.home):
-                    safe_path(file, self.home)
-                else:
-                    for item in [file, *file.parents]:
-                        info = item.lstat()
-                        if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
-                            raise RuntimeError("Unsafe manager drop-in path")
-                properties["dropin_files"][name] = hashlib.sha256(file.read_bytes()).hexdigest()
+            properties = self.manager_definition_facts(unit)
             properties["effective_launch_environment"] = self.effective_process_environment(
                 unit, required=unit == self.gateway)
             properties["status_resolved_launch_environment"] = (
@@ -300,19 +503,6 @@ class Migration:
             # contents. Attest only allowlisted launch inputs from each file;
             # expected token/credential refreshes therefore do not invalidate
             # a transaction and no secret-derived material enters the journal.
-            properties["environment_file_launch_inputs"] = {}
-            names = re.findall(r"(?:^|[\s{;])(?:path=)?-?(/[^\s;}]+)", properties["EnvironmentFiles"])
-            for name in dict.fromkeys(names):
-                file = Path(name)
-                if file.is_relative_to(self.home):
-                    safe_path(file, self.home)
-                else:
-                    for item in [file, *file.parents]:
-                        info = item.lstat()
-                        if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
-                            raise RuntimeError("Unsafe manager environment-file path")
-                properties["environment_file_launch_inputs"][name] = (
-                    environment_file_inputs(file) if file.exists() else None)
             units[unit] = properties
         disk_dropins = {}
         for unit in [self.gateway, self.nats]:
@@ -355,8 +545,12 @@ class Migration:
         launcher = self.launcher_facts(binary, root=True)
         if launcher["version"] != version:
             raise RuntimeError("Root launcher version changed before migration")
+        manager = self.gateway_manager_facts()
+        if any(facts["units"][self.gateway].get(name) != value
+               for name, value in manager["definition"].items()):
+            raise RuntimeError("Gateway manager definition changed during admission")
         return {"files": snapshot([self.base, self.units / self.nats], self.home),
-                "service": facts, "launcher": launcher}
+                "service": facts, "launcher": launcher, "manager": manager}
 
     def verify_terminal(self, data, migrated):
         files = data.get("after") if migrated else data.get("before")
@@ -383,38 +577,58 @@ class Migration:
                 raise RuntimeError("Runtime selector differs")
 
     def recover(self, data):
-        self.attest_recovery_source(data)
+        """Recover only FleetMind-owned files; never rewrite native service files."""
         self.attest_recovery_target(data)
-        self.save(data, "recovering")
-        # Explicit exceptions propagate: a failed restore stays recoverable,
-        # never gets marked successful by shell ERR/errexit context rules.
-        self.ctl("stop", self.gateway)
-        restore(data["before"], self.home)
-        self.activate(data["before_binary"], data["version"], data["nats_active"])
-        prior = data.get("prior")
-        if prior:
-            self.verify_terminal(prior, migrated=True)
-        else:
-            self.verify_terminal(data, migrated=False)
-        if prior:
-            self.save(prior, "complete")
+        state = self.gateway_runtime_state()
+        inactive = state["ActiveState"] in {"inactive", "failed"}
+        quiescent = (state["LoadState"] == "loaded" and inactive and
+                     state["MainPID"] in {"", "0"} and state["ControlPID"] in {"", "0"} and
+                     state["ControlGroup"] == "")
+        if inactive and not quiescent:
+            raise RuntimeError("Gateway is not provably inactive and process-free; refusing recovery mutation")
+        if not quiescent:
+            # A serving exact source image needs no destructive recovery.
+            if data.get("prior"):
+                self.verify_terminal(data["prior"], migrated=True)
+                self.save(data["prior"], "complete")
+            else:
+                self.root_terminal_ready(data)
+                self.save(data, "recovered")
+            return
+        self.assert_native_image(data)
+        self.assert_transition_image(data.get("planned_owned_image"), data.get("before_owned"))
+        self.assert_recorded_launchers(data)
+        owned_transition_started = data.get("phase") in {
+            "mutating-files", "recovering-owned-files", "rollback-mutating-owned-files"}
+        self.assert_offline_manager(
+            self.expected_offline_manager(data), allow_owned_transition=owned_transition_started)
+        self.save(data, "recovering-owned-files")
+        # Native service files are deliberately absent from this restore. A
+        # supported native change that wins at this exact point is preserved.
+        restore(data["before_owned"], self.home)
+        self.assert_native_image(data)
+        self.assert_offline_manager(self.expected_offline_manager(data))
+        self.assert_image(data["before_owned"], "FleetMind-owned recovery image is incomplete")
+        self.save(data, "recovery-restart-required")
+        self.operator_action("restart-target", data["before_binary"])
+        self.recovery_terminal_ready(data)
+        if data.get("prior"):
+            self.save(data["prior"], "complete")
         else:
             self.save(data, "recovered")
 
-    def attest_recovery_source(self, data):
-        """Refuse recovery unless the currently writing gateway is compatible.
-
-        Recovery itself can be a downgrade, so this check precedes every stop,
-        restore, daemon reload, or activation. The authenticated gateway and
-        the effective launcher must still be the journal's exact release and,
-        for a dedicated launcher, the prepared fingerprint.
-        """
+    def attest_live_stop_source(self, data):
+        """Re-attest the serving source immediately before the first stop."""
+        self.assert_image(
+            data.get("before"),
+            "Migration refused: service image is not its journaled source preimage")
         candidates = []
         if self.binary.exists():
             candidates.append(str(self.binary))
         if data.get("before_binary") not in candidates:
             candidates.append(data.get("before_binary"))
         status = None
+        authenticated = False
         for probe in candidates:
             if not probe:
                 continue
@@ -424,28 +638,32 @@ class Migration:
                 continue
             if candidate.get("rpc", {}).get("ok") and candidate.get("service", {}).get("targetRole") == "target":
                 status = candidate
+                authenticated = True
                 break
         if status is None:
-            raise RuntimeError("Recovery refused: authenticated effective gateway cannot be safely established; use native recovery/operator reconciliation")
-        if status.get("gateway", {}).get("version") != data.get("version"):
-            raise RuntimeError("Recovery refused: effective gateway advanced beyond the journal release; use native recovery/operator reconciliation")
+            raise RuntimeError("Migration refused: authenticated effective gateway cannot be safely established; use native recovery/operator reconciliation")
+        running_version = status.get("gateway", {}).get("version")
+        if (authenticated and running_version != data.get("version")) or (
+                running_version is not None and running_version != data.get("version")):
+            raise RuntimeError("Migration refused: effective gateway advanced beyond the journal release; use native recovery/operator reconciliation")
+        self.assert_recorded_launchers(data)
         recorded = data.get("before_attestation", {}).get("service")
         if not recorded and data.get("prior"):
             recorded = data["prior"].get("before_attestation", {}).get("service")
         recorded_environment = (recorded or {}).get("units", {}).get(self.gateway, {}).get(
             "effective_launch_environment")
         if recorded_environment is None:
-            raise RuntimeError("Recovery refused: gateway state compatibility was not recorded; use native recovery/operator reconciliation")
+            raise RuntimeError("Migration refused: gateway state compatibility was not recorded; use native recovery/operator reconciliation")
         current_environment = self.effective_process_environment(self.gateway, required=True)
         before_state = {name: value for name, value in recorded_environment.items()
                         if name in STATE_COMPATIBILITY_ENVIRONMENT}
         current_state = {name: value for name, value in current_environment.items()
                          if name in STATE_COMPATIBILITY_ENVIRONMENT}
         if current_state != before_state:
-            raise RuntimeError("Recovery refused: effective gateway state selection changed; use native recovery/operator reconciliation")
+            raise RuntimeError("Migration refused: effective gateway state selection changed; use native recovery/operator reconciliation")
         command = status.get("service", {}).get("command", {}).get("programArguments")
         if not isinstance(command, list):
-            raise RuntimeError("Recovery refused: effective launcher cannot be safely established; use native recovery/operator reconciliation")
+            raise RuntimeError("Migration refused: effective launcher cannot be safely established; use native recovery/operator reconciliation")
         before_binary = data.get("before_binary")
         root_binary = data.get("prior", {}).get("before_binary", before_binary)
         if command == [root_binary, "gateway"]:
@@ -460,12 +678,12 @@ class Migration:
             if not expected and data.get("prior"):
                 expected = data["prior"].get("after_launcher")
             if not expected:
-                raise RuntimeError("Recovery refused: dedicated launcher compatibility was not recorded; use native recovery/operator reconciliation")
+                raise RuntimeError("Migration refused: dedicated launcher compatibility was not recorded; use native recovery/operator reconciliation")
             facts = self.launcher_facts(current)
         else:
-            raise RuntimeError("Recovery refused: effective launcher is not journal-owned; use native recovery/operator reconciliation")
+            raise RuntimeError("Migration refused: effective launcher is not journal-owned; use native recovery/operator reconciliation")
         if facts.get("version") != data.get("version") or facts != expected:
-            raise RuntimeError("Recovery refused: effective launcher advanced or changed; use native recovery/operator reconciliation")
+            raise RuntimeError("Migration refused: effective launcher advanced or changed; use native recovery/operator reconciliation")
 
     def attest_recovery_target(self, data):
         """Attest the retained destination before recovery changes any state."""
@@ -519,9 +737,22 @@ class Migration:
         data = json.loads(self.journal.read_text()) if self.journal.exists() else None
         if data and data.get("agent") != self.gateway:
             raise RuntimeError("Migration journal belongs to a different service identity")
+        if data and data["phase"] == "native-install-required":
+            self.finish_native_install(data)
+            return
+        if data and data["phase"] == "rollback-native-install-required":
+            self.finish_root_install(data)
+            return
+        if data and data["phase"] == "recovery-restart-required":
+            self.recovery_terminal_ready(data)
+            if data.get("prior"):
+                self.save(data["prior"], "complete")
+            else:
+                self.save(data, "recovered")
+            return
         if data and data["phase"] not in {"complete", "recovered", "rolled-back"}:
             self.recover(data)
-            raise RuntimeError("Interrupted transaction restored and verified; rerun the requested action")
+            return
         if args.rollback:
             if data and data["phase"] == "rolled-back":
                 self.verify_terminal(data["prior"], migrated=False)
@@ -531,19 +762,39 @@ class Migration:
             if exact_version([data["before_binary"]], self.env) != data["version"] or exact_version([str(self.binary)], self.env) != data["version"]:
                 raise RuntimeError("Rollback is same-release only; use supported OpenClaw recovery after any update")
             self.verify_terminal(data, migrated=True)
+            rollback_owned = {name: data["before"][name] for name in map(str, self.owned_paths())}
             reverse = {"agent": self.gateway, "before": snapshot([Path(p) for p in data["before"]], self.home),
                        "before_binary": str(self.binary), "version": data["version"],
-                       "nats_active": data["nats_active"], "prior": data}
+                       "nats_active": data["nats_active"], "prior": data,
+                       "before_native": snapshot(self.native_paths(), self.home),
+                       "before_owned": snapshot(self.owned_paths(), self.home)}
+            reverse["planned_owned_image"] = rollback_owned
+            reverse["source_manager"] = self.gateway_manager_facts()
             self.save(reverse, "rollback-prepared")
-            try:
-                self.ctl("stop", self.gateway)
-                restore(data["before"], self.home)
-                self.activate(data["before_binary"], data["version"], data["nats_active"])
-                self.verify_terminal(data, migrated=False)
-                self.save(reverse, "rolled-back")
-            except Exception:
-                self.recover(reverse)
-                raise
+            self.assert_gateway_manager(
+                reverse["source_manager"],
+                message="Rollback source manager changed before stop; refusing service mutation")
+            self.assert_native_image(reverse)
+            self.assert_recorded_launchers(reverse)
+            self.stop_gateway(self.binary)
+            self.assert_gateway_quiescent()
+            reverse["stopped_manager"] = self.gateway_manager_facts(offline=True)
+            if reverse["stopped_manager"]["definition"] != reverse["source_manager"]["definition"]:
+                raise RuntimeError("Rollback source manager changed during stop; refusing file mutation")
+            self.save(reverse, "rollback-stopped")
+            self.assert_native_image(reverse)
+            self.assert_recorded_launchers(reverse)
+            # Rollback can safely restore FleetMind-owned policy/profile files,
+            # but native service ownership is returned only by an explicit
+            # operator-run root launcher install under maintenance quiescence.
+            self.save(reverse, "rollback-mutating-owned-files")
+            restore(rollback_owned, self.home)
+            self.assert_native_image(reverse)
+            reverse["rollback_owned_image"] = rollback_owned
+            self.assert_image(rollback_owned, "FleetMind-owned rollback image is incomplete")
+            self.save(reverse, "rollback-native-install-required")
+            self.operator_action("install-root", data["before_binary"])
+            self.finish_root_install(reverse)
             return
         if not args.version or not VERSION.fullmatch(args.version) or args.channel not in {"stable", "extended-stable", "beta", "dev"}:
             raise RuntimeError("Migration requires an exact --version and explicit --channel")
@@ -620,9 +871,34 @@ class Migration:
         paths = [self.base, self.units / self.nats, Path(str(self.base) + ".bak"), self.dropin, self.nats_dropin,
                  self.selector, self.profile, self.home / ".bashrc", self.home / ".bash_profile",
                  self.home / ".openclaw/gateway.systemd.env"]
-        data = {"agent": self.gateway, "before": snapshot(paths, self.home), "before_binary": root_binary,
+        before = snapshot(paths, self.home)
+        selector_content = json.dumps({"binary": str(self.binary), "mode": "self-managed"}).encode()
+        profile_content = (f"export PATH={self.prefix}/bin:/usr/local/bin:/usr/bin:/bin\n"
+                           f"export FLEETMIND_OPENCLAW_BIN={self.binary}\n"
+                           f"export NPM_CONFIG_PREFIX={self.prefix}\n"
+                           f"export OPENCLAW_SYSTEMD_UNIT={self.gateway}\n"
+                           'openclaw() { "$FLEETMIND_OPENCLAW_BIN" "$@"; }\n').encode()
+        nats_content = (f"[Service]\nEnvironment=PATH={self.prefix}/bin:/usr/local/bin:/usr/bin:/bin\n"
+                        f"Environment=FLEETMIND_OPENCLAW_BIN={self.binary}\n").encode()
+        source = 'source "$HOME/.config/fleetmind/openclaw-runtime.sh"'
+        planned = json.loads(json.dumps(before))
+        planned[str(self.dropin)] = saved_file(dropin, 0o644)
+        planned[str(self.nats_dropin)] = saved_file(nats_content, 0o644)
+        planned[str(self.selector)] = saved_file(selector_content)
+        planned[str(self.profile)] = saved_file(profile_content)
+        for file in [self.home / ".bashrc", self.home / ".bash_profile"]:
+            saved = before[str(file)]
+            content = base64.b64decode(saved["data"]).decode() if saved else ""
+            if source not in content.splitlines():
+                content += "\n" + source + "\n"
+                planned[str(file)] = saved_file(content.encode())
+        data = {"agent": self.gateway, "before": before, "before_binary": root_binary,
                 "version": args.version, "channel": args.channel, "nats_active": nats_active,
-                "before_attestation": admission, "prepared_launcher": self.launcher_facts(self.binary)}
+                "before_attestation": admission, "prepared_launcher": self.launcher_facts(self.binary),
+                "planned_service_image": planned,
+                "before_native": snapshot(self.native_paths(), self.home),
+                "before_owned": snapshot(self.owned_paths(), self.home),
+                "planned_owned_image": {name: planned[name] for name in map(str, self.owned_paths())}}
         # Native service locking is an internal JS async/lease protocol, not a
         # supported external flock/CLI interface. Do not counterfeit its lock.
         # Re-attest every admitted fact after potentially long npm staging and
@@ -631,38 +907,45 @@ class Migration:
             raise RuntimeError("Migration admission changed during staging; retry after reconciliation")
         self.save(data, "prepared")
         try:
-            self.ctl("stop", self.gateway)
+            # Close the journal-to-stop gap. OpenClaw's service-operation lock
+            # is an internal async API with no supported external acquisition
+            # contract, so every boundary is instead re-attested and fails
+            # closed if a native update won the race.
+            self.attest_live_stop_source(data)
+            self.assert_gateway_manager(
+                admission["manager"],
+                message="Migration source manager changed before stop; refusing service mutation")
+            self.stop_gateway(root_binary)
+            self.assert_gateway_quiescent()
+            self.assert_image(before, "Migration source changed after stop; refusing file mutation")
+            self.assert_recorded_launchers(data)
+            data["stopped_manager"] = self.gateway_manager_facts(offline=True)
+            if data["stopped_manager"]["definition"] != admission["manager"]["definition"]:
+                raise RuntimeError("Migration source manager changed during stop; refusing file mutation")
+            self.save(data, "stopped")
+            # From here until the exact planned image is proved, every atomic
+            # file is allowed to be either its admitted preimage or its planned
+            # postimage. This makes a process crash recoverable without
+            # accepting any third image.
+            self.save(data, "mutating-files")
             atomic_write(self.dropin, dropin, self.home, 0o644)
-            atomic_write(self.nats_dropin, (f"[Service]\nEnvironment=PATH={self.prefix}/bin:/usr/local/bin:/usr/bin:/bin\nEnvironment=FLEETMIND_OPENCLAW_BIN={self.binary}\n").encode(), self.home, 0o644)
-            atomic_write(self.selector, json.dumps({"binary": str(self.binary), "mode": "self-managed"}).encode(), self.home)
-            profile = f"export PATH={self.prefix}/bin:/usr/local/bin:/usr/bin:/bin\nexport FLEETMIND_OPENCLAW_BIN={self.binary}\nexport NPM_CONFIG_PREFIX={self.prefix}\nexport OPENCLAW_SYSTEMD_UNIT={self.gateway}\n"
-            profile += 'openclaw() { "$FLEETMIND_OPENCLAW_BIN" "$@"; }\n'
-            atomic_write(self.profile, profile.encode(), self.home)
-            source = 'source "$HOME/.config/fleetmind/openclaw-runtime.sh"'
+            atomic_write(self.nats_dropin, nats_content, self.home, 0o644)
+            atomic_write(self.selector, selector_content, self.home)
+            atomic_write(self.profile, profile_content, self.home)
             for file in [self.home / ".bashrc", self.home / ".bash_profile"]:
                 content = file.read_text() if file.exists() else ""
                 if source not in content.splitlines():
                     atomic_write(file, (content + "\n" + source + "\n").encode(), self.home)
-            self.save(data, "installing-service")
-            run([str(self.binary), "gateway", "install", "--force"],
-                {**self.env, "PATH": f"{self.prefix}/bin:/usr/local/bin:/usr/bin:/bin", "NPM_CONFIG_PREFIX": str(self.prefix)}, 120)
-            # Identity is required in the native base, not an override stripped
-            # by OpenClaw's owned-managed-environment refresh logic.
-            installed = self.base.read_text()
-            if f"OPENCLAW_SYSTEMD_UNIT={self.gateway}" not in installed:
-                raise RuntimeError("Native installer did not persist custom service identity")
-            launch = re.findall(r"^ExecStart=(.+)$", installed, re.M)
-            if len(launch) != 1 or str(self.prefix) + "/" not in launch[0]:
-                raise RuntimeError("Native installer did not select the dedicated runtime")
-            self.save(data, "verifying")
-            self.activate(self.binary, args.version, nats_active)
-            data["after"] = snapshot(paths, self.home)
-            data["after_service"] = self.service_facts(self.binary)
-            data["after_launcher"] = self.launcher_facts(self.binary)
-            self.verify_terminal(data, migrated=True)
-            self.save(data, "complete")
-        except Exception:
-            self.recover(data)
+            self.assert_gateway_quiescent()
+            self.assert_image(planned, "Migration file mutation raced with another owner")
+            self.assert_recorded_launchers(data)
+            self.save(data, "native-install-required")
+            self.operator_action("install-dedicated")
+            self.finish_native_install(data)
+        except BaseException:
+            # The journal is the durable resume point. Automatic rollback is
+            # intentionally limited to FleetMind-owned files on the next run;
+            # native service definitions are never overwritten here.
             raise
 
 
