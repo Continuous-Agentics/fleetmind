@@ -209,6 +209,27 @@ describe("renderer openai agentRuntime routing", () => {
     );
   });
 
+  it("matches OpenClaw-normalized exact and wildcard runtime keys before adding automatic defaults", () => {
+    for (const key of ["OpenAI/*", " openai/* ", "gpt-5.5"]) {
+      const fleet = makeFleet({
+        agents: [
+          {
+            id: "solo",
+            name: "Solo",
+            target: "box",
+            model: "openai/gpt-5.5",
+            models: { [key]: { agentRuntime: { id: "codex" } } },
+          },
+        ],
+      });
+      const models = configModels(renderAgentOpenClawJson(fleet, "solo"));
+      assert.deepEqual(models.entries.solo.models?.[key]?.agentRuntime, {
+        id: "codex",
+      });
+      assert.equal(models.entries.solo.models?.["openai/gpt-5.5"], undefined);
+    }
+  });
+
   it("normalizes OpenClaw Codex runtime aliases for plugin inference", () => {
     for (const id of ["Codex", "codex-app-server"]) {
       const fleet = makeFleet({
@@ -226,6 +247,33 @@ describe("renderer openai agentRuntime routing", () => {
         plugins: { allow: string[] };
       };
       assert.ok(rendered.plugins.allow.includes("codex"), id);
+    }
+  });
+
+  it("does not infer plugins for arbitrary runtime ids inherited from Object.prototype", () => {
+    const baseAgent = {
+      id: "solo",
+      name: "Solo",
+      target: "box",
+    };
+    const baseline = (renderAgentOpenClawJson(
+      makeFleet({ defaultsModel: "openai/gpt-5.5", agents: [baseAgent] }),
+      "solo",
+    ) as { plugins: { allow: string[]; entries: Record<string, unknown> } }).plugins;
+    for (const id of ["constructor", "__proto__"]) {
+      const fleet = makeFleet({
+        defaultsModel: "openai/gpt-5.5",
+        agents: [
+          {
+            ...baseAgent,
+            models: { "openai/*": { agentRuntime: { id } } },
+          },
+        ],
+      });
+      const rendered = renderAgentOpenClawJson(fleet, "solo") as {
+        plugins: { allow: string[]; entries: Record<string, unknown> };
+      };
+      assert.deepEqual(rendered.plugins, baseline);
     }
   });
 

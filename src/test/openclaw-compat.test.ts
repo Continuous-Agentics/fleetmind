@@ -23,7 +23,7 @@ function fleet(plugins?: { allow?: string[]; deny?: string[] }, selfManaged = fa
     ] } }));
 }
 
-function wrenCodexFleet(runtimeId = "codex") {
+function wrenCodexFleet(runtimeId = "codex", modelKey = "openai/*") {
   return normalizeFleet(FleetSchema.parse({
     fleet: { name: "wren-runtime" },
     targets: { box: { provider: "local", os: "linux" } },
@@ -32,7 +32,7 @@ function wrenCodexFleet(runtimeId = "codex") {
       id: "wren",
       name: "Wren",
       orchestrator: true,
-      models: { "openai/*": { agentRuntime: { id: runtimeId } } },
+      models: { [modelKey]: { agentRuntime: { id: runtimeId } } },
     }] },
   }));
 }
@@ -275,6 +275,14 @@ describe("current OpenClaw contract", () => {
       assert.equal(resolve(host, "alpha"), "codex");
       assert.equal(resolve(alphaOnly, "alpha"), "codex");
       assert.equal(resolve(host, "beta"), "openclaw");
+
+      for (const modelKey of ["OpenAI/*", " openai/* ", "gpt-5.5"]) {
+        const normalized = renderAgentOpenClawJson(wrenCodexFleet("codex", modelKey), "wren") as any;
+        assert.equal(normalized.agents.entries.wren.models["openai/gpt-5.5"], undefined);
+        assert.equal(resolveRuntime({
+          config: normalized, agentId: "wren", provider: "openai", modelId: "gpt-5.5",
+        }).policy?.id, "codex", modelKey);
+      }
 
       const live = path.join(dir, "live.json"); fs.writeFileSync(live, "old-bytes\n");
       assert.throws(() => publishOpenClawConfig(live, { invalid: "fixture-secret-not-for-errors" }), (error: unknown) => {

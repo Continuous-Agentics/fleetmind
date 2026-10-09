@@ -34,8 +34,27 @@ function agentModels(agent: AgentConfig, defaults: Fleet["agents"]["defaults"]):
  * model-before-provider-wildcard precedence.
  */
 function applicableRuntime(overrides: AgentModelOverrides | undefined, ref: string) {
-  const provider = modelProvider(ref);
-  return overrides?.[ref]?.agentRuntime ?? (provider ? overrides?.[`${provider}/*`]?.agentRuntime : undefined);
+  if (!overrides) return undefined;
+  const selected = ref.trim();
+  const slash = selected.indexOf("/");
+  if (slash <= 0 || slash >= selected.length - 1) return undefined;
+  const provider = selected.slice(0, slash).trim().toLowerCase();
+  const modelId = selected.slice(slash + 1).trim();
+  const matches = (key: string, wildcard: boolean) => {
+    const entry = key.trim();
+    if (!wildcard && entry === modelId) return true;
+    const entrySlash = entry.indexOf("/");
+    if (entrySlash <= 0 || entrySlash >= entry.length - 1) return false;
+    const entryProvider = entry.slice(0, entrySlash).trim().toLowerCase();
+    const entryModel = entry.slice(entrySlash + 1).trim();
+    return entryProvider === provider && entryModel === (wildcard ? "*" : modelId);
+  };
+  for (const wildcard of [false, true]) {
+    for (const [key, override] of Object.entries(overrides)) {
+      if (override.agentRuntime && matches(key, wildcard)) return override.agentRuntime;
+    }
+  }
+  return undefined;
 }
 
 interface RenderedModelsPolicy {
@@ -99,17 +118,17 @@ const PROVIDER_PLUGINS: Record<string, string> = {
 
 /** Bundled runtime IDs whose harness registration comes from a known plugin.
  * Custom runtime IDs remain operator-managed through agents[].plugins. */
-const RUNTIME_PLUGINS: Record<string, string> = {
-  codex: "codex",
-  "claude-cli": "anthropic",
-  "google-gemini-cli": "google",
-};
+const RUNTIME_PLUGINS = new Map<string, string>([
+  ["codex", "codex"],
+  ["claude-cli", "anthropic"],
+  ["google-gemini-cli", "google"],
+]);
 
 /** Match OpenClaw's runtime-id normalization for plugin ownership lookup. */
 function runtimePluginId(raw: string): string | undefined {
   const normalized = raw.trim().toLowerCase();
   const runtime = normalized === "codex-app-server" ? "codex" : normalized;
-  return RUNTIME_PLUGINS[runtime];
+  return RUNTIME_PLUGINS.get(runtime);
 }
 
 function pluginPolicy(fleet: Fleet, agents: AgentConfig[], entries: Record<string, unknown>) {

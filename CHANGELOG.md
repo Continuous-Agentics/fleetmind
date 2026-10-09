@@ -14,7 +14,8 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 - Make delegation protocol skills conditional in role manifests so delegation-disabled fleets pass `render --check` and `doctor` without unwanted skill injection, while unrelated role requirements remain enforced.
 - Scope automatic OpenAI runtime defaults per agent so exact entries cannot override another agent's explicit wildcard after model switching.
-- Resolve source-test loaders before changing fixture directories and infer bundled runtime plugins from OpenClaw's case-insensitive aliases.
+- Resolve source-test loaders before changing fixture directories and infer bundled runtime plugins from OpenClaw's case-insensitive aliases without treating object-prototype names as plugins.
+- Match OpenClaw's normalized provider wildcard and unqualified exact runtime keys before inserting automatic runtime defaults.
 
 ## [1.3.0-beta.0] — 2026-10-09
 
