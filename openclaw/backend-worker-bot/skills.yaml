@@ -9,9 +9,11 @@ required:
   # Delegation protocol — worker side
   - name: bot-reception
     source: fleetmind
+    when: delegation-enabled
   # Human-initiated worker self-start protocol
   - name: worker-self-start
     source: fleetmind
+    when: delegation-enabled
 
   # Universal bundled skills (every bot type gets these once built).
   # Commented out until each SKILL.md ships in openclaw/skills/.

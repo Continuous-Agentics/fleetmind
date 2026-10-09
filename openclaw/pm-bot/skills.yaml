@@ -4,9 +4,9 @@
 # role: pm is missing a required skill) and `fleetmind sync-template
 # pm-bot` (scaffolds these entries into a fleet.yaml agent block).
 #
-# The manifest is *data*, not behavior — the renderer does not inject
-# skills from here. Operators see exactly what's declared in their
-# fleet.yaml at apply time.
+# The manifest is policy data: doctor reports missing active requirements,
+# while render --check validates and normal render appends them. Conditions
+# are evaluated against fleet.yaml before either command computes gaps.
 
 role: pm
 
@@ -14,9 +14,11 @@ required:
   # Delegation protocol — PM side
   - name: bot-delegation
     source: fleetmind
+    when: delegation-enabled
   # Worker self-start protocol — inbound handler (CON-91)
   - name: worker-self-start
     source: fleetmind
+    when: delegation-enabled
 
   # Universal bundled skills (every bot type gets these once built).
   # Commented out until the corresponding SKILL.md ships in

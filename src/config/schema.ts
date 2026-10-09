@@ -251,6 +251,40 @@ export const DelegationAgentSchema = z.object({
 export const ApiKeysSchema = z.record(z.string(), z.string());
 export type ApiKeys = z.infer<typeof ApiKeysSchema>;
 
+/**
+ * Per-agent or per-model prompt-caching retention policy.
+ * Maps directly to OpenClaw's `agents.defaults.params.cacheRetention`.
+ *
+ * - "none"  — caching disabled
+ * - "short" — 5-minute ephemeral cache (Anthropic default)
+ * - "long"  — 1-hour cache TTL (Anthropic direct / Vertex only)
+ */
+export const CacheRetentionSchema = z.enum(["none", "short", "long"]);
+export type CacheRetention = z.infer<typeof CacheRetentionSchema>;
+
+/** OpenClaw agent params that flow through to agents defaults/entry model overrides. */
+export const AgentParamsSchema = z.object({
+  /** Prompt-cache retention policy for this agent. */
+  cacheRetention: CacheRetentionSchema.optional(),
+}).strict();
+export type AgentParams = z.infer<typeof AgentParamsSchema>;
+
+/** Typed OpenClaw model runtime selection. */
+export const AgentRuntimeSchema = z.object({
+  id: z.string().trim().min(1, "agentRuntime.id must not be empty"),
+}).strict();
+export type AgentRuntime = z.infer<typeof AgentRuntimeSchema>;
+
+/** Per-model overrides (exact or provider wildcard keys such as `openai/*`). */
+export const AgentModelOverridesSchema = z.record(
+  z.string().min(1),
+  z.object({
+    params: AgentParamsSchema.optional(),
+    agentRuntime: AgentRuntimeSchema.optional(),
+  }).strict()
+);
+export type AgentModelOverrides = z.infer<typeof AgentModelOverridesSchema>;
+
 export const AgentSchema = z.object({
   id: AgentIdSchema,
   name: z.string(),
@@ -263,6 +297,9 @@ export const AgentSchema = z.object({
    *  primary model fails. Overrides agents.defaults.fallback_models. An empty
    *  list makes the agent strict (no fallback). */
   fallback_models: z.array(z.string()).optional(),
+  /** Agent-specific per-model params/runtime overrides. These are emitted at
+   *  `agents.entries.<id>.models` so one agent's policy cannot affect another. */
+  models: AgentModelOverridesSchema.optional(),
   persona: PersonaSchema.default({}),
   /** Runtime host this agent is deployed to — references a key in `targets`.
    *  Optional here; falls back to `agents.defaults.target`. Normalization
@@ -305,31 +342,6 @@ export const AgentSchema = z.object({
   }
 });
 
-/**
- * Per-agent or per-model prompt-caching retention policy.
- * Maps directly to OpenClaw's `agents.defaults.params.cacheRetention`.
- *
- * - "none"  — caching disabled
- * - "short" — 5-minute ephemeral cache (Anthropic default)
- * - "long"  — 1-hour cache TTL (Anthropic direct / Vertex only)
- */
-export const CacheRetentionSchema = z.enum(["none", "short", "long"]);
-export type CacheRetention = z.infer<typeof CacheRetentionSchema>;
-
-/** OpenClaw agent params that flow through to agents.defaults.params. */
-export const AgentParamsSchema = z.object({
-  /** Prompt-cache retention policy for this agent. */
-  cacheRetention: CacheRetentionSchema.optional(),
-});
-export type AgentParams = z.infer<typeof AgentParamsSchema>;
-
-/** Per-model param overrides (keyed by "provider/model" string). */
-export const AgentModelOverridesSchema = z.record(
-  z.string(),
-  z.object({ params: AgentParamsSchema.optional() })
-);
-export type AgentModelOverrides = z.infer<typeof AgentModelOverridesSchema>;
-
 export const AgentDefaultsSchema = z.object({
   model: z.string().default("anthropic/claude-sonnet-4-6"),
   /** Fleet-wide ordered fallback models ("provider/model") materialized into
@@ -340,7 +352,7 @@ export const AgentDefaultsSchema = z.object({
   plugins: z.array(z.string()).default(["anthropic"]),
   /** Global default params applied to all agents (unless overridden). */
   params: AgentParamsSchema.optional(),
-  /** Per-model param overrides (keyed by "provider/model" string). */
+  /** Fleet-wide per-model params/runtime overrides (exact or provider wildcard). */
   models: AgentModelOverridesSchema.optional(),
   /**
    * Maximum seconds OpenClaw will wait for a single LLM call to complete

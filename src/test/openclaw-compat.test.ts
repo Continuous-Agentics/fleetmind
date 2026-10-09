@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { FleetSchema } from "../config/schema.js";
 import { normalizeFleet } from "../core/model.js";
 import { renderAgentOpenClawJson, renderHostOpenClawJson } from "../runtime/renderer.js";
-import { mergeCanonicalConfigs, normalizeOpenClawConfig, publishOpenClawConfig, assertSupportedNode, validateOpenClawCandidate } from "../runtime/openclaw-config.js";
+import { mergeCanonicalConfigs, normalizeOpenClawConfig, publishOpenClawConfig, assertSupportedNode, resolveOpenClawBinary, validateOpenClawCandidate } from "../runtime/openclaw-config.js";
 import { applyDiff } from "../cli/commands/pull-self.js";
 import { CONFIG_STAGING_PREFIX } from "../cli/commands/push-fleet.js";
 
@@ -21,7 +23,94 @@ function fleet(plugins?: { allow?: string[]; deny?: string[] }, selfManaged = fa
     ] } }));
 }
 
+function wrenCodexFleet(runtimeId = "codex", modelKey = "openai/*") {
+  return normalizeFleet(FleetSchema.parse({
+    fleet: { name: "wren-runtime" },
+    targets: { box: { provider: "local", os: "linux" } },
+    openclaw: { tools: { web_search: { enabled: false } } },
+    agents: { defaults: { target: "box", model: "openai/gpt-5.5" }, list: [{
+      id: "wren",
+      name: "Wren",
+      orchestrator: true,
+      models: { [modelKey]: { agentRuntime: { id: runtimeId } } },
+    }] },
+  }));
+}
+
+function runtimeIsolationFleet() {
+  return normalizeFleet(FleetSchema.parse({
+    fleet: { name: "runtime-isolation" },
+    targets: { box: { provider: "local", os: "linux" } },
+    openclaw: { tools: { web_search: { enabled: false } } },
+    agents: { defaults: { target: "box" }, list: [
+      { id: "alpha", name: "Alpha", model: "openai/gpt-5.5",
+        models: { "openai/*": { agentRuntime: { id: "codex" } } } },
+      { id: "beta", name: "Beta", model: "openai/gpt-5.6" },
+    ] },
+  }));
+}
+
+async function loadInstalledRuntimeResolver(): Promise<(params: Record<string, unknown>) => any> {
+  const selected = resolveOpenClawBinary();
+  const launcher = fs.realpathSync(path.isAbsolute(selected)
+    ? selected
+    : execFileSync("which", [selected], { encoding: "utf8" }).trim());
+  const candidates: string[] = [];
+  const addAncestors = (entry: string) => {
+    for (let current = path.dirname(entry); current !== path.dirname(current); current = path.dirname(current)) {
+      candidates.push(current);
+    }
+  };
+  addAncestors(launcher);
+  // FleetMind may select a tiny shell wrapper rather than the package launcher.
+  // Follow absolute OpenClaw launcher arguments without assuming their prefix.
+  const wrapper = fs.readFileSync(launcher, "utf8");
+  for (const match of wrapper.matchAll(/(?:^|\s)(\/[\w./-]*\/openclaw(?:\.mjs)?)(?=\s|$)/gm)) {
+    try { addAncestors(fs.realpathSync(match[1]!)); } catch { /* not a launcher path */ }
+  }
+  candidates.push(
+    path.resolve(path.dirname(process.execPath), "../lib/node_modules/openclaw"),
+    path.resolve(path.dirname(process.execPath), "../lib64/node_modules/openclaw"),
+  );
+  for (const manager of ["npm", "pnpm"]) {
+    try {
+      const globalRoot = execFileSync(manager, ["root", "--global"], {
+        encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (globalRoot) candidates.push(path.join(globalRoot, "openclaw"));
+    } catch { /* package manager unavailable */ }
+  }
+  const packageRoot = candidates.find((candidate) => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(candidate, "package.json"), "utf8")).name === "openclaw"
+        && fs.statSync(path.join(candidate, "dist")).isDirectory();
+    } catch { return false; }
+  });
+  assert.ok(packageRoot, `cannot locate the installed OpenClaw package for launcher ${launcher}`);
+  const dist = path.join(packageRoot, "dist");
+  const moduleName = fs.readdirSync(dist).find((name) => {
+    if (!/^model-runtime-policy-.*\.mjs$/.test(name)) return false;
+    return fs.readFileSync(path.join(dist, name), "utf8").includes("function resolveModelRuntimePolicy(");
+  });
+  assert.ok(moduleName, "installed OpenClaw must contain its native model runtime resolver");
+  const runtimeModule = await import(pathToFileURL(path.join(dist, moduleName)).href);
+  const resolver = Object.values(runtimeModule).find(
+    (value) => typeof value === "function" && value.name === "resolveModelRuntimePolicy",
+  );
+  assert.equal(typeof resolver, "function", "native model runtime resolver export must be discoverable");
+  return resolver as (params: Record<string, unknown>) => any;
+}
+
 describe("current OpenClaw contract", () => {
+  it("renders the supported per-agent Wren runtime requirement shape", () => {
+    for (const config of [renderAgentOpenClawJson(wrenCodexFleet(), "wren"), renderHostOpenClawJson(wrenCodexFleet(), "box")]) {
+      const c = config as any;
+      assert.equal(c.agents.entries.wren.models["openai/*"].agentRuntime.id, "codex");
+      assert.equal(c.agents.defaults.models?.["openai/gpt-5.5"]?.agentRuntime, undefined);
+      assert.ok(c.plugins.allow.includes("codex"));
+    }
+  });
+
   it("both render paths derive selected provider/custom allowlists and honor denies", () => {
     for (const config of [renderAgentOpenClawJson(fleet(), "alpha"), renderHostOpenClawJson(fleet(), "box")]) {
       const c = config as any;
@@ -140,7 +229,7 @@ describe("current OpenClaw contract", () => {
     for (const version of ["22.19.0", "24.15.0", "25.9.0", "26.0.0", "bad"]) assert.throws(() => assertSupportedNode(version));
   });
 
-  it("validates both renders with actual target CLI (opt-in installed 2026.9.5, no provider calls)", { skip: process.env.FLEETMIND_OPENCLAW_CONTRACT !== "1" }, () => {
+  it("validates both renders with actual target CLI (opt-in installed 2026.9.5, no provider calls)", { skip: process.env.FLEETMIND_OPENCLAW_CONTRACT !== "1" }, async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fm-real-contract-"));
     try {
       for (const render of [() => renderAgentOpenClawJson(fleet(undefined, true), "alpha"), () => renderHostOpenClawJson(fleet(undefined, true), "box")]) {
@@ -155,6 +244,46 @@ describe("current OpenClaw contract", () => {
         const p = path.join(dir, "openclaw.json"); fs.writeFileSync(p, JSON.stringify(c));
         validateOpenClawCandidate(p);
       }
+      for (const render of [() => renderAgentOpenClawJson(wrenCodexFleet(), "wren"), () => renderHostOpenClawJson(wrenCodexFleet(), "box")]) {
+        const c = render() as any;
+        assert.equal(c.agents.entries.wren.models["openai/*"].agentRuntime.id, "codex");
+        c.plugins.allow = ["openai", "anthropic", "codex", "webhooks"];
+        delete c.channels; delete c.bindings;
+        c.gateway.auth = { mode: "token", token: "fixture-only-gateway" };
+        if (c.hooks) c.hooks.token = "fixture-only-hooks";
+        const p = path.join(dir, "openclaw-wren.json"); fs.writeFileSync(p, JSON.stringify(c));
+        validateOpenClawCandidate(p);
+      }
+      for (const runtimeId of ["Codex", "codex-app-server"]) {
+        const c = renderAgentOpenClawJson(wrenCodexFleet(runtimeId), "wren") as any;
+        assert.ok(c.plugins.allow.includes("codex"));
+        c.plugins.allow = ["openai", "anthropic", "codex", "webhooks"];
+        delete c.channels; delete c.bindings;
+        c.gateway.auth = { mode: "token", token: "fixture-only-gateway" };
+        if (c.hooks) c.hooks.token = "fixture-only-hooks";
+        const p = path.join(dir, `openclaw-wren-${runtimeId}.json`);
+        fs.writeFileSync(p, JSON.stringify(c));
+        validateOpenClawCandidate(p);
+      }
+
+      const resolveRuntime = await loadInstalledRuntimeResolver();
+      const isolationFleet = runtimeIsolationFleet();
+      const host = renderHostOpenClawJson(isolationFleet, "box");
+      const alphaOnly = renderAgentOpenClawJson(isolationFleet, "alpha");
+      const resolve = (config: Record<string, unknown>, agentId: string) =>
+        resolveRuntime({ config, agentId, provider: "openai", modelId: "gpt-5.6" }).policy?.id;
+      assert.equal(resolve(host, "alpha"), "codex");
+      assert.equal(resolve(alphaOnly, "alpha"), "codex");
+      assert.equal(resolve(host, "beta"), "openclaw");
+
+      for (const modelKey of ["OpenAI/*", " openai/* ", "gpt-5.5"]) {
+        const normalized = renderAgentOpenClawJson(wrenCodexFleet("codex", modelKey), "wren") as any;
+        assert.equal(normalized.agents.entries.wren.models["openai/gpt-5.5"], undefined);
+        assert.equal(resolveRuntime({
+          config: normalized, agentId: "wren", provider: "openai", modelId: "gpt-5.5",
+        }).policy?.id, "codex", modelKey);
+      }
+
       const live = path.join(dir, "live.json"); fs.writeFileSync(live, "old-bytes\n");
       assert.throws(() => publishOpenClawConfig(live, { invalid: "fixture-secret-not-for-errors" }), (error: unknown) => {
         assert.ok(error instanceof Error);

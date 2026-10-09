@@ -26,6 +26,8 @@ Run narrow fixtures with `node --import tsx/esm --test --test-concurrency=1 src/
 
 ## Canonical configuration and ownership
 
+Role manifests may mark delegation-only requirements with `when: delegation-enabled`. `render`, `render --check`, and `doctor` evaluate that condition from `fleet.yaml`; delegation-disabled fleets neither fail nor receive `bot-delegation`, `bot-reception`, or `worker-self-start` by automatic injection. Unconditional role requirements still apply, and turning delegation off does not remove skills already declared.
+
 Both OpenClaw JSON renderers emit keyed `agents.entries`: keys are stable IDs; there is no embedded `id` or retired `default` flag. Explicit Slack account bindings remain authoritative. A single configured agent resolves implicitly. Multi-agent renderers declare explicit ownership, with the orchestrator owning system-agent and heartbeat defaults when present; unbound multi-agent operations require a target, not ambient first-agent fallback. Multi-agent `agentDir` paths are unique because current OpenClaw rejects shared auth/session directories. Single-agent paths remain unchanged. FleetMind's separate generated `fleet.yaml` slice remains list-based: every self/roster entry in `agents.list` retains its required `id` and round-trips through FleetMind's schema/loader. Existing invalid shared multi-agent stores require operator credential reconciliation; this change does not copy credential databases.
 
 Selected plugins plus known model-provider and enabled search-provider dependencies form the narrow allowlist. Custom providers must name their owning plugin in `agents.list[].plugins` (provider IDs need not equal plugin IDs). `openclaw.plugins.allow` overrides inference when explicitly authored; `openclaw.plugins.deny` always wins, including required providers. Denied entries are disabled, not silently re-enabled. A deliberately denied dependency can leave the route unavailable; FleetMind never removes the deny to make a check pass. Selected external plugins must be installed/reviewed separately.
@@ -46,7 +48,23 @@ In self-managed mode, Terraform owns only the fresh-host seed. Ordinary apply ig
 
 ## OpenAI: API-key auth is not runtime selection
 
-FleetMind's existing `openai/*` embedded-runtime override selects execution only. `OPENAI_API_KEY` in the service environment is **not sufficient** for current agent authentication. An ordered OpenAI API-key profile must be provisioned using OpenClaw's supported credential writer. Do not create `auth-profiles.json`, write SQLite rows, or silently use subscription credentials as fallback. This change does **not** claim fresh-host automatic OpenAI authentication is fixed.
+FleetMind accepts typed `agentRuntime: { id: "..." }` model overrides at both `agents.defaults.models` and `agents.list[].models`, including provider wildcards such as `openai/*`. Fleet-wide declarations render to `agents.defaults.models`; agent declarations render only to `agents.entries.<agent>.models`. Exact and wildcard keys are preserved for OpenClaw's native precedence, along with existing typed `params`; automatic routing matches OpenClaw's trimmed, case-insensitive provider keys and supported unqualified exact model keys before adding defaults. Unknown model-override fields and empty runtime IDs are rejected. Known bundled harnesses enable their owning plugin using OpenClaw's case-insensitive runtime aliases (`codex`, `Codex`, and `codex-app-server` all enable `codex`); custom runtime plugins must still be listed explicitly in the agent's `plugins`.
+
+When no applicable explicit runtime is declared, FleetMind retains its existing automatic `agentRuntime: { id: "openclaw" }` policy for each used `openai/*` primary or fallback. Automatic defaults always render under `agents.entries.<agent>.models`; authored fleet defaults remain under `agents.defaults.models`. This per-agent scope prevents an automatic exact entry for one agent's current model from outranking another agent's explicit provider wildcard after a model switch. This changes execution selection only: `OPENAI_API_KEY` in the service environment is **not sufficient** for current agent authentication. An ordered OpenAI API-key profile must be provisioned using OpenClaw's supported credential writer. Do not create `auth-profiles.json`, write SQLite rows, or silently use subscription credentials as fallback. This change does **not** claim fresh-host automatic OpenAI authentication is fixed.
+
+For example, Wren's explicit Codex selection is:
+
+```yaml
+agents:
+  list:
+    - id: wren
+      models:
+        "openai/*":
+          agentRuntime:
+            id: codex
+```
+
+It renders as `agents.entries.wren.models["openai/*"].agentRuntime.id = "codex"` under the OpenClaw 2026.9.5 contract.
 
 For an operator-authorized host with the correct local Gateway/state paths, the current documented mechanism is:
 

@@ -2,10 +2,11 @@
 
 Each bot-type directory under `openclaw/` ships a `skills.yaml` declaring the skills *required* for that bot type to stand up.
 
-This is *data* — the renderer doesn't read it, doesn't inject anything at render time. The manifest is consumed by two CLI commands:
+This is policy data consumed by FleetMind's operator commands:
 
-- **`fleetmind doctor`** — validates an existing `fleet.yaml`: for each agent, looks up the manifest matching the agent's `role`, errors if any *required* skill is missing from that agent's `skills:` list.
-- **`fleetmind sync-template <bot-type>`** — scaffolds the required skills into a fresh or existing `fleet.yaml`. Idempotent — re-running adds anything missing without duplicating existing entries.
+- **`fleetmind doctor`** — validates an existing `fleet.yaml`: for each agent, looks up the manifest matching the agent's `role`, evaluates entry conditions against fleet configuration, and errors if any active required skill is missing.
+- **`fleetmind render`** — uses the same active requirement set. `--check` is read-only; normal render appends missing active skills before producing outputs.
+- **`fleetmind sync-template <bot-type>`** — scaffolds manifest skills for template creation. Idempotent — re-running adds anything missing without duplicating existing entries.
 
 `fleetmind init` calls `sync-template` automatically so a fresh fleet.yaml starts with the right skills for each agent's role.
 
@@ -19,10 +20,14 @@ required:
     source: <fleetmind | clawhub | private | client>
     author: <author-handle>      # required for source: clawhub
     version: <semver>            # optional pin
+    when: delegation-enabled     # optional feature condition
 ```
 
 - **`role`** must match a value in the agent schema's `role` enum (`src/config/schema.ts`). One manifest per role.
-- **`required`** is the minimum skill set that defines this bot type's identity. Operators can't run a bot of this role without these skills landing in `fleet.yaml`.
+- **`required`** is the minimum skill set that defines this bot type's identity. An entry without `when` is unconditional.
+- **`when: delegation-enabled`** activates the entry only when `delegation.enabled: true`. Use it for delegation protocol skills (`bot-delegation`, `bot-reception`, and `worker-self-start`), not for unrelated role competence such as `structured-pr-review`.
+
+Inactive requirements are excluded consistently from missing-skill checks, source-mismatch warnings, render mutation, and doctor totals. Existing skills are never removed when a condition becomes inactive.
 
 Manifests express *required identity only*. Optional skills are operator choice, added per-fleet via `fleetmind skill add` or by editing `fleet.yaml` directly.
 
@@ -52,7 +57,7 @@ This keeps the manifest as a forward-looking design document without breaking `f
 
 ## Updating an existing manifest
 
-Adding a skill to `required` is a soft-breaking change for existing fleets — `fleetmind doctor` will flag them as missing, and operators need to run `sync-template` to absorb the change.
+Adding an unconditional skill to `required` is a soft-breaking change for existing fleets — `fleetmind doctor` will flag it as missing, and operators need to run `fleetmind render` or `sync-template` to absorb the change. A conditional skill affects only fleets where its condition is active.
 
 Removing a skill from `required` is non-breaking. Existing fleets retain the skill in their `fleet.yaml` (sync-template doesn't remove things) but new fleets won't get it scaffolded.
 

@@ -136,6 +136,15 @@ agents:
     # fallback_models:
     #   - openai/gpt-4o
     #   - google/gemini-2.0-flash
+    # Optional typed OpenClaw per-model policy. Exact and provider wildcard
+    # keys are supported. FleetMind otherwise defaults used openai/* models to
+    # per-agent agentRuntime.id=openclaw entries; an explicit runtime here takes
+    # precedence.
+    # models:
+    #   "openai/*":
+    #     agentRuntime: { id: codex }
+    #   "anthropic/claude-sonnet-4-6":
+    #     params: { cacheRetention: long }
     plugins:
       - anthropic
 
@@ -164,6 +173,12 @@ agents:
       # api_keys:
       #   anthropic: ${ANTHROPIC_API_KEY}
       #   openai: ${ACME_OPENAI_KEY}
+      # Agent-specific model policy renders only to this agent's OpenClaw entry.
+      # Runtime ids follow OpenClaw aliases; Codex/codex-app-server infer the
+      # bundled codex plugin just like the canonical lowercase id.
+      # models:
+      #   "openai/*":
+      #     agentRuntime: { id: codex }
       persona:
         soul: |
           You are Conductor, an orchestrating AI that coordinates a fleet of specialists.
