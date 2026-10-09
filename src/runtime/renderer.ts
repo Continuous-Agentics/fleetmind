@@ -48,10 +48,10 @@ interface RenderedModelsPolicy {
  *
  * Authored fields are preserved at their declared scope. FleetMind adds its
  * historical `openclaw` runtime default only for used OpenAI refs with no
- * applicable explicit runtime. Usually that remains a shared exact entry. If
- * one agent on the rendered host has an agent-specific runtime for the same
- * ref, automatic defaults move to the other agents' exact maps so the shared
- * exact entry cannot outrank or leak into the agent's wildcard policy.
+ * applicable explicit runtime. Automatic defaults are always agent-scoped:
+ * OpenClaw resolves exact defaults before agent wildcards, so a shared exact
+ * default for one agent's current model could otherwise override another
+ * agent's explicit wildcard after that agent switches models.
  */
 function buildModelsPolicy(
   agents: AgentConfig[],
@@ -69,22 +69,17 @@ function buildModelsPolicy(
     ])
   );
 
-  const refs = new Set(agents.flatMap((agent) => agentModels(agent, defaults)));
-  for (const ref of refs) {
-    if (modelProvider(ref) !== "openai" || applicableRuntime(defaults.models, ref)) continue;
-    const usingAgents = agents.filter((agent) => agentModels(agent, defaults).includes(ref));
-    const hasAgentSpecificRuntime = usingAgents.some((agent) => applicableRuntime(agent.models, ref));
-    if (!hasAgentSpecificRuntime) {
-      shared[ref] = { ...(shared[ref] ?? {}), agentRuntime: { id: "openclaw" } };
-      continue;
-    }
-    for (const agent of usingAgents) {
-      if (!applicableRuntime(agent.models, ref)) {
-        perAgent[agent.id]![ref] = {
-          ...(perAgent[agent.id]![ref] ?? {}),
-          agentRuntime: { id: "openclaw" },
-        };
-      }
+  for (const agent of agents) {
+    for (const ref of new Set(agentModels(agent, defaults))) {
+      if (
+        modelProvider(ref) !== "openai" ||
+        applicableRuntime(defaults.models, ref) ||
+        applicableRuntime(agent.models, ref)
+      ) continue;
+      perAgent[agent.id]![ref] = {
+        ...(perAgent[agent.id]![ref] ?? {}),
+        agentRuntime: { id: "openclaw" },
+      };
     }
   }
 
@@ -110,6 +105,13 @@ const RUNTIME_PLUGINS: Record<string, string> = {
   "google-gemini-cli": "google",
 };
 
+/** Match OpenClaw's runtime-id normalization for plugin ownership lookup. */
+function runtimePluginId(raw: string): string | undefined {
+  const normalized = raw.trim().toLowerCase();
+  const runtime = normalized === "codex-app-server" ? "codex" : normalized;
+  return RUNTIME_PLUGINS[runtime];
+}
+
 function pluginPolicy(fleet: Fleet, agents: AgentConfig[], entries: Record<string, unknown>) {
   for (const agent of agents) {
     for (const model of agentModels(agent, fleet.agents.defaults)) {
@@ -119,7 +121,7 @@ function pluginPolicy(fleet: Fleet, agents: AgentConfig[], entries: Record<strin
   }
   for (const models of [fleet.agents.defaults.models, ...agents.map((agent) => agent.models)]) {
     for (const override of Object.values(models ?? {})) {
-      const plugin = override.agentRuntime ? RUNTIME_PLUGINS[override.agentRuntime.id] : undefined;
+      const plugin = override.agentRuntime ? runtimePluginId(override.agentRuntime.id) : undefined;
       if (plugin) entries[plugin] ??= { enabled: true };
     }
   }

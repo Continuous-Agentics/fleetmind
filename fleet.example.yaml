@@ -138,7 +138,8 @@ agents:
     #   - google/gemini-2.0-flash
     # Optional typed OpenClaw per-model policy. Exact and provider wildcard
     # keys are supported. FleetMind otherwise defaults used openai/* models to
-    # agentRuntime.id=openclaw; an explicit runtime here takes precedence.
+    # per-agent agentRuntime.id=openclaw entries; an explicit runtime here takes
+    # precedence.
     # models:
     #   "openai/*":
     #     agentRuntime: { id: codex }
@@ -173,6 +174,8 @@ agents:
       #   anthropic: ${ANTHROPIC_API_KEY}
       #   openai: ${ACME_OPENAI_KEY}
       # Agent-specific model policy renders only to this agent's OpenClaw entry.
+      # Runtime ids follow OpenClaw aliases; Codex/codex-app-server infer the
+      # bundled codex plugin just like the canonical lowercase id.
       # models:
       #   "openai/*":
       #     agentRuntime: { id: codex }

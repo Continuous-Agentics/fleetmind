@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { parse as parseYaml } from "yaml";
 
@@ -13,6 +14,11 @@ const cli = path.resolve(
   testDir,
   sourceMode ? "../cli/index.ts" : "../cli/index.js",
 );
+// Resolve before child processes change cwd to an isolated fixture. A bare
+// `tsx/esm` specifier would otherwise resolve relative to the fixture and fail.
+const sourceLoader = sourceMode
+  ? pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href
+  : undefined;
 const roots: string[] = [];
 
 afterEach(() => {
@@ -61,7 +67,7 @@ openclaw:
 function run(root: string, args: string[]) {
   return spawnSync(
     process.execPath,
-    [...(sourceMode ? ["--import", "tsx/esm"] : []), cli, ...args],
+    [...(sourceLoader ? ["--import", sourceLoader] : []), cli, ...args],
     {
       cwd: root,
       encoding: "utf8",

@@ -77,10 +77,11 @@ describe("renderer openai agentRuntime routing", () => {
       renderAgentOpenClawJson(fleet, "solo"),
     ]) {
       const models = configModels(rendered);
-      assert.deepEqual(models.defaults?.["openai/gpt-5.5"]?.agentRuntime, {
-        id: "openclaw",
-      });
-      assert.equal(models.entries.solo.models, undefined);
+      assert.equal(models.defaults?.["openai/gpt-5.5"], undefined);
+      assert.deepEqual(
+        models.entries.solo.models?.["openai/gpt-5.5"]?.agentRuntime,
+        { id: "openclaw" },
+      );
     }
   });
 
@@ -93,9 +94,11 @@ describe("renderer openai agentRuntime routing", () => {
       ],
     });
     const models = configModels(renderHostOpenClawJson(fleet, "box"));
-    assert.deepEqual(models.defaults?.["openai/gpt-5.4-mini"]?.agentRuntime, {
-      id: "openclaw",
-    });
+    assert.equal(models.defaults?.["openai/gpt-5.4-mini"], undefined);
+    assert.deepEqual(
+      models.entries.inherit.models?.["openai/gpt-5.4-mini"]?.agentRuntime,
+      { id: "openclaw" },
+    );
     assert.deepEqual(models.entries.inherit.model.fallbacks, [
       "openai/gpt-5.4-mini",
     ]);
@@ -157,9 +160,11 @@ describe("renderer openai agentRuntime routing", () => {
     assert.equal(host.entries.finch, undefined);
 
     const otherHost = configModels(renderHostOpenClawJson(fleet, "other"));
-    assert.deepEqual(otherHost.defaults?.["openai/gpt-5.5"]?.agentRuntime, {
-      id: "openclaw",
-    });
+    assert.equal(otherHost.defaults?.["openai/gpt-5.5"], undefined);
+    assert.deepEqual(
+      otherHost.entries.finch.models?.["openai/gpt-5.5"]?.agentRuntime,
+      { id: "openclaw" },
+    );
     assert.deepEqual(Object.keys(otherHost.entries), ["finch"]);
 
     const wren = configModels(renderAgentOpenClawJson(fleet, "wren"));
@@ -168,10 +173,60 @@ describe("renderer openai agentRuntime routing", () => {
     });
     assert.equal(wren.entries.robin, undefined);
     const robin = configModels(renderAgentOpenClawJson(fleet, "robin"));
-    assert.deepEqual(robin.defaults?.["openai/gpt-5.5"]?.agentRuntime, {
-      id: "openclaw",
+    assert.equal(robin.defaults?.["openai/gpt-5.5"], undefined);
+    assert.deepEqual(
+      robin.entries.robin.models?.["openai/gpt-5.5"]?.agentRuntime,
+      { id: "openclaw" },
+    );
+  });
+
+  it("does not let another agent's automatic exact runtime override a wildcard after model switching", () => {
+    const fleet = makeFleet({
+      agents: [
+        {
+          id: "alpha",
+          name: "Alpha",
+          target: "box",
+          model: "openai/gpt-5.5",
+          models: { "openai/*": { agentRuntime: { id: "codex" } } },
+        },
+        {
+          id: "beta",
+          name: "Beta",
+          target: "box",
+          model: "openai/gpt-5.6",
+        },
+      ],
     });
-    assert.equal(robin.entries.robin.models, undefined);
+    const host = configModels(renderHostOpenClawJson(fleet, "box"));
+    assert.equal(host.defaults?.["openai/gpt-5.6"], undefined);
+    assert.deepEqual(host.entries.alpha.models, {
+      "openai/*": { agentRuntime: { id: "codex" } },
+    });
+    assert.deepEqual(
+      host.entries.beta.models?.["openai/gpt-5.6"]?.agentRuntime,
+      { id: "openclaw" },
+    );
+  });
+
+  it("normalizes OpenClaw Codex runtime aliases for plugin inference", () => {
+    for (const id of ["Codex", "codex-app-server"]) {
+      const fleet = makeFleet({
+        defaultsModel: "openai/gpt-5.5",
+        agents: [
+          {
+            id: "solo",
+            name: "Solo",
+            target: "box",
+            models: { "openai/*": { agentRuntime: { id } } },
+          },
+        ],
+      });
+      const rendered = renderAgentOpenClawJson(fleet, "solo") as {
+        plugins: { allow: string[] };
+      };
+      assert.ok(rendered.plugins.allow.includes("codex"), id);
+    }
   });
 
   it("accepts only typed runtime/params fields and non-empty runtime ids", () => {
