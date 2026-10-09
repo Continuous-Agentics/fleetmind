@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { stringify as yamlStringify } from "yaml";
-import type { Fleet, AgentConfig } from "../config/schema.js";
+import type { Fleet, AgentConfig, AgentModelOverrides } from "../config/schema.js";
 import { slackChannel } from "../core/channels.js";
 import { standardWorkspaceBase } from "../core/model.js";
 import { modelProvider } from "../core/model-provider.js";
@@ -30,30 +30,68 @@ function agentModels(agent: AgentConfig, defaults: Fleet["agents"]["defaults"]):
 }
 
 /**
- * Build the `agents.defaults.models` map for a set of agents, or undefined when
- * empty. Merges two things:
- *  - per-model param overrides from `agents.defaults.models` (e.g. cacheRetention)
- *  - an `agentRuntime: { id: "openclaw" }` override for every `openai/*` model
- *    used. OpenClaw routes `openai/*` to the Codex (subscription/OAuth) harness
- *    by default. This selects execution only: agent API-key auth separately
- *    requires a saved API-key profile and explicit auth order (see compatibility docs).
+ * Return an applicable authored runtime override, respecting OpenClaw's exact
+ * model-before-provider-wildcard precedence.
  */
-function buildModelsMap(
+function applicableRuntime(overrides: AgentModelOverrides | undefined, ref: string) {
+  const provider = modelProvider(ref);
+  return overrides?.[ref]?.agentRuntime ?? (provider ? overrides?.[`${provider}/*`]?.agentRuntime : undefined);
+}
+
+interface RenderedModelsPolicy {
+  defaults?: Record<string, Record<string, unknown>>;
+  agents: Record<string, Record<string, Record<string, unknown>>>;
+}
+
+/**
+ * Build shared and per-agent OpenClaw model policy.
+ *
+ * Authored fields are preserved at their declared scope. FleetMind adds its
+ * historical `openclaw` runtime default only for used OpenAI refs with no
+ * applicable explicit runtime. Usually that remains a shared exact entry. If
+ * one agent on the rendered host has an agent-specific runtime for the same
+ * ref, automatic defaults move to the other agents' exact maps so the shared
+ * exact entry cannot outrank or leak into the agent's wildcard policy.
+ */
+function buildModelsPolicy(
   agents: AgentConfig[],
   defaults: Fleet["agents"]["defaults"]
-): Record<string, Record<string, unknown>> | undefined {
-  const out: Record<string, Record<string, unknown>> = {};
+): RenderedModelsPolicy {
+  const shared: Record<string, Record<string, unknown>> = {};
   for (const [modelKey, override] of Object.entries(defaults.models ?? {})) {
-    if (override.params) out[modelKey] = { params: override.params };
+    shared[modelKey] = { ...override };
   }
-  for (const agent of agents) {
-    for (const ref of agentModels(agent, defaults)) {
-      if (modelProvider(ref) === "openai") {
-        out[ref] = { ...(out[ref] ?? {}), agentRuntime: { id: "openclaw" } };
+
+  const perAgent: RenderedModelsPolicy["agents"] = Object.fromEntries(
+    agents.map((agent) => [
+      agent.id,
+      Object.fromEntries(Object.entries(agent.models ?? {}).map(([key, override]) => [key, { ...override }])),
+    ])
+  );
+
+  const refs = new Set(agents.flatMap((agent) => agentModels(agent, defaults)));
+  for (const ref of refs) {
+    if (modelProvider(ref) !== "openai" || applicableRuntime(defaults.models, ref)) continue;
+    const usingAgents = agents.filter((agent) => agentModels(agent, defaults).includes(ref));
+    const hasAgentSpecificRuntime = usingAgents.some((agent) => applicableRuntime(agent.models, ref));
+    if (!hasAgentSpecificRuntime) {
+      shared[ref] = { ...(shared[ref] ?? {}), agentRuntime: { id: "openclaw" } };
+      continue;
+    }
+    for (const agent of usingAgents) {
+      if (!applicableRuntime(agent.models, ref)) {
+        perAgent[agent.id]![ref] = {
+          ...(perAgent[agent.id]![ref] ?? {}),
+          agentRuntime: { id: "openclaw" },
+        };
       }
     }
   }
-  return Object.keys(out).length > 0 ? out : undefined;
+
+  return {
+    defaults: Object.keys(shared).length > 0 ? shared : undefined,
+    agents: perAgent,
+  };
 }
 
 /** Known owning provider plugin IDs (bundled or external). Unknown/custom providers must declare their
@@ -64,10 +102,24 @@ const PROVIDER_PLUGINS: Record<string, string> = {
   openrouter: "openrouter", ollama: "ollama", xai: "xai", mistral: "mistral",
 };
 
+/** Bundled runtime IDs whose harness registration comes from a known plugin.
+ * Custom runtime IDs remain operator-managed through agents[].plugins. */
+const RUNTIME_PLUGINS: Record<string, string> = {
+  codex: "codex",
+  "claude-cli": "anthropic",
+  "google-gemini-cli": "google",
+};
+
 function pluginPolicy(fleet: Fleet, agents: AgentConfig[], entries: Record<string, unknown>) {
   for (const agent of agents) {
     for (const model of agentModels(agent, fleet.agents.defaults)) {
       const plugin = PROVIDER_PLUGINS[modelProvider(model) ?? ""];
+      if (plugin) entries[plugin] ??= { enabled: true };
+    }
+  }
+  for (const models of [fleet.agents.defaults.models, ...agents.map((agent) => agent.models)]) {
+    for (const override of Object.values(models ?? {})) {
+      const plugin = override.agentRuntime ? RUNTIME_PLUGINS[override.agentRuntime.id] : undefined;
       if (plugin) entries[plugin] ??= { enabled: true };
     }
   }
@@ -137,11 +189,14 @@ export function renderAgentOpenClawJson(
   const agentWorkspaceBase = standardWorkspaceBase(fleet.targetForAgent(agent));
   const workspace = agentWorkspaceBase;
   const agentDir = `${agentWorkspaceBase}/agent`;
+  const modelsPolicy = buildModelsPolicy([agent], defaults);
+  const agentModelsMap = modelsPolicy.agents[agent.id];
   const agentListEntry = {
     name: agent.name,
     workspace,
     agentDir,
     model: modelConfig(agent.model ?? defaults.model, agentFallbacks(agent, defaults)),
+    ...(agentModelsMap && Object.keys(agentModelsMap).length > 0 ? { models: agentModelsMap } : {}),
   };
 
   // Only an authored Slack channel creates a route/account.
@@ -243,8 +298,9 @@ export function renderAgentOpenClawJson(
   const defaultsParams = defaults.params && Object.keys(defaults.params).length > 0
     ? defaults.params
     : undefined;
-  // Per-model overrides: defaults.models params + openai/* agentRuntime routing.
-  const modelsMap = buildModelsMap([agent], defaults);
+  // Shared per-model overrides + automatic OpenAI runtime routing. Agent-local
+  // overrides live on agentListEntry.models and never bleed to another agent.
+  const modelsMap = modelsPolicy.defaults;
 
   // Hooks config — fall back to sensible defaults when oc.hooks is absent
   // (fleet objects built without going through FleetSchema.parse may omit it).
@@ -377,6 +433,8 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
   const defaults = agents.defaults;
   const oc = openclaw;
 
+  const modelsPolicy = buildModelsPolicy(hostAgents, defaults);
+
   // Agent list
   const agentList = hostAgents.map((agent) => {
     const model = agent.model ?? defaults.model;
@@ -385,11 +443,13 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
     const agentDir = hostAgents.length > 1
       ? `${agentWorkspaceBase}/agents/${agent.id}/agent`
       : `${agentWorkspaceBase}/agent`;
+    const agentModelsMap = modelsPolicy.agents[agent.id];
     return {
       name: agent.name,
       workspace,
       agentDir,
       model: modelConfig(model, agentFallbacks(agent, defaults)),
+      ...(agentModelsMap && Object.keys(agentModelsMap).length > 0 ? { models: agentModelsMap } : {}),
     };
   });
 
@@ -434,7 +494,7 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
   }
 
   if (bindings.length) pluginEntries["slack"] = { enabled: true };
-  const modelsMap = buildModelsMap(hostAgents, defaults);
+  const modelsMap = modelsPolicy.defaults;
   const owner = hostAgents.find((a) => a.orchestrator)?.id;
   return {
     agents: {
@@ -777,6 +837,7 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
     orchestrator: agent.orchestrator ?? false,
     model: agent.model ?? fleet.agents.defaults.model,
     ...(agent.fallback_models ? { fallback_models: agent.fallback_models } : {}),
+    ...(agent.models ? { models: agent.models } : {}),
     skills: agent.skills ?? [],
     ...(agent.target ? { target: agent.target } : {}),
     ...(agent.delegation ? { delegation: agent.delegation } : {}),
@@ -805,6 +866,7 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
       defaults: {
         model: fleet.agents.defaults.model,
         ...(fleet.agents.defaults.fallback_models ? { fallback_models: fleet.agents.defaults.fallback_models } : {}),
+        ...(fleet.agents.defaults.models ? { models: fleet.agents.defaults.models } : {}),
         ...(fleet.agents.defaults.target ? { target: fleet.agents.defaults.target } : {}),
       },
       self: selfEntry,

@@ -6,6 +6,14 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- Support typed fleet-wide and per-agent OpenClaw model runtime overrides, including provider wildcard keys, while retaining automatic embedded OpenAI routing only when no explicit runtime applies.
+
+### Fixed
+
+- Make delegation protocol skills conditional in role manifests so delegation-disabled fleets pass `render --check` and `doctor` without unwanted skill injection, while unrelated role requirements remain enforced.
+
 ## [1.3.0-beta.0] — 2026-10-09
 
 ### Added

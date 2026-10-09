@@ -4,7 +4,7 @@ import path from "node:path";
 import { parseDocument, YAMLMap } from "yaml";
 import { loadFleet } from "../../config/loader.js";
 import { writeOutputs } from "../../runtime/renderer.js";
-import { computeFleetSkillGaps } from "../../runtime/skills-manifest.js";
+import { computeConfiguredFleetSkillGaps } from "../../runtime/skills-manifest.js";
 import { skillsManifestPath } from "../../runtime/bot-types.js";
 import { addSkillsToFleetYaml } from "./skill.js";
 import { log } from "../../utils/log.js";
@@ -84,7 +84,7 @@ Examples:
         }
         if (!checkOnly) normalizeGithubAppsInFleetYaml(fleetFile, true);
         const fleet = loadFleet(fleetFile);
-        const gaps = computeFleetSkillGaps(fleet.agents.list);
+        const gaps = computeConfiguredFleetSkillGaps(fleet);
         const gapsWithMissing = gaps.filter((g) => g.missing.length > 0);
 
         if (checkOnly) {

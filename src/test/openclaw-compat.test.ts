@@ -21,7 +21,30 @@ function fleet(plugins?: { allow?: string[]; deny?: string[] }, selfManaged = fa
     ] } }));
 }
 
+function wrenCodexFleet() {
+  return normalizeFleet(FleetSchema.parse({
+    fleet: { name: "wren-runtime" },
+    targets: { box: { provider: "local", os: "linux" } },
+    openclaw: { tools: { web_search: { enabled: false } } },
+    agents: { defaults: { target: "box", model: "openai/gpt-5.5" }, list: [{
+      id: "wren",
+      name: "Wren",
+      orchestrator: true,
+      models: { "openai/*": { agentRuntime: { id: "codex" } } },
+    }] },
+  }));
+}
+
 describe("current OpenClaw contract", () => {
+  it("renders the supported per-agent Wren runtime requirement shape", () => {
+    for (const config of [renderAgentOpenClawJson(wrenCodexFleet(), "wren"), renderHostOpenClawJson(wrenCodexFleet(), "box")]) {
+      const c = config as any;
+      assert.equal(c.agents.entries.wren.models["openai/*"].agentRuntime.id, "codex");
+      assert.equal(c.agents.defaults.models?.["openai/gpt-5.5"]?.agentRuntime, undefined);
+      assert.ok(c.plugins.allow.includes("codex"));
+    }
+  });
+
   it("both render paths derive selected provider/custom allowlists and honor denies", () => {
     for (const config of [renderAgentOpenClawJson(fleet(), "alpha"), renderHostOpenClawJson(fleet(), "box")]) {
       const c = config as any;
@@ -153,6 +176,16 @@ describe("current OpenClaw contract", () => {
         c.gateway.auth = { mode: "token", token: "fixture-only-gateway" };
         if (c.hooks) c.hooks.token = "fixture-only-hooks";
         const p = path.join(dir, "openclaw.json"); fs.writeFileSync(p, JSON.stringify(c));
+        validateOpenClawCandidate(p);
+      }
+      for (const render of [() => renderAgentOpenClawJson(wrenCodexFleet(), "wren"), () => renderHostOpenClawJson(wrenCodexFleet(), "box")]) {
+        const c = render() as any;
+        assert.equal(c.agents.entries.wren.models["openai/*"].agentRuntime.id, "codex");
+        c.plugins.allow = ["openai", "anthropic", "codex", "webhooks"];
+        delete c.channels; delete c.bindings;
+        c.gateway.auth = { mode: "token", token: "fixture-only-gateway" };
+        if (c.hooks) c.hooks.token = "fixture-only-hooks";
+        const p = path.join(dir, "openclaw-wren.json"); fs.writeFileSync(p, JSON.stringify(c));
         validateOpenClawCandidate(p);
       }
       const live = path.join(dir, "live.json"); fs.writeFileSync(live, "old-bytes\n");
