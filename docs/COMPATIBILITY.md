@@ -2,15 +2,15 @@
 
 ## One release, one contract
 
-FleetMind ships its CLI, runtime bootstrap, and Terraform module from this repository. Keep the npm runtime version and module Git tag identical (apart from the tag's `v` prefix): for example runtime `1.2.1` and `git::https://github.com/Continuous-Agentics/fleetmind.git//infra/terraform/modules/fleetmind?ref=v1.2.1`. The embedded Terraform root must come from that same tag. Do not mix runtime and module releases or use the archived standalone Terraform repository.
+FleetMind ships its CLI, runtime bootstrap, and Terraform module from this repository. For this beta, keep the npm runtime at `1.3.0-beta.0` and the module source at `git::https://github.com/Continuous-Agentics/fleetmind.git//infra/terraform/modules/fleetmind?ref=v1.3.0-beta.0`; the embedded Terraform root must come from that same tag. Do not mix runtime and module releases or use the archived standalone Terraform repository.
 
-The compatibility changes described here are source changes based on 1.2.1, **not a new release**. Use the eventual reviewed release tag for both surfaces. This change does not alter production/module defaults or template pins. Moving `latest` pins are not a tested tuple; operators must select exact matching FleetMind pins and a tested OpenClaw target before deployment.
+This beta does not alter production/module defaults or consumer template pins. Moving `latest` pins are not a tested tuple; operators must explicitly select the exact matching beta pins and the tested OpenClaw target before deployment.
 
 ## Declared target and evidence matrix
 
 | Component / gate | Contract and evidence |
 |---|---|
-| FleetMind source base | `19cd6811593bdea6a5d146bbb8c754f1f58cc206` (1.2.1); runtime/module remain same-tag |
+| FleetMind runtime/module | **1.3.0-beta.0**, prepared from the 1.2.1 release base; npm runtime and module tag remain exact same-tag surfaces |
 | OpenClaw | **2026.9.5**, verified against installed package and docs, not a claim about npm latest |
 | Node | OpenClaw engine `>=24.16.0 <25 || >=26.1.0`; tested locally on **24.18.0** |
 | SQLite | WAL-safe loaded library: 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x; OpenClaw startup also probes NUL-preserving TEXT/BLOB/JSON behavior |
@@ -67,7 +67,7 @@ For **fresh, disposable single-agent provisioning**, OpenClaw also documents `on
 4. Preview `pull-self` and ensure existing OpenClaw plugins/config validate. The first migration may require explicit operator ownership or auth reconciliation; failed validation preserves old config.
 5. Perform disposable-host channel/auth/model acceptance before claiming fresh-bootstrap compatibility.
 
-No NATS, GitHub helper, hosting/state/network redesign, or release bump is included. Self-managed updater ownership is opt-in; the root-owned default is unchanged, and existing hosts require the explicit same-release migration helper rather than an ordinary Terraform apply. Human-edited untagged skills and local `.env` preservation are not generalized by this change.
+The 1.3.0 beta does not redesign NATS, GitHub helpers, hosting, state, or networking. Self-managed updater ownership is opt-in; the root-owned default is unchanged, and existing hosts require the migration helper from the exact same `v1.3.0-beta.0` tag rather than an ordinary Terraform apply. Human-edited untagged skills and local `.env` preservation are not generalized by this release.
 
 GitHub Apps remain explicitly declared per agent; `project: {}` is the legacy namespace and named Apps require `owner` and `org`. No App credentials enter Terraform. Use the existing backend/state; do not create new Terraform workspaces for an existing fleet as a compatibility workaround.
 
