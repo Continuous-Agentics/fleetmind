@@ -85,6 +85,14 @@ An SSM operator should enter the configured runtime account with
 `octail` for the gateway plus `ocnatsstatus`, `ocnatslog`, and `ocnatstail` for
 its NATS subscriber. These are included in FleetMind `v1.1.0` and later when the embedded Terraform module uses the matching release tag.
 
+The root-owned OpenClaw package remains the default. Fleets that explicitly set
+`openclaw.self_managed_updates.enabled: true` render a service-owned runtime
+mode and a fixed OpenClaw update channel. Fresh hosts install the exact
+`openclaw_version` seed into
+`/home/openclaw/.local/share/fleetmind/openclaw-runtime`; the `openclaw` account
+can then use OpenClaw's supervised update handoff without sudo or write access
+to a shared npm prefix. See [the migration and rollback runbook](docs/terraform/MIGRATIONS.md#service-owned-openclaw-runtime).
+
 ## Architecture
 
 *One EC2 instance per agent. One OpenClaw gateway per EC2.* fleetmind renders per-agent workspaces from `fleet.yaml` and pushes each to its respective host. Agents coordinate over Slack threads, the optional delegation task ledger, and a shared DynamoDB ContextStore — never via shared process state.

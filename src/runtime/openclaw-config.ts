@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 
 export const TESTED_OPENCLAW_VERSION = "2026.9.5";
+export const MINIMUM_SUPPORTED_OPENCLAW_VERSION = TESTED_OPENCLAW_VERSION;
+export const OPENCLAW_BINARY_ENV = "FLEETMIND_OPENCLAW_BIN";
 type Json = Record<string, any>;
 const object = (v: unknown): v is Json => v !== null && typeof v === "object" && !Array.isArray(v);
 
@@ -200,6 +203,16 @@ export function mergeCanonicalConfigs(incomingRaw: Json, liveRaw?: Json, baseRaw
     });
   }
   if (incoming.agents?.ownership) result.agents.ownership = incoming.agents.ownership;
+  // When FleetMind opts into service-owned updates, the selected channel is
+  // fleet policy rather than an unmanaged local leaf. Removing the opt-in also
+  // removes the channel FleetMind previously owned.
+  if (incoming.update?.channel !== undefined) {
+    result.update ??= {};
+    result.update.channel = incoming.update.channel;
+  } else if (base.update?.channel !== undefined) {
+    delete result.update?.channel;
+    if (result.update && Object.keys(result.update).length === 0) delete result.update;
+  }
   if (incoming.bindings !== undefined || base.bindings !== undefined || live.bindings !== undefined) {
     result.bindings = mergeBindings(base.bindings ?? [], live.bindings ?? [], incoming.bindings ?? []);
   }
@@ -210,26 +223,87 @@ export function mergeCanonicalConfigs(incomingRaw: Json, liveRaw?: Json, baseRaw
 export function assertSupportedNode(version: string): void {
   const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(version);
   if (!match || !(Number(match[1]) === 24 && Number(match[2]) >= 16 || Number(match[1]) >= 26 && (Number(match[1]) > 26 || Number(match[2]) >= 1))) {
-    throw new Error("OpenClaw 2026.9.5 requires Node >=24.16.0 <25 or >=26.1.0");
+    throw new Error("Supported OpenClaw releases require Node >=24.16.0 <25 or >=26.1.0");
   }
 }
 
-/** Target CLI owns full schema/plugin and linked-SQLite validation. No stdout /
- * stderr from candidate validation is surfaced: it can contain secret values. */
+/** Strict SemVer: canonical numeric identifiers, arbitrary-size integers, and
+ * prerelease precedence. Build metadata has no effect on ordering. */
+function semver(value: string): { core: bigint[]; pre: string[] } | null {
+  const tokens = value.trim().split(/\s+/);
+  const candidates = tokens.filter((token) => /^[0-9]+\./.test(token));
+  if (candidates.length !== 1) return null;
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(candidates[0]);
+  if (!match) return null;
+  const pre = match[4]?.split(".") ?? [];
+  if (pre.some((id) => /^\d+$/.test(id) && !/^(0|[1-9]\d*)$/.test(id))) return null;
+  return { core: match.slice(1, 4).map(BigInt), pre };
+}
+
+export function isSupportedOpenClawVersion(versionOutput: string): boolean {
+  const actual = semver(versionOutput);
+  const minimum = semver(MINIMUM_SUPPORTED_OPENCLAW_VERSION);
+  if (!actual || !minimum) return false;
+  for (let i = 0; i < 3; i += 1) {
+    if (actual.core[i] !== minimum.core[i]) return actual.core[i] > minimum.core[i];
+  }
+  if (!actual.pre.length || !minimum.pre.length) return !actual.pre.length;
+  for (let i = 0; i < Math.max(actual.pre.length, minimum.pre.length); i += 1) {
+    const a = actual.pre[i], b = minimum.pre[i];
+    if (a === b) continue;
+    if (a === undefined || b === undefined) return b === undefined;
+    const an = /^\d+$/.test(a), bn = /^\d+$/.test(b);
+    if (an && bn) return BigInt(a) > BigInt(b);
+    if (an !== bn) return bn;
+    return a > b;
+  }
+  return true;
+}
+
+/** Resolve the host-selected launcher once. A configured launcher is
+ * authoritative: a missing/unsafe value fails closed instead of falling back to
+ * an older system package retained for recovery. */
+export function resolveOpenClawBinary(env: NodeJS.ProcessEnv = process.env): string {
+  // SSM sudo intentionally drops ambient variables. The runtime account's
+  // persistent selector therefore participates even on older bootstraps.
+  const selector = path.join(env.HOME || os.homedir(), ".config/fleetmind/openclaw-runtime.json");
+  let selected: string | undefined;
+  let selectorExists = false;
+  try { fs.lstatSync(selector); selectorExists = true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  if (selectorExists) {
+    const data = JSON.parse(fs.readFileSync(selector, "utf8"));
+    if (typeof data.binary !== "string" || !data.binary.trim()) throw new Error("Invalid OpenClaw runtime selector");
+    selected = data.binary;
+  }
+  const configured = env[OPENCLAW_BINARY_ENV]?.trim() || selected;
+  if (!configured) return "openclaw";
+  if (!path.isAbsolute(configured)) throw new Error(`${OPENCLAW_BINARY_ENV} must be an absolute path`);
+  const resolved = fs.realpathSync(configured);
+  const stat = fs.statSync(resolved);
+  if (!stat.isFile()) throw new Error(`${OPENCLAW_BINARY_ENV} must resolve to a regular file`);
+  fs.accessSync(resolved, fs.constants.X_OK);
+  return resolved;
+}
+
+/** Target CLI owns full schema/plugin and linked-SQLite validation. FleetMind
+ * sets only a minimum migration contract, then capability-probes the active
+ * launcher with `config validate`; patch/future releases are not rejected
+ * before their actual schema validator runs. No subprocess diagnostics are
+ * surfaced because candidate/config output can contain secret values. */
 export function validateOpenClawCandidate(candidatePath: string): void {
   assertSupportedNode(process.version);
   try {
     const env = { ...process.env, OPENCLAW_CONFIG_PATH: candidatePath,
       OPENCLAW_STATE_DIR: path.dirname(candidatePath), OPENCLAW_CONFIG_READONLY: "1" };
-    const version = execFileSync("openclaw", ["--version"], { env, encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
-    if (!new RegExp(`(?:^|\\s)${TESTED_OPENCLAW_VERSION.replaceAll(".", "\\.")}(?:\\s|$)`).test(version.trim())) {
-      throw new Error("unsupported version");
-    }
-    execFileSync("openclaw", ["config", "validate", "--json"], {
+    const openclawBin = resolveOpenClawBinary(env);
+    const version = execFileSync(openclawBin, ["--version"], { env, encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
+    if (!isSupportedOpenClawVersion(version)) throw new Error("unsupported version");
+    execFileSync(openclawBin, ["config", "validate", "--json"], {
       env, timeout: 60_000, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024,
     });
   } catch {
-    throw new Error(`OpenClaw candidate validation failed (tested contract ${TESTED_OPENCLAW_VERSION}); live config unchanged. Check version, plugins and config with the operator's OpenClaw CLI.`);
+    throw new Error(`OpenClaw candidate validation failed (requires ${MINIMUM_SUPPORTED_OPENCLAW_VERSION}+ and a compatible config validator); live config unchanged. Check the active launcher, plugins and config with the operator's OpenClaw CLI.`);
   }
 }
 

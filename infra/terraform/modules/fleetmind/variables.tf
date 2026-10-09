@@ -44,9 +44,20 @@ variable "agent_names" {
 }
 
 variable "openclaw_version" {
-  description = "OpenClaw npm package version to install. Use 'latest' or pin to a specific version."
+  description = "OpenClaw npm package version to install. Root-managed mode retains the existing tag/pin behavior; self-managed mode requires an exact seed version."
   type        = string
   default     = "latest"
+}
+
+variable "openclaw_runtime_mode" {
+  description = "OpenClaw installation ownership: root-managed (secure default) or self-managed (dedicated openclaw-user-owned prefix with supervised updates)."
+  type        = string
+  default     = "root-managed"
+
+  validation {
+    condition     = contains(["root-managed", "self-managed"], var.openclaw_runtime_mode)
+    error_message = "openclaw_runtime_mode must be either \"root-managed\" or \"self-managed\"."
+  }
 }
 
 variable "node_version" {

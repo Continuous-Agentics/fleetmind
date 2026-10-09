@@ -74,12 +74,13 @@ for cross-account access without the source permission.
 
 After review and explicit infrastructure authorization:
 
-1. Pin the operator CLI, on-host FleetMind package, and embedded Terraform module
-   to the **same FleetMind release tag**. Use the existing CLI upgrade delivery
-   path (`fleetmind push fleet --upgrade-cli <version>`) if the host needs the new
+1. After `v1.3.0-beta.0` is published, pin the operator CLI and on-host FleetMind
+   package to `1.3.0-beta.0` and the embedded Terraform module to
+   `v1.3.0-beta.0`. Use the existing CLI upgrade delivery path
+   (`fleetmind push fleet --upgrade-cli 1.3.0-beta.0`) if the host needs the new
    helper. No separate helper service or EC2 replacement is needed. Do not change
    rollout triggers, AMIs, instance profile, root volumes or user-data to deliver
-   this feature. No version bump/release is part of this change.
+   this feature.
 2. Render configuration and review the Terraform plan. The access delta must be
    only the independent inline IAM policies; reject any EC2 replacement. The
    module does not feed access variables into the agent instance module.
@@ -127,9 +128,10 @@ After review and explicit infrastructure authorization:
 5. Sync reports an SSM **submission ID**, not success. Inspect command completion
    using your normal SSM operator workflow. The host checks exact CLI version
    against the operator **and** the `fleetmind-aws-access-sync-v3` capability before
-   publication; version `1.2.1` alone is insufficient. Publish an appropriately new
-   same-tag runtime/module release before rollout. Module tag matching is an operator
-   invariant (the runtime cannot inspect the consumer's Terraform source tag).
+   publication; version `1.2.1` alone is insufficient. Use the published
+   `1.3.0-beta.0` runtime with the exact `v1.3.0-beta.0` module tag for this beta.
+   Module tag matching is an operator invariant (the runtime cannot inspect the
+   consumer's Terraform source tag).
    Neither sync nor task execution restarts OpenClaw or modifies sessions,
    memory, workspaces, service environment or OpenClaw config.
 

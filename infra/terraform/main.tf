@@ -59,6 +59,7 @@ module "fleetmind" {
   instance_type               = var.instance_type
   agent_instance_types        = var.agent_instance_types
   openclaw_version            = var.openclaw_version
+  openclaw_runtime_mode       = var.openclaw_runtime_mode
   node_version                = var.node_version
   fleetmind_version           = var.fleetmind_version
   delegation_enabled          = var.delegation_enabled

@@ -10,10 +10,11 @@ import { mergeCanonicalConfigs, normalizeOpenClawConfig, publishOpenClawConfig, 
 import { applyDiff } from "../cli/commands/pull-self.js";
 import { CONFIG_STAGING_PREFIX } from "../cli/commands/push-fleet.js";
 
-function fleet(plugins?: { allow?: string[]; deny?: string[] }) {
+function fleet(plugins?: { allow?: string[]; deny?: string[] }, selfManaged = false) {
   return normalizeFleet(FleetSchema.parse({ fleet: { name: "compat" },
     targets: { box: { provider: "local", os: "linux" } },
-    openclaw: { plugins, tools: { web_search: { enabled: false } } },
+    openclaw: { plugins, tools: { web_search: { enabled: false } },
+      ...(selfManaged ? { self_managed_updates: { enabled: true, channel: "extended-stable" } } : {}) },
     agents: { defaults: { target: "box" }, list: [
       { id: "alpha", name: "Alpha", model: "openai/gpt-5.5", plugins: ["custom"], orchestrator: true },
       { id: "beta", name: "Beta" },
@@ -142,8 +143,9 @@ describe("current OpenClaw contract", () => {
   it("validates both renders with actual target CLI (opt-in installed 2026.9.5, no provider calls)", { skip: process.env.FLEETMIND_OPENCLAW_CONTRACT !== "1" }, () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fm-real-contract-"));
     try {
-      for (const render of [() => renderAgentOpenClawJson(fleet(), "alpha"), () => renderHostOpenClawJson(fleet(), "box")]) {
+      for (const render of [() => renderAgentOpenClawJson(fleet(undefined, true), "alpha"), () => renderHostOpenClawJson(fleet(undefined, true), "box")]) {
         const c = render() as any;
+        assert.deepEqual(c.update, { channel: "extended-stable" });
         // Optional external plugins unavailable in a clean state are deliberately disabled.
         c.plugins.allow = ["openai", "anthropic", "webhooks"];
         delete c.plugins.entries.custom; delete c.plugins.entries.slack;

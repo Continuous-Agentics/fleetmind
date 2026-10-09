@@ -29,7 +29,7 @@ import {
   DocumentAlreadyExists,
 } from "@aws-sdk/client-ssm";
 import { log } from "../../utils/log.js";
-import { DEFAULT_AWS_RUNTIME_USER } from "../../deploy/aws-runtime-user.js";
+import { AWS_RUNTIME_SELECTION, DEFAULT_AWS_RUNTIME_USER } from "../../deploy/aws-runtime-user.js";
 
 // ── Document definition ───────────────────────────────────────────────────────
 
@@ -120,7 +120,7 @@ export function buildDocumentContent(runtimeUser = DEFAULT_AWS_RUNTIME_USER): st
               "RUNTIME_USER='{{ RuntimeUser }}'",
               "RUNTIME_UID=$(id -u \"$RUNTIME_USER\")",
               "echo \"Running FleetMind pull-self as $RUNTIME_USER through systemd --user\"",
-              "sudo -H -u \"$RUNTIME_USER\" env XDG_RUNTIME_DIR=\"/run/user/$RUNTIME_UID\" DBUS_SESSION_BUS_ADDRESS=\"unix:path=/run/user/$RUNTIME_UID/bus\" fleetmind pull-self {{ PullSelfArgs }} --user-systemd",
+              `sudo -H -u "$RUNTIME_USER" env XDG_RUNTIME_DIR="/run/user/$RUNTIME_UID" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$RUNTIME_UID/bus" ${AWS_RUNTIME_SELECTION} fleetmind pull-self {{ PullSelfArgs }} --user-systemd`,
             ],
           },
         },

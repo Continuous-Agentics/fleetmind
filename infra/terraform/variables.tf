@@ -85,9 +85,20 @@ variable "agent_instance_types" {
 }
 
 variable "openclaw_version" {
-  description = "OpenClaw npm package version pin."
+  description = "OpenClaw npm package version pin. In self-managed mode this must be an exact seed version, not a tag or range."
   type        = string
   default     = "latest"
+}
+
+variable "openclaw_runtime_mode" {
+  description = "OpenClaw installation ownership: root-managed (secure default) or self-managed (dedicated openclaw-user-owned prefix with supervised updates). Usually generated from fleet.yaml."
+  type        = string
+  default     = "root-managed"
+
+  validation {
+    condition     = contains(["root-managed", "self-managed"], var.openclaw_runtime_mode)
+    error_message = "openclaw_runtime_mode must be either \"root-managed\" or \"self-managed\"."
+  }
 }
 
 variable "node_version" {

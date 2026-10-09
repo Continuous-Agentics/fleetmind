@@ -22,6 +22,9 @@ agent_instance_types = {
 }
 
 # ── Software pins ───────────────────────────────────────────────────────────
+# `latest` is retained for the default root-managed mode. If fleet.yaml enables
+# openclaw.self_managed_updates, replace this with the exact rehearsed seed
+# version; Terraform rejects tags/ranges in that mode.
 openclaw_version = "latest"
 node_version     = "24"
 # Keep this npm version aligned with the FleetMind Git tag used for Terraform (without its leading v).

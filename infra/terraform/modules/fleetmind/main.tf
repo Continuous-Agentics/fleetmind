@@ -70,9 +70,10 @@ module "agent" {
   subnet_id              = local.private_subnet_ids[index(var.agent_names, each.key) % length(local.private_subnet_ids)]
   vpc_security_group_ids = [aws_security_group.fleet.id]
 
-  openclaw_version  = var.openclaw_version
-  node_version      = var.node_version
-  fleetmind_version = var.fleetmind_version
+  openclaw_version      = var.openclaw_version
+  openclaw_runtime_mode = var.openclaw_runtime_mode
+  node_version          = var.node_version
+  fleetmind_version     = var.fleetmind_version
 
   # Pass a static bool for count (must be known at plan time — cannot use a
   # computed ARN). The ARN is passed separately for the policy document body.

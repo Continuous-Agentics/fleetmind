@@ -6,6 +6,21 @@ All notable changes to fleetmind are documented in this file. Format follows
 
 ## [Unreleased]
 
+## [1.3.0-beta.0] — 2026-10-09
+
+### Added
+
+- Scoped task-local AWS application-account access with exact cross-account role grants, revisioned host catalog delivery, isolated temporary credentials, and fail-closed identity checks. (#311)
+- Opt-in service-owned OpenClaw runtime mode with an exact bootstrap seed, explicit update channel, supervised user-systemd update handoff, and an in-place migration/rollback helper; the root-owned installation remains the default. (#313)
+
+### Changed
+
+- Adopt OpenClaw 2026.9.5's canonical keyed agent configuration, plugin policy, runtime selection, and actual-CLI validation contract while preserving operator-owned configuration through normalized three-way merges. (#312)
+
+### Fixed
+
+- Harden interrupted self-managed OpenClaw migration recovery so forward completion and rollback preserve the selected runtime and service state. (#313)
+
 ## [1.2.1] — 2026-08-20
 
 ### Fixed

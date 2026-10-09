@@ -17,13 +17,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = REPO_ROOT / "infra/terraform/modules/fleetmind/modules/agent/user_data/agent_bootstrap.sh.tpl"
+MIGRATION = REPO_ROOT / "infra/terraform/modules/fleetmind/modules/agent/scripts/migrate-openclaw-self-managed.sh"
 
 
-def render() -> str:
+def render(runtime_mode: str = "root-managed", openclaw_version: str = "latest") -> str:
     values = {
         "fleet_name": "test-fleet",
         "agent_id": "worker",
-        "openclaw_version": "latest",
+        "openclaw_version": openclaw_version,
+        "openclaw_runtime_mode": runtime_mode,
         "node_version": "24",
         "aws_region": "us-west-2",
         "fleetmind_version": "latest",
@@ -81,7 +83,12 @@ def require(rendered: str, expected: str) -> None:
 
 
 def main() -> int:
+    variables = (TEMPLATE.parents[1] / "variables.tf").read_text()
+    mode = variables.split('variable "openclaw_runtime_mode" {', 1)[1].split('validation {', 1)[0]
+    if not re.search(r'default\s*=\s*"root-managed"', mode):
+        raise AssertionError("Direct agent module must default to root-managed")
     rendered = render()
+    self_managed = render(runtime_mode="self-managed", openclaw_version="2026.9.5")
 
     # Runtime account, npm-capable PATH, and Docker access are all established
     # before OpenClaw is installed or configured. The Unix account home is
@@ -89,14 +96,15 @@ def main() -> int:
     for expected in (
         'OPENCLAW_USER="openclaw"',
         'OPENCLAW_HOME="/home/openclaw"',
+        'OPENCLAW_RUNTIME_MODE="root-managed"',
+        'OPENCLAW_RUNTIME_PREFIX="$OPENCLAW_HOME/.local/share/fleetmind/openclaw-runtime"',
         'RUNTIME_PATH="/usr/local/bin:/usr/bin:/bin"',
         "dnf install -y git tar unzip jq docker",
         "systemctl enable --now docker",
         "useradd --create-home --home-dir \"$OPENCLAW_HOME\" --shell /bin/bash --groups docker \"$OPENCLAW_USER\"",
-        "usermod --home \"$OPENCLAW_HOME\" --move-home --shell /bin/bash --append --groups docker \"$OPENCLAW_USER\"",
+        "usermod --shell /bin/bash --append --groups docker \"$OPENCLAW_USER\"",
         "loginctl enable-linger \"$OPENCLAW_USER\"",
-        'install -d -o "$OPENCLAW_USER" -g "$OPENCLAW_USER" -m 0700 "$OPENCLAW_HOME/.config/fleetmind"',
-        'chmod 0700 "$OPENCLAW_HOME/.config/fleetmind"',
+        'home_write mkdir "$OPENCLAW_HOME/.config/fleetmind"',
         "echo \"[bootstrap] npm $(npm --version) available on $RUNTIME_PATH\"",
         'curl -fsSL "https://rpm.nodesource.com/setup_${NODE_VERSION}.x" | bash -',
         "dnf install -y nodejs",
@@ -106,7 +114,7 @@ def main() -> int:
         'Webhooks hooks token already populated (not placeholder); leaving it unchanged',
         # Standard OpenClaw layout, one agent per host: the plugin installer's
         # HOME is the OS account home itself, not a nested per-agent workspace.
-        "runuser -u \"$OPENCLAW_USER\" -- env HOME=\"$OPENCLAW_HOME\" PATH=\"$RUNTIME_PATH\" openclaw plugins install @openclaw/slack --force",
+        'runuser -u "$OPENCLAW_USER" -- env HOME="$OPENCLAW_HOME" PATH="$RUNTIME_PATH" FLEETMIND_OPENCLAW_BIN="$OPENCLAW_BIN" "$OPENCLAW_BIN" plugins install @openclaw/slack --force',
         # No per-agent subdirectory: the workspace *is* $OPENCLAW_HOME/.openclaw/workspace.
         'WORKSPACE_DIR="$OPENCLAW_HOME/.openclaw/workspace"',
         "APP_TYPE=\"project\"",
@@ -118,12 +126,11 @@ def main() -> int:
         raise AssertionError("Rendered bootstrap must not reference the legacy /opt/openclaw workspace path")
     if "WORKSPACE_BASE=\"" in rendered:
         raise AssertionError("Rendered bootstrap must not derive a separate WORKSPACE_BASE (one agent per host)")
-    state_handoff = 'chown -R "$OPENCLAW_USER:$OPENCLAW_USER" "$OPENCLAW_HOME/.openclaw"'
-    plugin_install = 'runuser -u "$OPENCLAW_USER" -- env HOME="$OPENCLAW_HOME" PATH="$RUNTIME_PATH" openclaw plugins install @openclaw/slack --force'
-    require(rendered, state_handoff)
-    require(rendered, 'chmod 0700 "$OPENCLAW_HOME/.openclaw"')
-    if rendered.index(state_handoff) > rendered.index(plugin_install):
-        raise AssertionError("OpenClaw state ownership must be handed off before plugin installation")
+    require(rendered, 'home_write mkdir "$WORKSPACE_DIR"')
+    require(rendered, 'home_write mkdir "$OPENCLAW_HOME/.openclaw"')
+    for line in rendered.splitlines():
+        if re.match(r"(?:chown|chmod|touch|install|mkdir|rm|cat [>]) .*", line) and any(token in line for token in ["$OPENCLAW_HOME", "$WORKSPACE_DIR", "$USER_SYSTEMD_DIR", "$OPENCLAW_ALIAS_PROFILE", "$OPENCLAW_BASH"]):
+            raise AssertionError("Privileged runtime-home mutation: " + line)
     hooks_section = section(rendered, "# ── STAGE 7c", "# ── Secret fetch helper")
     if hooks_section.count("openssl rand -hex 32") != 1 or "HOOKS_CURRENT" not in hooks_section:
         raise AssertionError("Hooks token generation must be guarded by the existing secret value")
@@ -132,13 +139,13 @@ def main() -> int:
 
     gateway = section(
         rendered,
-        'cat > "$USER_SYSTEMD_DIR/openclaw-$AGENT_ID.service" << EOF',
+        'home_write write "$USER_SYSTEMD_DIR/openclaw-$AGENT_ID.service" << EOF',
         "# ── STAGE 12b",
     )
     nats = section(
         rendered,
-        'cat > "$USER_SYSTEMD_DIR/${NATS_SVC_NAME}.service" << EOF',
-        'chown "$OPENCLAW_USER:$OPENCLAW_USER"',
+        'home_write write "$USER_SYSTEMD_DIR/${NATS_SVC_NAME}.service" << EOF',
+        '# With lingering enabled',
     )
 
     # Both are systemd *user* units with the OS account's own HOME (standard
@@ -153,6 +160,8 @@ def main() -> int:
             raise AssertionError("A systemd user unit must not set User=")
 
     require(gateway, "ConditionPathExists=$OPENCLAW_HOME/.openclaw/openclaw.json")
+    if "OPENCLAW_SYSTEMD_UNIT=" in gateway or "NPM_CONFIG_PREFIX=" in gateway:
+        raise AssertionError("Root-managed default must not enable OpenClaw's self-update service contract")
     require(nats, "Environment=FLEET_YAML=$NATS_FLEET_YAML")
     require(rendered, 'NATS_FLEET_YAML="$WORKSPACE_DIR/fleet.yaml"')
 
@@ -185,8 +194,8 @@ def main() -> int:
 
     aliases = section(
         rendered,
-        'cat > "$OPENCLAW_ALIAS_PROFILE" << EOF',
-        'chown "$OPENCLAW_USER:$OPENCLAW_USER" "$OPENCLAW_ALIAS_PROFILE"',
+        'home_write write "$OPENCLAW_ALIAS_PROFILE" << EOF',
+        'OPENCLAW_BASHRC=',
     )
     for expected in (
         "fleetmind_userctl() {",
@@ -208,8 +217,45 @@ def main() -> int:
     # symlink is ever needed to reconcile them.
     if 'ln -sfn "$WORKSPACE_DIR/.openclaw" "$OPENCLAW_HOME/.openclaw"' in rendered:
         raise AssertionError("Bootstrap must not create a ~/.openclaw symlink")
-    if 'HOME="$WORKSPACE_DIR" PATH="$RUNTIME_PATH" openclaw plugins install' in rendered:
+    if 'HOME="$WORKSPACE_DIR" PATH="$RUNTIME_PATH" FLEETMIND_OPENCLAW_BIN="$OPENCLAW_BIN" "$OPENCLAW_BIN" plugins install' in rendered:
         raise AssertionError("Plugin install must use $OPENCLAW_HOME, not the workspace directory, as HOME")
+
+    self_gateway = section(
+        self_managed,
+        'home_write write "$USER_SYSTEMD_DIR/openclaw-$AGENT_ID.service.d/50-fleetmind.conf" << EOF',
+        "# ── STAGE 12b",
+    )
+    for expected in (
+        'OPENCLAW_RUNTIME_MODE="self-managed"',
+        'OPENCLAW_VERSION="2026.9.5"',
+        'RUNTIME_PATH="$OPENCLAW_RUNTIME_PREFIX/bin:/usr/local/bin:/usr/bin:/bin"',
+        'NPM_CONFIG_PREFIX="$OPENCLAW_RUNTIME_PREFIX"',
+        'OPENCLAW_BIN="$OPENCLAW_RUNTIME_PREFIX/bin/openclaw"',
+        'openclaw-runtime.json',
+        'export FLEETMIND_OPENCLAW_BIN=$OPENCLAW_BIN',
+        'export PATH=$RUNTIME_PATH',
+    ):
+        require(self_managed, expected)
+    for expected in (
+        'Environment=NPM_CONFIG_PREFIX=$OPENCLAW_RUNTIME_PREFIX',
+        'Environment=FLEETMIND_OPENCLAW_BIN=$OPENCLAW_BIN',
+        'ExecStartPre=/usr/local/bin/fetch-agent-secrets',
+        'EnvironmentFile=-$ENV_FILE',
+        'ConditionPathExists=$OPENCLAW_HOME/.openclaw/openclaw.json',
+    ):
+        require(self_gateway, expected)
+    if "gateway install --force" in self_managed:
+        raise AssertionError("Native install must wait for the first validated config push")
+    if "ExecStart=" in self_gateway or "WorkingDirectory=" in self_gateway:
+        raise AssertionError("FleetMind must not override the native-managed launcher")
+    if 'home_write write "$USER_SYSTEMD_DIR/openclaw-$AGENT_ID.service"' in self_managed:
+        raise AssertionError("Self-managed base must be written by the native installer")
+
+    migration = MIGRATION.read_text(encoding="utf-8")
+    subprocess.run(["bash", "-n", str(MIGRATION)], check=True)
+    require(migration, 'exec /usr/sbin/runuser -u openclaw -- /usr/bin/env -i')
+    if "chown" in "\n".join(line for line in migration.splitlines() if not line.startswith("#")):
+        raise AssertionError("Privileged helper must not chown user-controlled paths")
 
     print("agent bootstrap rendered-user-data assertions passed")
     return 0
