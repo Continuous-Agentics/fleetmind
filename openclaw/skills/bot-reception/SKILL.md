@@ -1,27 +1,29 @@
 ---
 name: bot-reception
-version: 1.6.0
-description: "Worker protocol for NATS delegation receipt: session boot, DDB health precheck, task ack/ship/block via fleetmind task CLI, S3 narrative, and human-requestor Slack threading. Use when a NATS delegation arrives, a task needs to ship or block, or a human makes a direct request. Slack is human-facing only."
+version: 1.7.0
+description: "Independent fleet worker protocol: verify assignment and DDB state, task ack/ship/block, S3 narrative and trusted human-facing routing. Native children return privately to the parent. Use when a NATS delegation arrives, a task needs to ship or block, or a human makes a direct request. Slack is human-facing only."
 ---
 
 # Bot Reception Protocol
 
 ## Session boot
 
-Before accepting any work: (1) ensure the NATS subscriber is running (auto-acks DDB on receipt - no manual `task ack` needed), and (2) run the DDB write-health precheck so a broken write path is a loud refusal, not a silent failure. Full commands: [references/session-boot.md](references/session-boot.md).
+Apply this protocol only to enabled independent fleet assignments. Direct work follows the human request; same-Gateway native children report privately to the parent, which owns user-facing closeout. Do not start a subscriber. Identify actual delivery and ledger capabilities; a query is not proof of write health. Full commands: [references/session-boot.md](references/session-boot.md).
 
 ## On Receiving a Delegation
 
-The subscriber emits one JSON line per delegation event (see [references/receiving-delegation.md](references/receiving-delegation.md) for the exact shape).
+Legacy NATS deployments may emit one JSON line per delegation event (see [references/receiving-delegation.md](references/receiving-delegation.md) for the exact shape).
 
-**Step 4 (post in Slack) must land before any task work** - before reading files, running `gh`, or doing any LLM-visible reasoning about the work. The Slack post is how the human knows you're alive; without it, all activity is invisible until you ship. Steps in order:
+Verify recipient and authoritative task state before work. A legacy auto-ack
+is not native admission evidence. Resolve provider/account/recipient/thread from
+trusted task/session context before any authorized worker notice. The parent
+owns final closeout; native children send no public worker notice.
 
-1. Confirm DDB auto-ack (`status === "accepted"`).
-2. `fleetmind task get --task-id <task_id> --json` for `project` and `task_s3_key`.
-3. **Post the picked-up announcement in YOUR home channel** (not the PM's delegation thread) - the message the human is waiting for. Include `TASK#<task_id>` so the thread is recoverable by search.
-4. _(Optional)_ Read prior task narratives for context.
-5. Do the work silently (see Voice Discipline).
-6. When done or blocked: write the narrative to S3, update DDB, then post in the requestor's thread.
+1. Verify assignment and DDB state, including `project` and `task_s3_key`.
+2. Acknowledge actual pickup only when the current task is delegated to you.
+3. Use the configured route for authorized receipt/progress updates; do not guess.
+4. Read prior narratives when useful, then carry out the scoped work.
+5. On ship/block, write S3 narrative before the DDB transition and return evidence.
 
 Full steps, exact announcement template, and the home-channel-vs-PM-channel distinction: [references/receiving-delegation.md](references/receiving-delegation.md).
 
@@ -38,7 +40,7 @@ fleetmind nats progress \
   --message "PR open at https://github.com/.../pull/42 — awaiting review"
 ```
 
-Also post a brief update in the requestor's Slack thread so they know where things stand. Keep it short — one or two sentences.
+For legacy NATS fleets only; for other configured routes use supported progress delivery. Any authorized human-facing update uses the trusted originating route. Keep it short — one or two sentences.
 
 ## DynamoDB Lifecycle State Management
 
@@ -61,9 +63,9 @@ If you can't write 2-5 non-obvious bullets, use `[]`.
 
 ## Voice Discipline (Mandatory)
 
-**Slack (human-facing only):** open a thread with the requestor on receipt; post progress and the final completion/blocker summary there. Do NOT narrate tool calls, post raw NATS JSON, or post in the PM bot's planning channel.
+**Human-facing routing:** use the configured provider and trusted recipient/thread for authorized worker updates; the parent owns closeout. Legacy Slack routes use provider-specific IDs and `<@USERID>` mentions. Do NOT narrate tool calls, post raw NATS JSON, or post in the PM bot's planning channel.
 
-**NATS (agent-to-agent, never visible to humans):** `delegation` (received), `ack` (auto-published), `progress` (you publish at milestones), `ship`/`block` (published by the corresponding `fleetmind task` command).
+**Legacy NATS independent fleets only:** `delegation` (received), `ack` (auto-published), `progress` (you publish at milestones), `ship`/`block` (published by the corresponding `fleetmind task` command).
 
 ## Handling Human Requests (Non-Delegation)
 
@@ -72,7 +74,7 @@ Classify before acting:
 - **Discussion / one-liner:** just answer.
 - **New feature request (vague scope):** push back - see § Push-back.
 - **Human directly asks you to pick up discrete work (non-delegation):** follow `worker-self-start`.
-- **Real task without a tracker (bug fix, triage, informal request):** write a DDB row + S3 narrative with `--lifecycle shipped-is-done` - see § Informal-task ledger.
+- **Independent fleet task without a tracker:** follow safe registration in `worker-self-start`; PR work requires human signoff and verified merge. Direct/native work uses its parent/session.
 
 ## Push-back (unlinked feature requests)
 
@@ -80,11 +82,11 @@ When asked for new feature work that's vague, indirect, or unclear in scope: rep
 
 ## Informal-task ledger (direct human requests)
 
-Any non-trivial work done outside a formal delegation (touches a repo, touches infra, >5 min of debugging, or any request treated as a real task) still gets a TASK# row in DDB and an S3 narrative, with `--lifecycle shipped-is-done`. One-line answers, reactions, and acknowledgements do not need a row. Full criteria, exact `task create`/`task ack` commands, and completion notes: [references/informal-task-ledger.md](references/informal-task-ledger.md).
+Only independent fleet work uses the ledger procedures. PR work uses `requires-human-signoff`; an explicitly chosen non-PR lifecycle may allow completion at ship. Direct/native work uses its parent/session. One-line answers, reactions, and acknowledgements do not need a row. Full criteria, exact `task create`/`task ack` commands, and completion notes: [references/informal-task-ledger.md](references/informal-task-ledger.md).
 
-## ACP Session Heuristic
+## Native child use
 
-**Inline (no ACP):** single-file edit, 1-2 tool calls, mostly mechanical. **Fork ACP session:** 3+ files, iterative work, test-driven loops, large refactors.
+Use only an available, authorized capability when useful. Children return privately with artifacts, checks and blockers; the parent reviews and owns user-facing closeout.
 
 ## Recovery and visibility
 
@@ -105,7 +107,7 @@ so a restarted worker can recover the human-facing thread through Slack search.
 
 Load these only when the task you're handling needs them. `assets/` holds copy-pasteable templates; `references/` holds detailed procedures.
 
-- [references/session-boot.md](references/session-boot.md) - full NATS subscriber startup and DDB write-health precheck commands.
+- [references/session-boot.md](references/session-boot.md) - legacy read-only subscriber checks and ledger capability limitations.
 - [references/receiving-delegation.md](references/receiving-delegation.md) - full delegation-receipt steps, JSON event shape, and the exact picked-up announcement template.
 - [references/lifecycle-management.md](references/lifecycle-management.md) - full ship/block/unblock commands, completion and blocker post templates, post-completion handoff.
 - [references/informal-task-ledger.md](references/informal-task-ledger.md) - full non-trivial-work criteria and informal task-row commands.

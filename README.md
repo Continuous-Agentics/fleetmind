@@ -34,7 +34,7 @@ For local fleets, install OpenClaw too:
 npm install -g @continuous-agentics/fleetmind openclaw
 ```
 
-The tested OpenClaw target is **2026.9.5**, with Node.js **24.16+ (24.x) or 26.1+** and a WAL-reset-safe linked SQLite library. Node 22/23/25 are unsupported. See [Compatibility](docs/COMPATIBILITY.md) for the tested matrix, plugin prerequisites, and explicit OpenAI API-key setup.
+The selected OpenClaw qualification target is **2026.10.8**, with Node.js **>=24.22.1 <25 or >=26.12.1** and a WAL-reset-safe linked SQLite library. Node 22/23/25 are unsupported. See [Compatibility](docs/COMPATIBILITY.md) for the evidence matrix, remaining qualification gates, plugin prerequisites, and explicit OpenAI API-key setup.
 
 ## Quick Start
 

@@ -8,6 +8,8 @@
 # while render --check validates and normal render appends them. Conditions
 # are evaluated against fleet.yaml before either command computes gaps.
 
+# Feature-gated skills cover independent fleet tasks; direct work and native
+# child reporting follow the shared generated execution policy.
 role: pm
 
 required:

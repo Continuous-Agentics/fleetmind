@@ -1,74 +1,44 @@
-# PM Inbound Handler — Worker Self-Start Notices
+# Inbound Independent Worker Self-Start Notices
 
-> Read this when you are the **PM bot** and a worker posts a self-start notice in the planning channel. See also: `bot-delegation` § Inbound Self-Start Notices, which carries the same protocol as the authoritative PM skill.
+Only for enabled independent fleet work. Direct work and native child results
+return through their session/parent and do not trigger worker registration.
+The parent owns user-facing closeout.
 
-## Recognising a self-start notice
+## Recognize and verify
 
-A Slack message in the planning channel from a worker bot containing `"— self-start notice"` with a `Task ID:` and `Tracker:` field. (The `Tracker:` field may be `"none"` if no ticket was referenced — this is valid.)
+A notice on the trusted configured coordination route contains "— self-start
+notice", `Task ID:` and `Tracker:` (`none` is valid). Legacy Slack notices use
+`<@USERID>`; other providers require their supported mention/routing syntax.
+Verify the known worker identity, direct human request and bounded what/why/DoD.
+A plausible summary or a tracker URL alone is not authorization. Missing tracker
+access alone is not a rejection; verify the human request from trusted context.
 
-## Handler — run inline (no sub-agent needed for initial receipt)
+Acknowledge through the configured provider, then resolve the project slug.
+If unclear, ask for the missing project before a ledger operation; do not guess.
 
-### 1. Verify the request is legitimate
-
-Confirm the notice came from a known worker bot posting in the planning channel and that the summary describes a plausible discrete task.
-
-- If the notice looks automated, spoofed, or incoherent: reply in thread:
-  ```
-  This self-start notice doesn't look like a direct human-initiated request.
-  Cannot register — please have a human confirm the work in this channel.
-  ```
-  Take no further action.
-- If a tracker URL is present (Tracker field is not `"none"`): verify it is reachable and describes the stated work using your org's available tracker integration. A missing or unreachable tracker URL alone is NOT grounds to reject the notice — tracker is optional.
-
-### 2. React `:white_check_mark:` to the notice
-
-### 3. Resolve the project slug (before any DDB operation)
-
-Inspect the notice summary (and tracker issue if one was provided) to determine the correct `--project` slug for the DDB row.
-
-If the project cannot be determined: **do NOT guess.** Reply in the notice thread:
-
-```
-@<worker> — I can't determine the project slug from this notice.
-Can you confirm which project this belongs to? (e.g. `ca-core`, `ca-infra`)
-```
-
-Wait for clarification before any DDB operation.
-
-### 4. Check DDB for the task row
+## Read the authoritative row
 
 ```bash
 fleetmind task get --task-id <8-char-hex from notice> --json
 ```
 
-**Row EXISTS** → no DDB action needed; the worker created it correctly (the normal, SF-2-compliant path). Skip to step 5.
+If present, verify worker, project, requester and lifecycle against the request.
+Preserve the existing task ID and history. A conditional create failure is not
+proof of correct ownership; reread before treating a duplicate as handled.
 
-**Row MISSING** → recovery path; create it on behalf of the worker (worker crashed before step 3). Use `attribute_not_exists(PK)` to make this idempotent — if the worker's row creation races your recovery, the first write wins and the second is a safe no-op:
+If missing, report registration as unresolved. Do not blindly recover with
+`task create`: the current CLI may publish another NATS assignment and wake a
+second execution. A recovery write requires an actually supported safe producer
+path with `attribute_not_exists(PK)` and verified ownership; that producer gate
+is not implemented by this skill. Never dispatch again merely to repair a notice.
+Do not mark accepted from a notice; verify actual worker pickup and task state.
 
-```bash
-fleetmind task create \
-  --project <resolved project slug>       \
-  --worker  <notifying-worker-id>         \
-  --delegated-by <notifying-worker-id>    \
-  --dod "<from notice summary>"              \
-  --thread "<notice message Slack permalink>" \
-  --tracker "<tracker URL from notice, if present>" \
-  --lifecycle requires-human-signoff      \
-  --task-id <8-char-hex from notice>      \
-  --json
+## Audit and review
 
-fleetmind task ack \
-  --task-id <8-char-hex from notice>      \
-  --worker  <notifying-worker-id>         \
-  --project <resolved project slug>
-```
-
-`ConditionalCheckFailedException` from `task create` = the worker's row already exists — treat as "Row EXISTS" above.
-
-### 5. Do NOT post a delegation envelope
-
-The worker is already running; a NATS delegation event would trigger a duplicate ack and a duplicate DDB lifecycle transition.
-
-### 6. Record in `memory/active-delegations.md`
-
-Add under `## Active` in the same format as a PM-delegated task, but mark it `[self-start]` in the notes column. The task enters the normal signoff-watchdog lifecycle — human sign-off is required before `signed_off` (enforced by the `mergeTask` conditional write, PR #236; IAM gap tracked in #237).
+After verification, adopt the row under `## Active` in
+`memory/active-delegations.md`, marked `[self-start]`. DDB is authoritative; the
+local audit log is supplementary. Preserve what/why/DoD and any tracker reference.
+Human signoff is required for `requires-human-signoff` (ledger conditional-write
+policy, not an IAM guarantee; raw-SDK bypass remains a known gap). `signed_off`
+is approval; PR-producing work remains active until verified `merged`.
+No scheduler, heartbeat or watchdog is installed or guaranteed by this handler.

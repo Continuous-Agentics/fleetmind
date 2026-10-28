@@ -188,6 +188,21 @@ export const NatsConfigSchema = z.object({
 });
 export type NatsConfig = z.infer<typeof NatsConfigSchema>;
 
+/** Exact opt-in shape consumed by the delegation plugin and shared SQS factory. */
+export const TaskEventTransportSchema = z.object({
+  provider: z.literal("sqs"),
+  region: z.string().min(1).optional(),
+  pmQueueUrl: z.string().url().refine(v => v.startsWith("https://") && !v.endsWith(".fifo"), "Requires an HTTPS Standard queue URL"),
+  workerQueueUrls: z.record(z.string().min(1), z.string().url().refine(v => v.startsWith("https://") && !v.endsWith(".fifo"), "Requires an HTTPS Standard queue URL")),
+  batchSize: z.number().int().min(1).max(10).optional(),
+  waitTimeSeconds: z.number().int().min(1).max(20).optional(),
+  visibilityTimeoutSeconds: z.number().int().min(3).max(43200).optional(),
+  handlerTimeoutMs: z.number().int().min(1).max(900000).optional(),
+}).strict().superRefine((value, ctx) => {
+  const urls = [value.pmQueueUrl, ...Object.values(value.workerQueueUrls)];
+  if (new Set(urls).size !== urls.length) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Each SQS inbox must have a distinct owner queue" });
+});
+
 /** Per-fleet delegation settings. Optional — fleets without delegation work normally. */
 export const DelegationFleetSchema = z.object({
   enabled: z.boolean().default(false),
@@ -203,9 +218,10 @@ export const DelegationFleetSchema = z.object({
   s3_key_template: z.string().default("v0/projects/{project}/tasks/{date}-{task_id}.md"),
   aws_region: z.string().optional(),
   /**
-   * NATS connection config. Required when delegation.enabled = true.
+   * Legacy NATS connection config; used when taskEventTransport is omitted.
    */
   nats: NatsConfigSchema.optional(),
+  taskEventTransport: TaskEventTransportSchema.optional(),
 }).superRefine((val, ctx) => {
   if (val.enabled) {
     if (!val.table_name) {

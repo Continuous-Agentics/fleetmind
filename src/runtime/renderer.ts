@@ -131,6 +131,34 @@ function runtimePluginId(raw: string): string | undefined {
   return RUNTIME_PLUGINS.get(runtime);
 }
 
+/** The frozen plugin has one worker subscription and one PM subscription per Gateway. */
+function sqsDelegationPlugin(fleet: Fleet, agents: AgentConfig[]): Record<string, unknown> {
+  const d = fleet.delegation;
+  if (!d?.enabled || !d.taskEventTransport) return {};
+  const pms = fleet.agents.list.filter(a => a.orchestrator);
+  const workers = fleet.agents.list.filter(a => !a.orchestrator);
+  if (pms.length !== 1) throw new Error("SQS delegation requires exactly one roster PM inbox owner");
+  if (agents.filter(a => !a.orchestrator).length > 1) throw new Error("The SQS plugin supports one worker per Gateway; use separate targets");
+  for (const worker of workers) {
+    if (!Object.hasOwn(d.taskEventTransport.workerQueueUrls, worker.id)) throw new Error(`Missing SQS inbox for roster worker ${worker.id}`);
+  }
+  const pluginId = "fleetmind-delegation";
+  const policy = fleet.openclaw.plugins;
+  if (policy?.deny.includes(pluginId) || (policy?.allow && !policy.allow.includes(pluginId))) {
+    throw new Error("SQS delegation requires fleetmind-delegation in the explicit plugin policy");
+  }
+  const worker = agents.find(a => !a.orchestrator);
+  return { [pluginId]: { enabled: true, config: {
+    tableName: d.table_name,
+    ...(d.aws_region ? { awsRegion: d.aws_region } : {}),
+    reviewerAgentIds: pms.map(a => a.id),
+    workerAgentIds: Object.fromEntries(workers.map(a => [a.id, a.id])),
+    taskEventTransport: d.taskEventTransport,
+    ...(agents.some(a => a.orchestrator) ? { terminalEvents: { pmAgentId: pms[0]!.id } } : {}),
+    ...(worker ? { delegationEvents: { agentId: worker.id } } : {}),
+  } } };
+}
+
 function pluginPolicy(fleet: Fleet, agents: AgentConfig[], entries: Record<string, unknown>) {
   for (const agent of agents) {
     for (const model of agentModels(agent, fleet.agents.defaults)) {
@@ -292,6 +320,7 @@ export function renderAgentOpenClawJson(
   for (const plugin of [...agentPlugins].sort()) {
     pluginEntries[plugin] = { enabled: true };
   }
+  Object.assign(pluginEntries, sqsDelegationPlugin(fleet, [agent]));
   if (slack) pluginEntries["slack"] = { enabled: true };
   // Webhooks plugin — NATS subscriber wake endpoint.
   // The NATS subscriber POSTs create_flow to /plugins/webhooks/nats-wake with
@@ -514,6 +543,7 @@ function renderOpenClawJsonForAgents(fleet: Fleet, hostAgents: AgentConfig[]): R
     pluginEntries[plugin] = { enabled: true };
   }
 
+  Object.assign(pluginEntries, sqsDelegationPlugin(fleet, hostAgents));
   if (bindings.length) pluginEntries["slack"] = { enabled: true };
   const modelsMap = modelsPolicy.defaults;
   const owner = hostAgents.find((a) => a.orchestrator)?.id;
@@ -840,7 +870,7 @@ export function renderAgentFleetYaml(fleet: Fleet, agentId: string): string {
   // Convention: nats://nats.<fleet_name>.internal:4222 (Cloud Map registration).
   // This means operators never hardcode infra-specific URLs in fleet.yaml.
   let delegation = fleet.delegation;
-  if (delegation?.nats && (!delegation.nats.servers || delegation.nats.servers.length === 0)) {
+  if (!delegation?.taskEventTransport && delegation?.nats && (!delegation.nats.servers || delegation.nats.servers.length === 0)) {
     delegation = {
       ...delegation,
       nats: {

@@ -1,27 +1,23 @@
-# PM subscriber startup — full detail
+# Execution mode and recovery capability
 
-Before handling any work, ensure the NATS PM subscriber is running. Check once per session boot; do not re-start if already running.
+Direct work and same-Gateway native children do not require a fleet subscriber.
+Use available, authorized native capabilities; the child reports privately and
+the parent owns user-facing closeout.
+
+## Legacy NATS independent fleets only
+
+If an operator has already provisioned NATS routing, these read-only checks can
+identify whether the configured PM subscriber is present:
 
 ```bash
-systemctl is-active fleetmind-nats-pm.service 2>/dev/null \
-  || pgrep -f "fleetmind nats subscribe.*--mode pm" > /dev/null \
-  || echo "NOT_RUNNING"
+systemctl is-active fleetmind-nats-pm.service
+pgrep -f "fleetmind nats subscribe.*--mode pm"
 ```
 
-If not running:
+Do not start, stop or replace a service from this skill. Missing or unhealthy
+delivery must be reported to the parent/operator. Leave the legacy subscriber
+unchanged until a separately authorized operational change.
 
-```bash
-fleetmind nats subscribe --mode pm --json \
-  | while IFS= read -r line; do
-      EVENT=$(echo "$line" | jq -r '.event // empty')
-      TASK_ID=$(echo "$line" | jq -r '.task_id // empty')
-      case "$EVENT" in
-        ack)      handle_worker_ack "$line" ;;
-        progress) handle_worker_progress "$line" ;;
-        ship)     handle_worker_ship "$line" ;;
-        block)    handle_worker_block "$line" ;;
-      esac
-    done
-```
-
-This subscriber is the canonical wake path. Workers push `task.*` events; the PM bot reacts to them. There is no polling sweep - the `delegation.sweeps` schema field was removed in fleetmind 0.8.0-beta.8.
+Legacy receipt/auto-ack does not prove native admission. No polling sweep,
+restart recovery or watchdog is guaranteed by this reference. Identify the
+actual configured reconciliation owner; absent capability remains a blocker.

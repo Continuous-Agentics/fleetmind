@@ -64,7 +64,8 @@ export function buildFleetRoster(fleet: Fleet, currentAgent: AgentConfig): strin
     const channels = (peerSlack?.channels ?? []).join(", ") || "(none configured)";
     const label = roleLabel(peer.role);
     lines.push(`- **${peer.name}** (${peer.emoji ?? ""}) — ${peer.description ?? ""}`);
-    lines.push(`  - Slack user: \`${userId}\` (mention: \`<@${userId}>\`)`);
+    lines.push(`  - Agent ID: \`${peer.id}\``);
+    if (peerSlack) lines.push(`  - Slack user: \`${userId}\`${peerSlack.bot_user_id ? ` (mention: \`<@${peerSlack.bot_user_id}>\`)` : ""}`);
     lines.push(`  - Operates in: ${channels}`);
     lines.push(`  - Role: ${label}`);
     lines.push("");
@@ -77,7 +78,11 @@ export function buildFleetRoster(fleet: Fleet, currentAgent: AgentConfig): strin
 }
 
 function applyPlaceholders(text: string, agent: AgentConfig, fleet?: Fleet): string {
+  const delegationPolicy = fleet?.delegation?.enabled === true
+    ? "Fleet delegation is **enabled**. The independent fleet procedures below apply only to configured fleet tasks."
+    : "Fleet delegation is **disabled**. Use direct work or authorized native children; skip independent fleet ledger, notices and protocol steps below.";
   let result = text
+    .replaceAll("{{DELEGATION_POLICY}}", delegationPolicy)
     .replaceAll("{{NAME}}", agent.name)
     .replaceAll("{{ID}}", agent.id)
     .replaceAll("{{EMOJI}}", agent.emoji ?? "")

@@ -1,4 +1,6 @@
-# Creating a delegation — full step-by-step
+# Creating an independent fleet delegation — legacy NATS reference
+
+Only for enabled, configured independent fleet routes. Direct work and native children do not use these task-creation steps. NATS publication is a best-effort notification, not durable admission/restart proof. Human-facing delivery uses trusted provider/account/recipient/thread context; the parent owns final closeout.
 
 ## 1. Generate a task ID
 
@@ -20,17 +22,17 @@ fleetmind task create \
   --delegated-by <pm-bot-id> \
   --dod "<definition of done>" \
   --description "<what needs to be built - context for the worker>" \
-  --requestor "<human_slack_uid>" \
+  --requestor "<human_slack_uid_if_slack>" \
   --tracker "<tracker_url_if_provided>" \
-  --thread "<slack_permalink_to_planning_discussion>" \
+  --thread "<originating_thread_url_if_available>" \
   --lifecycle requires-human-signoff \
   --task-id "${TASK_ID}" \
   --json
 ```
 
-`fleetmind task create` automatically publishes the `delegation` event to `fleetmind.delegation.<worker_id>` when NATS is configured. No separate publish step is needed.
+`fleetmind task create` attempts to publish the `delegation` event to `fleetmind.delegation.<worker_id>` when NATS is configured. No separate publish step is needed.
 
-If `task create` exits non-zero with "already exists": regenerate the task ID. If it fails with a network/permissions error: log the failure in `memory/active-delegations.md` (field: `ledger_write_failed: <reason>`) and retry on the next heartbeat.
+If `task create` reports an existing row or an ambiguous network failure, reread the same task ID and verify ownership/state before any retry. Preserve existing history; do not generate a second task to retry ambiguous dispatch. Log an unresolved write as `ledger_write_failed: <reason>` and report the blocker. A known unrelated ID collision may use a new ID only after ruling out prior effects.
 
 **Amending task metadata after delegation:** if scope changes post-delegation (worker pushback, PM clarification, reassignment), use `fleetmind task update` instead of abandoning and recreating - update history is preserved.
 
@@ -55,11 +57,11 @@ Also accepts `--worker` (reassign) and `--thread` (fix a wrong URL); always pass
 
 `fleetmind task create` (step 2) handles the publish. The worker receives a NATS delegation event containing `task_id`, `description`, `definition_of_done`, `requestor`, and `tracker_link`. No Slack envelope is posted.
 
-The worker opens a Slack thread directly with the human requestor - the PM bot is not involved in that thread unless the human escalates.
+Legacy Slack workers may use a configured requestor thread. This is Slack-specific; other providers require supported trusted delivery context. Do not fabricate Slack IDs or routes. The parent owns user-facing closeout.
 
 ## 4. Update the audit log
 
-Append a block to `memory/active-delegations.md` under `## Active`. See [active-delegations-format.md](active-delegations-format.md) for the full template.
+Append a block to `memory/active-delegations.md` under `## Active`. See [../assets/active-delegations-format.md](../assets/active-delegations-format.md) for the full template.
 
 Minimum fields:
 

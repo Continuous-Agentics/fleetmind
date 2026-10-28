@@ -96,3 +96,67 @@ describe("bundled skill structure (line budget + no inline changelog)", () => {
     });
   }
 });
+
+// Exercise shipped policy through the real workspace generator and bundled
+// skill installer. No live workspace, external registry or service is involved.
+import os from "node:os";
+import { FleetSchema } from "../config/schema.js";
+import { provisionAgent } from "../runtime/provisioner.js";
+import { computeConfiguredFleetSkillGaps } from "../runtime/skills-manifest.js";
+
+describe("canonical execution policy in generated workspaces", () => {
+  for (const enabled of [false, true]) {
+    for (const role of ["pm", "worker", "backend-worker", "frontend-worker"] as const) {
+      test(`${role}: delegation=${enabled} preserves direct/native/fleet ownership`, async () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fm-policy-"));
+        try {
+          const fleet = FleetSchema.parse({
+            fleet: { name: "policy" },
+            targets: { box: { provider: "local", os: "linux" } },
+            agents: { defaults: { target: "box" }, list: [{ id: "author", name: "Author", role, skills: [] }] },
+            delegation: { enabled, ...(enabled ? { table_name: "fixture-tasks", s3_bucket: "fixture-narratives" } : {}) },
+          });
+          const agent = fleet.agents.list[0];
+          // Only bundled protocol assets are under test; preserve external role
+          // requirements in the manifest resolver without installing them here.
+          agent.skills.push(...computeConfiguredFleetSkillGaps(fleet)[0].missing.filter((skill) => skill.source === "fleetmind"));
+          await provisionAgent(fleet, agent, false, directory);
+          const workspace = path.join(directory, "rendered/workspaces/author");
+          const policy = fs.readFileSync(path.join(workspace, "AGENTS.md"), "utf8");
+          const soul = fs.readFileSync(path.join(workspace, "SOUL.md"), "utf8");
+          assert.doesNotMatch(soul, /NEVER write code|You don't write the\s+code|You don't do the work/);
+          assert.doesNotMatch(soul, /active-delegations\.md` as the source of truth/);
+          assert.match(policy, /Direct work/);
+          assert.match(policy, /focused coding/);
+          assert.match(policy, /Same-Gateway native children/);
+          assert.match(policy, /report privately to the parent/);
+          assert.match(policy, /parent owns user-facing closeout/);
+          assert.match(policy, /Independent fleet workers/);
+          assert.match(policy, new RegExp(`Fleet delegation is \\*\\*${enabled ? "enabled" : "disabled"}\\*\\*`));
+          assert.doesNotMatch(policy, /NEVER write code|You do not write code|NO_REPLY|Sub-agent posts the review request/);
+          assert.ok(!policy.includes("{{"), "all generated policy placeholders resolve");
+          assert.equal(fs.existsSync(path.join(workspace, "skills/bot-delegation")), enabled && role === "pm");
+          assert.equal(fs.existsSync(path.join(workspace, "skills/worker-self-start")), enabled);
+          if (enabled) {
+            for (const skill of agent.skills) {
+              const canonical = path.join(fleetmindPackageRoot(), "openclaw/skills", skill.name, "SKILL.md");
+              assert.equal(fs.readFileSync(path.join(workspace, "skills", skill.name, "SKILL.md"), "utf8"), fs.readFileSync(canonical, "utf8"));
+            }
+          }
+        } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+      });
+    }
+  }
+});
+
+describe("delegation policy references do not reintroduce retired mandates", () => {
+  for (const name of ["bot-delegation", "worker-self-start", "bot-reception"]) {
+    const directory = path.join(fleetmindPackageRoot(), "openclaw/skills", name);
+    for (const file of [path.join(directory, "SKILL.md"), ...listMarkdownFiles(path.join(directory, "references")), ...listMarkdownFiles(path.join(directory, "assets"))]) {
+      test(`${name}/${path.relative(directory, file)}: no mandatory subscriber or public child closeout`, () => {
+        const content = fs.readFileSync(file, "utf8");
+        assert.doesNotMatch(content, /NO_REPLY|subscriber startup \(mandatory\)|Start the NATS subscriber \(mandatory\)|ensure the NATS (?:PM )?subscriber is running|Never write code|Orchestrate only|Then update audit log to done|Signed off — closing\./i);
+      });
+    }
+  }
+});

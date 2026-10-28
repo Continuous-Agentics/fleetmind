@@ -4,29 +4,33 @@
 
 FleetMind ships its CLI, runtime bootstrap, and Terraform module from this repository. For this beta, keep the npm runtime at `1.3.0-beta.0` and the module source at `git::https://github.com/Continuous-Agentics/fleetmind.git//infra/terraform/modules/fleetmind?ref=v1.3.0-beta.0`; the embedded Terraform root must come from that same tag. Do not mix runtime and module releases or use the archived standalone Terraform repository.
 
-This beta does not alter production/module defaults or consumer template pins. Moving `latest` pins are not a tested tuple; operators must explicitly select the exact matching beta pins and the tested OpenClaw target before deployment.
+This beta does not alter production/module defaults or consumer template pins. Moving `latest` pins are not a tested tuple; operators must explicitly select the exact matching beta pins and the selected OpenClaw target before deployment.
 
 ## Declared target and evidence matrix
 
 | Component / gate | Contract and evidence |
 |---|---|
 | FleetMind runtime/module | **1.3.0-beta.0**, prepared from the 1.2.1 release base; npm runtime and module tag remain exact same-tag surfaces |
-| OpenClaw | **2026.9.5**, verified against installed package and docs, not a claim about npm latest |
-| Node | OpenClaw engine `>=24.16.0 <25 || >=26.1.0`; tested locally on **24.18.0** |
+| OpenClaw | Selected **2026.10.8**, release commit `dc2523e5a5c7a309517fd7fa834add938231d526`; qualification pending |
+| Node | Selected release engine `>=24.22.1 <25 || >=26.12.1`; local fixture host **24.22.1** |
 | SQLite | WAL-safe loaded library: 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x; OpenClaw startup also probes NUL-preserving TEXT/BLOB/JSON behavior |
 | Terraform / AWS provider | Existing `>=1.5` / `~>5.0` contract unchanged; isolated mocked plan tests only, no live plan/apply |
-| Core agent/provider config | Both renderer shapes validated using the actual target CLI, with bundled Anthropic/OpenAI and webhook schema; no model calls |
-| Slack, search, custom plugins | Policy derivation unit-tested; actual target validation requires installed selected plugins. **Not a clean-host plugin install or channel-startup proof** |
+| Core agent/provider config | Renderer fixtures preserve PR314 runtime policy; exact 2026.10.8 CLI contract has not run in this slice |
+| Slack, search, custom plugins | Policy derivation fixtures only; selected channel artifacts, integrity and plugin startup remain qualification gates |
 | OpenAI API-key profile setup | Supported CLI documented below; automated fixture write was **blocked** by the installed Gateway state-path safety gate, before any credentials/config were written |
 | Node 26 / fresh EC2 bootstrap / paid turns | Not executed; supported engine range is not proof of these paths |
 
-FleetMind's own CLI `node >=20` engine is separate: commands which only render files do not start OpenClaw. `up` and config-changing `pull-self` require OpenClaw **2026.9.5 or newer**, then run the selected runtime's actual `config validate --json` capability/schema gate before publication. A newer self-update is not rejected solely for differing from the seed. The persistent runtime selector (or explicit absolute `FLEETMIND_OPENCLAW_BIN`) is authoritative; an invalid/missing selected launcher fails closed rather than using a retained system package. The target CLI enforces the actual linked-SQLite capability check. Missing CLI, incompatible version, unavailable configured plugin, schema/SecretRef trust failure, or invalid candidate leaves the old config and baseline unchanged.
+FleetMind's own CLI `node >=20` engine is separate: commands which only render files do not start OpenClaw. `up` and config-changing `pull-self` require OpenClaw **2026.10.8 or newer**, then run the selected runtime's actual `config validate --json` capability/schema gate before publication. A newer self-update is not rejected solely for differing from the seed. The persistent runtime selector (or explicit absolute `FLEETMIND_OPENCLAW_BIN`) is authoritative; an invalid/missing selected launcher fails closed rather than using a retained system package. The target CLI enforces the actual linked-SQLite capability check. Missing CLI, incompatible version, unavailable configured plugin, schema/SecretRef trust failure, or invalid candidate leaves the old config and baseline unchanged.
 
-Run narrow fixtures with `node --import tsx/esm --test --test-concurrency=1 src/test/openclaw-compat.test.ts`. With a separately installed 2026.9.5 CLI on PATH, run `npm run test:openclaw-contract`. This uses temporary config/state and no Gateway/provider calls; the core smoke deliberately excludes external channel/search/custom plugins. Its eight tests include **one actual-CLI test**, which checks two reduced core renders and one invalid candidate; eight passing tests do not mean eight real-CLI scenarios. CI has a separate core-contract job installing that exact CLI in an isolated runner prefix. It is not a full plugin/bootstrap matrix.
+Run narrow fixtures with `node --import tsx/esm --test --test-concurrency=1 src/test/openclaw-compat.test.ts`. With a separately installed 2026.10.8 CLI on PATH, run `npm run test:openclaw-contract`. This uses temporary config/state and no Gateway/provider calls; the core smoke deliberately excludes external channel/search/custom plugins. The opt-in actual-CLI test first requires the exact selected release, then checks reduced renders, explicit/normalized Codex runtime policy and an invalid candidate. Local fixture passes do not certify this gate. CI has a separate core-contract job installing that exact CLI in an isolated runner prefix. It is not a full plugin/bootstrap matrix.
+
+The selected engine range and release commit come from the approved October 28 assessment. September 2026.9.5 CLI evidence is historical and does not qualify 2026.10.8. This slice changes no Gateway, package versions, runtime/module defaults or consumer pins. Fresh authentication, full plugin/config validation, supported native admission/query recovery, disposable update/rollback canary and platform coverage remain pending.
 
 ## Canonical configuration and ownership
 
 Role manifests may mark delegation-only requirements with `when: delegation-enabled`. `render`, `render --check`, and `doctor` evaluate that condition from `fleet.yaml`; delegation-disabled fleets neither fail nor receive `bot-delegation`, `bot-reception`, or `worker-self-start` by automatic injection. Unconditional role requirements still apply, and turning delegation off does not remove skills already declared.
+
+Generated AGENTS policy distinguishes direct work (including focused coding), same-Gateway native children and independent fleet workers. Native children return privately; the parent owns user-facing closeout. Independent fleet tasks retain the DDB/S3 authority and what/why/DoD envelope. No skill starts subscribers or promises a scheduler/watchdog. `signed_off` records human approval; PR-producing work stays open until verified merge. Legacy NATS/Slack references are explicitly scoped and do not authorize service changes.
 
 Both OpenClaw JSON renderers emit keyed `agents.entries`: keys are stable IDs; there is no embedded `id` or retired `default` flag. Explicit Slack account bindings remain authoritative. A single configured agent resolves implicitly. Multi-agent renderers declare explicit ownership, with the orchestrator owning system-agent and heartbeat defaults when present; unbound multi-agent operations require a target, not ambient first-agent fallback. Multi-agent `agentDir` paths are unique because current OpenClaw rejects shared auth/session directories. Single-agent paths remain unchanged. FleetMind's separate generated `fleet.yaml` slice remains list-based: every self/roster entry in `agents.list` retains its required `id` and round-trips through FleetMind's schema/loader. Existing invalid shared multi-agent stores require operator credential reconciliation; this change does not copy credential databases.
 
@@ -64,7 +68,7 @@ agents:
             id: codex
 ```
 
-It renders as `agents.entries.wren.models["openai/*"].agentRuntime.id = "codex"` under the OpenClaw 2026.9.5 contract.
+It renders as `agents.entries.wren.models["openai/*"].agentRuntime.id = "codex"` for the selected OpenClaw 2026.10.8 contract.
 
 For an operator-authorized host with the correct local Gateway/state paths, the current documented mechanism is:
 

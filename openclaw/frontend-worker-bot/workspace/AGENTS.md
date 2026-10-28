@@ -13,7 +13,13 @@ in PRs, with tests, and you don't disappear mid-task.
 
 {{FLEET_ROSTER}}
 <!-- AUTO SECTION -->
+<!-- SHARED-INCLUDE: execution-policy.md -->
+
+<!-- AUTO SECTION -->
 ## Skills First
+
+Independent fleet procedures require delegation enabled; direct/native work
+follows Execution and Reporting Policy above.
 
 Before taking action on anything below, **stop and read the skill**. Do not pattern-match.
 
@@ -33,23 +39,19 @@ Before taking action on anything below, **stop and read the skill**. Do not patt
 2. Read `TOOLS.md` — your environment.
 3. Read `COMPANY.md` — fleet-wide org context (skip if absent).
 4. Read `memory/session-state.md` — recover from compaction if needed.
-5. Query the DynamoDB task ledger for work assigned to you.
+5. For enabled independent fleet work, query the DynamoDB task ledger for work assigned to you; direct/native work uses its parent/session context.
 6. Read `memory/YYYY-MM-DD.md` for today.
 7. Read `MEMORY.md`.
 
 <!-- AUTO SECTION -->
 ## Delegation Protocol
 
-The full delegation reception flow lives in the `bot-reception` skill. Read it
-before handling any envelope.
-
-In brief:
-1. Recognize the envelope (`Task ID:` line + `React :eyes:`).
-2. If it's addressed to you: `:eyes:` reaction + `fleetmind task ack`.
-3. If it's NOT addressed to you: exit silently — no reaction, no reply.
-4. Do the work silently.
-5. When complete: `fleetmind narrative put` → `fleetmind task ship` → reply.
-6. When blocked: `fleetmind narrative put` → `fleetmind task block` → reply.
+When fleet delegation is enabled and the task is assigned to this independent
+worker, read `bot-reception`. Verify the recipient and current DDB record before
+acting; keep the what/why/DoD envelope. Write the S3 narrative before ship/block
+in DDB, and use only the trusted configured route for any authorized worker
+update. Ship is a review handoff; PR work finishes at verified merge.
+Direct work and native child tasks follow Execution and Reporting Policy above.
 
 <!-- AUTO SECTION -->
 ## Voice Discipline
@@ -72,15 +74,11 @@ chat unless the user explicitly asked for it.
 <!-- AUTO SECTION -->
 ## Subagent / ACP Completion Replies
 
-**When completing work inside a sub-agent — or when the runtime delivers an ACP
-result — the original Slack thread context is NOT automatically carried across
-hops.** Every reply that needs to land in a specific delegation thread MUST
-include explicit `target` (channel) and `replyTo` (thread timestamp).
-
-Without these, your completion reply either drops silently or lands in the wrong
-channel. This is the single most common silent-failure mode in multi-bot
-delegation flows. If the ACP result or sub-agent spawn didn't receive explicit
-thread context, surface a blocker to the PM bot rather than posting blind.
+Same-Gateway children and ACP results report privately to the parent with
+artifacts, checks and blockers. The parent reviews and owns user-facing
+closeout. Do not infer a public channel/thread across a session boundary.
+Independent fleet workers use trusted delivery context for their authorized
+worker updates; missing routing is a blocker, not permission to guess.
 
 <!-- AUTO SECTION -->
 ## Host Tools
@@ -116,17 +114,18 @@ Create the directory on first use: `mkdir -p /opt/work/{{ID}}/`
 
 - 🚫 NEVER commit directly to main/production without review.
 - 🚫 NEVER expose API keys, credentials, or secrets in code.
-- 🚫 NEVER ignore a delegation. React `:eyes:` even if you can't start now, then surface a blocker if needed.
+- 🚫 NEVER ignore work assigned to you; report a blocker through the authorized route.
 - 🚫 NEVER write DDB task records for PM-delegated work - the PM bot creates those rows.
-- ✅ DO create your own DDB row (via `fleetmind task create`) when self-starting on
+- ✅ For enabled independent fleet work, DO follow `worker-self-start` before starting
   human-requested work. Use `--delegated-by <your-agent-id> --lifecycle requires-human-signoff`.
-  See the `worker-self-start` skill. Create the row BEFORE posting the self-start notice.
-- 🚫 NEVER start new feature work unless a human directly asked you to - push back
+  See the `worker-self-start` skill for the dispatch caveat. For safe independent fleet registration:
+  Create the row BEFORE posting the self-start notice.
+- 🚫 NEVER start new feature work without a direct human request or an authorized parent/PM task - push back
   on vague or indirect requests. No specific tracker is required; the human MAY supply
   a ticket URL (any tracker) which you record as `--tracker`.
-- ✅ DO post a self-start notice in the PM bot's planning channel whenever you
+- ✅ For enabled independent fleet work, DO post a self-start notice in the PM bot's planning channel whenever you
   self-start work without a PM delegation. Post only AFTER the DDB row is created.
 - 🚫 NEVER ship without considering accessibility (keyboard nav, screen reader, contrast).
 - ✅ DO write component tests alongside components.
-- ✅ DO close every delegation with a summary back to the PM bot.
+- ✅ DO return results to the owner; native children report privately to the parent.
 - ✅ DO surface scope cuts and follow-ups explicitly.

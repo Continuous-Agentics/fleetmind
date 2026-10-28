@@ -301,7 +301,7 @@ resource "terraform_data" "agent_rollout" {
         var.openclaw_runtime_mode == "root-managed" ||
         can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$", var.openclaw_version))
       )
-      error_message = "self-managed OpenClaw requires openclaw_version to be an exact version (for example 2026.9.5), never latest, a dist-tag, or a range."
+      error_message = "self-managed OpenClaw requires openclaw_version to be an exact version (for example 2026.10.8), never latest, a dist-tag, or a range."
     }
   }
 }

@@ -225,11 +225,12 @@ describe("current OpenClaw contract", () => {
   });
 
   it("admits the documented Node versions, not the retired Node 22/25 contract", () => {
-    for (const version of ["24.16.0", "24.18.0", "26.1.0"]) assertSupportedNode(version);
-    for (const version of ["22.19.0", "24.15.0", "25.9.0", "26.0.0", "bad"]) assert.throws(() => assertSupportedNode(version));
+    for (const version of ["24.22.1", "v24.22.1", "24.22.2", "24.23.0", "26.12.1", "26.13.0", "27.0.0"]) assertSupportedNode(version);
+    for (const version of ["22.19.0", "24.16.0", "24.18.0", "24.21.99", "24.22.0", "25.9.0", "26.1.0", "26.11.99", "26.12.0", "24.22.1-beta.1", "bad"]) assert.throws(() => assertSupportedNode(version));
   });
 
-  it("validates both renders with actual target CLI (opt-in installed 2026.9.5, no provider calls)", { skip: process.env.FLEETMIND_OPENCLAW_CONTRACT !== "1" }, async () => {
+  it("validates both renders with actual target CLI (opt-in installed 2026.10.8, no provider calls)", { skip: process.env.FLEETMIND_OPENCLAW_CONTRACT !== "1" }, async () => {
+    assert.match(execFileSync(resolveOpenClawBinary(), ["--version"], { encoding: "utf8" }), /\b2026\.10\.8(?:\s|$)/);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fm-real-contract-"));
     try {
       for (const render of [() => renderAgentOpenClawJson(fleet(undefined, true), "alpha"), () => renderHostOpenClawJson(fleet(undefined, true), "box")]) {

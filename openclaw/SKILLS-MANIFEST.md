@@ -25,6 +25,8 @@ required:
 
 - **`role`** must match a value in the agent schema's `role` enum (`src/config/schema.ts`). One manifest per role.
 - **`required`** is the minimum skill set that defines this bot type's identity. An entry without `when` is unconditional.
+Direct work and same-Gateway native children follow shared generated execution policy; these manifests do not require a transport subscriber or independent task row for a native child. Explicitly declared skills remain operator choices.
+
 - **`when: delegation-enabled`** activates the entry only when `delegation.enabled: true`. Use it for delegation protocol skills (`bot-delegation`, `bot-reception`, and `worker-self-start`), not for unrelated role competence such as `structured-pr-review`.
 
 Inactive requirements are excluded consistently from missing-skill checks, source-mismatch warnings, render mutation, and doctor totals. Existing skills are never removed when a condition becomes inactive.

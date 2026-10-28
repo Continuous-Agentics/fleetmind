@@ -1,53 +1,31 @@
-# Session boot — full detail
+# Independent worker capability check
 
-## Step 1: Start the NATS subscriber (mandatory)
+Direct/solo work and same-Gateway native children do not require a fleet
+subscriber or DDB task row. Children return privately; the parent owns closeout.
 
-Before accepting any work, ensure the NATS subscriber is running. Check once per session boot; do not re-start if already running.
+## Legacy NATS routes only
 
-```bash
-systemctl is-active fleetmind-nats-worker.service 2>/dev/null \
-  || pgrep -f "fleetmind nats subscribe" > /dev/null \
-  || echo "NOT_RUNNING"
-```
-
-If not running:
+Read-only checks for an operator-provisioned subscriber:
 
 ```bash
-fleetmind nats subscribe --mode worker --worker-id "$AGENT_ID" --json \
-  | while IFS= read -r line; do
-      TYPE=$(echo "$line" | jq -r '._type // .event')
-      case "$TYPE" in
-        delegation) handle_delegation "$line" ;;
-      esac
-    done
+systemctl is-active fleetmind-nats-worker.service
+pgrep -f "fleetmind nats subscribe.*--mode worker"
 ```
 
-The subscriber auto-acks the DDB row on receipt (`delegated → accepted`). No separate `fleetmind task ack` call is needed.
+Do not start, stop or repair subscribers from this skill. Report unhealthy or
+missing routing to the parent/operator; no fallback wake or scheduler is
+promised. Legacy auto-ack advances the ledger on receipt and is not proof that
+native execution was admitted or started.
 
-## Step 2: DDB write-health precheck (mandatory)
+## Ledger capability
 
-Run after subscriber startup, before doing any work.
-
-Why: a worker with a broken DDB write path will receive delegations and silently fail to record `accepted`/`shipped`/`blocked`. A no-op precheck at boot turns the silent failure into a loud, explicit refusal.
+For enabled independent fleet tasks, a bounded query can identify read failures:
 
 ```bash
-ERR=$(fleetmind query pending --limit 1 --json 2>&1 >/dev/null)
-RC=$?
-
-if [ $RC -ne 0 ]; then
-  if [ ! -f memory/ddb-write-unhealthy.flag ]; then
-    echo "unhealthy at $(date -u +%Y-%m-%dT%H:%M:%SZ): $ERR" > memory/ddb-write-unhealthy.flag
-  fi
-  echo "ABORT: DDB write path unhealthy. Refusing new delegations until resolved."
-  exit 1
-fi
-
-rm -f memory/ddb-write-unhealthy.flag
+fleetmind query pending --limit 1 --json
 ```
 
-_While unhealthy:_
-
-- Do NOT ack any delegation. Publish a NATS block event so the PM bot knows.
-- Do NOT update DDB.
-- Do NOT do the work.
-- The unhealthy flag self-clears on the next clean precheck.
+This is read access only, not a DDB write-health test. Verify each actual task
+transition succeeds; reread state after conditional failures. If ledger access
+fails, preserve evidence and report the blocker through the authorized route.
+Do not continue effects or claim accepted/shipped from a failed transition.

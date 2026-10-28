@@ -3,6 +3,8 @@
 # Read by `fleetmind doctor` and `fleetmind sync-template frontend-worker-bot`.
 # See openclaw/pm-bot/skills.yaml for the manifest format details.
 
+# Feature-gated skills cover independent fleet tasks; direct work and native
+# child reporting follow the shared generated execution policy.
 role: frontend-worker
 
 required:

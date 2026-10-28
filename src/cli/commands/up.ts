@@ -147,7 +147,7 @@ export async function runUp(opts: UpOptions): Promise<void> {
   // validation happens before any writes. Dry runs need no installed runtime.
   if (!opts.dryRun && !opts.validateConfig && resolveOpenClawBinary() === "openclaw" && !onPath("openclaw")) {
     throw new Error("`openclaw` not found on PATH. Install it, then re-run `fleetmind up`:\n" +
-      "  npm install -g openclaw@2026.9.5   # Node 24.16+ (24.x) or 26.1+, safe SQLite");
+      "  npm install -g openclaw@2026.10.8   # Node >=24.22.1 <25 or >=26.12.1, safe SQLite");
   }
 
   // 1. Workspaces → <standard-workspace-base>/<id>

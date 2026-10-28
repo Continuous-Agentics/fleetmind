@@ -4,8 +4,11 @@ import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 
-export const TESTED_OPENCLAW_VERSION = "2026.9.5";
-export const MINIMUM_SUPPORTED_OPENCLAW_VERSION = TESTED_OPENCLAW_VERSION;
+/** Qualification target; actual CLI/plugin/canary acceptance is a separate gate. */
+export const SELECTED_OPENCLAW_VERSION = "2026.10.8";
+/** @deprecated Historical export name; denotes the selected target, not proof. */
+export const TESTED_OPENCLAW_VERSION = SELECTED_OPENCLAW_VERSION;
+export const MINIMUM_SUPPORTED_OPENCLAW_VERSION = SELECTED_OPENCLAW_VERSION;
 export const OPENCLAW_BINARY_ENV = "FLEETMIND_OPENCLAW_BIN";
 type Json = Record<string, any>;
 const object = (v: unknown): v is Json => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -222,8 +225,10 @@ export function mergeCanonicalConfigs(incomingRaw: Json, liveRaw?: Json, baseRaw
 
 export function assertSupportedNode(version: string): void {
   const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(version);
-  if (!match || !(Number(match[1]) === 24 && Number(match[2]) >= 16 || Number(match[1]) >= 26 && (Number(match[1]) > 26 || Number(match[2]) >= 1))) {
-    throw new Error("Supported OpenClaw releases require Node >=24.16.0 <25 or >=26.1.0");
+  const [major, minor, patch] = match ? match.slice(1).map(BigInt) : [];
+  if (!match || !(major === 24n && (minor > 22n || minor === 22n && patch >= 1n) ||
+      major > 26n || major === 26n && (minor > 12n || minor === 12n && patch >= 1n))) {
+    throw new Error("Supported OpenClaw releases require Node >=24.22.1 <25 or >=26.12.1");
   }
 }
 
