@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -97,6 +98,9 @@ def main() -> int:
     gate = rendered.split(gate_start, 1)[1].split("\nNODE_ENGINE_EOF", 1)[0]
     if rendered.index(gate_start) > rendered.index('OPENCLAW_PKG='):
         raise AssertionError("Node gate must precede OpenClaw installation")
+    node = shutil.which("node")
+    if node is None:
+        raise AssertionError("Node.js must be available on PATH for bootstrap gate tests")
     for version, supported in [
         ("v24.22.1", True), ("v24.22.2", True), ("v24.23.0", True),
         ("v26.12.1", True), ("v26.13.0", True), ("v27.0.0", True),
@@ -104,7 +108,7 @@ def main() -> int:
         ("v26.1.0", False), ("v26.12.0", False), ("v24.22.1-beta.1", False),
     ]:
         result = subprocess.run(
-            ["/usr/bin/node", "-e", f"Object.defineProperty(process, 'version', {{value: {json.dumps(version)}}});\n" + gate],
+            [node, "-e", f"Object.defineProperty(process, 'version', {{value: {json.dumps(version)}}});\n" + gate],
             text=True, capture_output=True, check=False,
         )
         if (result.returncode == 0) != supported:

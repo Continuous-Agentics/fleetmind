@@ -101,6 +101,7 @@ describe("bundled skill structure (line budget + no inline changelog)", () => {
 // skill installer. No live workspace, external registry or service is involved.
 import os from "node:os";
 import { FleetSchema } from "../config/schema.js";
+import { normalizeFleet } from "../core/model.js";
 import { provisionAgent } from "../runtime/provisioner.js";
 import { computeConfiguredFleetSkillGaps } from "../runtime/skills-manifest.js";
 
@@ -110,12 +111,12 @@ describe("canonical execution policy in generated workspaces", () => {
       test(`${role}: delegation=${enabled} preserves direct/native/fleet ownership`, async () => {
         const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fm-policy-"));
         try {
-          const fleet = FleetSchema.parse({
+          const fleet = normalizeFleet(FleetSchema.parse({
             fleet: { name: "policy" },
             targets: { box: { provider: "local", os: "linux" } },
             agents: { defaults: { target: "box" }, list: [{ id: "author", name: "Author", role, skills: [] }] },
             delegation: { enabled, ...(enabled ? { table_name: "fixture-tasks", s3_bucket: "fixture-narratives" } : {}) },
-          });
+          }));
           const agent = fleet.agents.list[0];
           // Only bundled protocol assets are under test; preserve external role
           // requirements in the manifest resolver without installing them here.

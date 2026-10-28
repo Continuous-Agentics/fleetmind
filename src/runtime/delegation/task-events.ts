@@ -1,10 +1,20 @@
 import * as core from "@continuous-agentics/delegation-core";
-import type { TaskEvent, TaskEvents, TaskEventsConfig } from "@continuous-agentics/delegation-core";
+import type { TaskEvent, NatsTaskEventsConfig } from "@continuous-agentics/delegation-core";
 import { credsAuthenticator } from "nats";
 import { readFileSync } from "node:fs";
 import type { DelegationFleetConfig } from "../../config/schema.js";
-import { publishTaskEvent } from "../../transport/nats.js";
 import { log } from "../../utils/log.js";
+
+// Published core 0.1.2 exposes NATS and TaskEvent, but not the optional SQS
+// factory. Keep this producer boundary limited to the methods it actually uses.
+export type TaskEventsConfig =
+  | ({ provider: "nats" } & NatsTaskEventsConfig)
+  | (NonNullable<DelegationFleetConfig["taskEventTransport"]> & { region?: string });
+export type TaskEventPublisher = Pick<core.NatsTaskEvents, "publish" | "close">;
+export type TaskEventFactory = (config: TaskEventsConfig) => TaskEventPublisher;
+const compatibleCore: Pick<typeof core, "NatsTaskEvents"> & {
+  createTaskEvents?: TaskEventFactory;
+} = core;
 
 export function taskEventsConfig(delegation: DelegationFleetConfig): TaskEventsConfig {
   if (delegation.taskEventTransport) return {
@@ -27,21 +37,23 @@ export function taskEventsConfig(delegation: DelegationFleetConfig): TaskEventsC
 export async function publishConfiguredTaskEvent(
   delegation: DelegationFleetConfig | undefined,
   event: TaskEvent,
-  factory: (config: TaskEventsConfig) => TaskEvents = core.createTaskEvents,
+  factory: TaskEventFactory | undefined = compatibleCore.createTaskEvents,
 ): Promise<void> {
   if (!delegation?.enabled) return;
   // A published core pin cannot be advanced until the frozen adapter is released.
   // Fail explicitly before attempting a notification with an older artifact.
-  if (typeof factory !== "function" && delegation.taskEventTransport) throw new Error("Task event factory unavailable: release and pin the SQS-capable delegation-core candidate before using this FleetMind build.");
-  let transport: TaskEvents | undefined;
+  if (typeof factory !== "function" && delegation.taskEventTransport?.provider === "sqs") throw new Error("Task event factory unavailable: release and pin the SQS-capable delegation-core candidate before using this FleetMind build.");
+  let transport: TaskEventPublisher | undefined;
   try {
-    if (typeof factory !== "function") {
-      if (!delegation.nats?.servers?.length) throw new Error("delegation.nats.servers is empty");
-      await publishTaskEvent(delegation.nats, event);
+    const config = taskEventsConfig(delegation);
+    if (typeof factory === "function") {
+      transport = factory(config);
+    } else if (config.provider === "nats") {
+      transport = new core.NatsTaskEvents(config);
     } else {
-      transport = factory(taskEventsConfig(delegation));
-      await transport.publish(event);
+      throw new Error("Task event factory unavailable for SQS");
     }
+    await transport.publish(event);
     log.info(`[task-events] published ${event.event}/${event.task_id}`);
   } catch (error) {
     log.warn(`[task-events] publish failed for ${event.event}/${event.task_id}: ${error}`);

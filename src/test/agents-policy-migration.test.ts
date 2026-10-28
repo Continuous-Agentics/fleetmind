@@ -8,6 +8,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { describe, test } from "node:test";
 import { FleetSchema } from "../config/schema.js";
+import { normalizeFleet } from "../core/model.js";
 import { provisionAgent } from "../runtime/provisioner.js";
 import { fleetmindPackageRoot } from "../runtime/resolver.js";
 import { computeConfiguredFleetSkillGaps } from "../runtime/skills-manifest.js";
@@ -21,7 +22,7 @@ describe("PR314 AGENTS policy migration through pull-self", () => {
       test(`${role}: delegation=${enabled} replaces old policy and preserves local sections`, async () => {
         const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fm-policy-migration-"));
         try {
-          const fleet = FleetSchema.parse({
+          const fleet = normalizeFleet(FleetSchema.parse({
             fleet: { name: "migration-fixture" },
             targets: { box: { provider: "local", os: "linux" } },
             agents: { defaults: { target: "box" }, list: [
@@ -32,7 +33,7 @@ describe("PR314 AGENTS policy migration through pull-self", () => {
               }] },
             ] },
             delegation: { enabled, ...(enabled ? { table_name: "fixture-tasks", s3_bucket: "fixture-narratives" } : {}) },
-          });
+          }));
           const agent = fleet.agents.list[0];
           // Exercise bundled protocol installation, never external skill registries.
           agent.skills.push(...computeConfiguredFleetSkillGaps(fleet)[0].missing.filter((skill) => skill.source === "fleetmind"));

@@ -105,6 +105,11 @@ jobs:
       - name: Terraform Test
         run: bash tests/terraform/run.sh
 
+      - name: Setup Node for Bootstrap Tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.22.1"
+
       - name: Test Agent Bootstrap Render
         run: python3 tests/terraform/test_agent_bootstrap_render.py
 
