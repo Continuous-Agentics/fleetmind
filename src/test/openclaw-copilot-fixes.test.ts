@@ -115,7 +115,7 @@ for (const mode of ["daemon", "no-daemon", "dry-run"] as const) {
     } else {
       assert.equal(result.status, 1, output);
       assert.match(output, /`openclaw` not found on PATH/);
-      assert.match(output, /npm install -g openclaw@2026\.9\.5/);
+      assert.match(output, /npm install -g openclaw@2026\.10\.8/);
       assert.doesNotMatch(output, /candidate validation failed/);
     }
     assert.deepEqual(fs.readdirSync(home), []);
