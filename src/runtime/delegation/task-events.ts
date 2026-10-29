@@ -31,6 +31,17 @@ export function taskEventsConfig(delegation: DelegationFleetConfig): TaskEventsC
   };
 }
 
+/** Check the selected package capability without constructing a transport,
+ * reading credentials, publishing, or writing the task ledger. */
+export function assertTaskEventCapability(
+  delegation: DelegationFleetConfig | undefined,
+  factory: TaskEventFactory | undefined = compatibleCore.createTaskEvents,
+): void {
+  if (delegation?.enabled && delegation.taskEventTransport?.provider === "sqs" && typeof factory !== "function") {
+    throw new Error("Task event factory unavailable: release and pin the SQS-capable delegation-core candidate before using this FleetMind build.");
+  }
+}
+
 /** Keep the existing best-effort notification after the authoritative task write.
  * This does not close the pre-existing task-write/publish crash window.
  */
@@ -40,9 +51,7 @@ export async function publishConfiguredTaskEvent(
   factory: TaskEventFactory | undefined = compatibleCore.createTaskEvents,
 ): Promise<void> {
   if (!delegation?.enabled) return;
-  // A published core pin cannot be advanced until the frozen adapter is released.
-  // Fail explicitly before attempting a notification with an older artifact.
-  if (typeof factory !== "function" && delegation.taskEventTransport?.provider === "sqs") throw new Error("Task event factory unavailable: release and pin the SQS-capable delegation-core candidate before using this FleetMind build.");
+  assertTaskEventCapability(delegation, factory);
   let transport: TaskEventPublisher | undefined;
   try {
     const config = taskEventsConfig(delegation);

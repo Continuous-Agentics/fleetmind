@@ -134,6 +134,30 @@ function merge(base: any, live: any, incoming: any): any {
 // Only these per-agent values belong wholly to the fleet. In particular model
 // primary/fallbacks form one billing/routing policy unit, not a leaf-level patch.
 const FLEET_AGENT_FIELDS = ["name", "workspace", "agentDir", "model"] as const;
+
+/** Authored per-model leaves are deployment policy, at both agent and defaults
+ * scope. Do not replace the whole map: operator-only keys/params still belong
+ * to the operator. Omission removes a formerly authored override; it must not
+ * manufacture a runtime default. */
+function mergeModelsPolicy(base: any, live: any, incoming: any): any {
+  if (incoming === undefined && base === undefined) return structuredClone(live);
+  if (incoming === undefined && !object(base)) return undefined;
+  if (incoming !== undefined && !object(incoming)) return structuredClone(incoming);
+  const out: Json = object(live) ? structuredClone(live) : {};
+  for (const key of new Set([...Object.keys(object(base) ? base : {}), ...Object.keys(incoming ?? {})])) {
+    const value = mergeModelsPolicy(base?.[key], live?.[key], incoming?.[key]);
+    if (value === undefined) delete out[key];
+    else Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
+  }
+  return incoming === undefined && Object.keys(out).length === 0 ? undefined : out;
+}
+
+function applyModelsPolicy(result: Json, incoming: Json | undefined, base: Json | undefined): void {
+  if (!Object.hasOwn(incoming ?? {}, "models") && !Object.hasOwn(base ?? {}, "models")) return;
+  const models = mergeModelsPolicy(base?.models, result.models, incoming?.models);
+  if (models === undefined) delete result.models;
+  else result.models = models;
+}
 const routingConflict = () => new Error("OpenClaw binding ownership conflict: a fleet-managed match was changed/deleted, or an operator match collides with incoming routing. Reconcile fleet.yaml and live bindings to the same route/removal, then retry (binding values withheld)");
 const stable = (v: any): any => Array.isArray(v) ? v.map(stable) : object(v)
   ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, stable(v[k])])) : v;
@@ -197,6 +221,7 @@ export function mergeCanonicalConfigs(incomingRaw: Json, liveRaw?: Json, baseRaw
   }
   for (const [id, fields] of Object.entries(incoming.agents?.entries ?? {})) {
     const entry = { ...result.agents.entries[id] };
+    applyModelsPolicy(entry, fields as Json, base.agents?.entries?.[id]);
     for (const field of FLEET_AGENT_FIELDS) {
       if (Object.hasOwn(fields as Json, field)) entry[field] = structuredClone((fields as Json)[field]);
       else if (Object.hasOwn(base.agents?.entries?.[id] ?? {}, field)) delete entry[field];
@@ -204,6 +229,10 @@ export function mergeCanonicalConfigs(incomingRaw: Json, liveRaw?: Json, baseRaw
     Object.defineProperty(result.agents.entries, id, {
       value: entry, enumerable: true, writable: true, configurable: true,
     });
+  }
+  if (Object.hasOwn(incoming.agents?.defaults ?? {}, "models") || Object.hasOwn(base.agents?.defaults ?? {}, "models")) {
+    result.agents.defaults ??= {};
+    applyModelsPolicy(result.agents.defaults, incoming.agents?.defaults, base.agents?.defaults);
   }
   if (incoming.agents?.ownership) result.agents.ownership = incoming.agents.ownership;
   // When FleetMind opts into service-owned updates, the selected channel is

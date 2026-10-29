@@ -148,6 +148,12 @@ function sqsDelegationPlugin(fleet: Fleet, agents: AgentConfig[]): Record<string
     throw new Error("SQS delegation requires fleetmind-delegation in the explicit plugin policy");
   }
   const worker = agents.find(a => !a.orchestrator);
+  // Fleet channel order declares the home. Never borrow the PM account/route,
+  // or promote a secondary room when the configured home is missing/invalid.
+  const workerSlack = worker && slackChannel(worker);
+  const home = workerSlack?.channels[0];
+  const workerHomeSlack = workerSlack?.account_id.trim() && home && /^C[A-Z0-9]+$/.test(home)
+    ? { accountId: workerSlack.account_id, conversationId: home } : undefined;
   return { [pluginId]: { enabled: true, config: {
     tableName: d.table_name,
     ...(d.aws_region ? { awsRegion: d.aws_region } : {}),
@@ -155,7 +161,7 @@ function sqsDelegationPlugin(fleet: Fleet, agents: AgentConfig[]): Record<string
     workerAgentIds: Object.fromEntries(workers.map(a => [a.id, a.id])),
     taskEventTransport: d.taskEventTransport,
     ...(agents.some(a => a.orchestrator) ? { terminalEvents: { pmAgentId: pms[0]!.id } } : {}),
-    ...(worker ? { delegationEvents: { agentId: worker.id } } : {}),
+    ...(worker ? { delegationEvents: { agentId: worker.id, ...(workerHomeSlack ? { workerHomeSlack } : {}) } } : {}),
   } } };
 }
 
