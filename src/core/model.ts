@@ -132,16 +132,14 @@ function resolveAgentTargetId(agent: AgentConfig, data: FleetFile): TargetId {
 
 /**
  * Auto-default `delegation.nats = {}` when delegation is enabled but no `nats:`
- * block was supplied. NATS is the only supported delegation transport today —
- * `enabled: true` without `nats` is never a valid runtime state (the subscriber
- * exits cleanly, and the publisher refuses to emit). Filling in the empty
+ * block or explicit SQS transport was supplied. Filling in the empty
  * object lets the existing schema defaults + renderer Cloud-Map URL derivation
  * take over, so operators don't have to write the literal `nats: {}` line.
  *
  * Returns a shallow copy with the patch applied; the input is not mutated.
  */
 function applyNatsDefault(data: FleetFile): FleetFile {
-  if (!data.delegation?.enabled || data.delegation.nats) {
+  if (!data.delegation?.enabled || data.delegation.taskEventTransport || data.delegation.nats) {
     return data;
   }
   return {

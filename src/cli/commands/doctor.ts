@@ -20,7 +20,7 @@
 
 import { Command } from "commander";
 import { loadFleet } from "../../config/loader.js";
-import { computeFleetSkillGaps } from "../../runtime/skills-manifest.js";
+import { computeConfiguredFleetSkillGaps } from "../../runtime/skills-manifest.js";
 import { log } from "../../utils/log.js";
 
 export function registerDoctor(program: Command): void {
@@ -44,7 +44,7 @@ role's manifest (openclaw/<bot-type>/skills.yaml). Fix with either:
     .action((opts: { fleet: string }) => {
       try {
         const fleet = loadFleet(opts.fleet);
-        const gaps = computeFleetSkillGaps(fleet.agents.list);
+        const gaps = computeConfiguredFleetSkillGaps(fleet);
 
         let errors = 0;
         let warnings = 0;
@@ -60,7 +60,7 @@ role's manifest (openclaw/<bot-type>/skills.yaml). Fix with either:
             continue;
           }
           if (gap.missing.length === 0) {
-            log.ok(`  ✓ ${gap.agentId} (role: ${gap.role}): all ${gap.manifest.required.length} required skill${gap.manifest.required.length === 1 ? "" : "s"} present`);
+            log.ok(`  ✓ ${gap.agentId} (role: ${gap.role}): all ${gap.activeRequired.length} active required skill${gap.activeRequired.length === 1 ? "" : "s"} present`);
             ok += 1;
           } else {
             log.error(`  ✗ ${gap.agentId} (role: ${gap.role}): missing ${gap.missing.length} required skill${gap.missing.length === 1 ? "" : "s"}:`);

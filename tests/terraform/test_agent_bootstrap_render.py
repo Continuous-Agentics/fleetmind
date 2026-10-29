@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -88,7 +89,30 @@ def main() -> int:
     if not re.search(r'default\s*=\s*"root-managed"', mode):
         raise AssertionError("Direct agent module must default to root-managed")
     rendered = render()
-    self_managed = render(runtime_mode="self-managed", openclaw_version="2026.9.5")
+    self_managed = render(runtime_mode="self-managed", openclaw_version="2026.10.8")
+
+    # Execute the actual rendered Node engine gate, without bootstrap services,
+    # package installs or host config changes. Patch only this subprocess fixture.
+    gate_start = "node - <<'NODE_ENGINE_EOF'\n"
+    require(rendered, gate_start)
+    gate = rendered.split(gate_start, 1)[1].split("\nNODE_ENGINE_EOF", 1)[0]
+    if rendered.index(gate_start) > rendered.index('OPENCLAW_PKG='):
+        raise AssertionError("Node gate must precede OpenClaw installation")
+    node = shutil.which("node")
+    if node is None:
+        raise AssertionError("Node.js must be available on PATH for bootstrap gate tests")
+    for version, supported in [
+        ("v24.22.1", True), ("v24.22.2", True), ("v24.23.0", True),
+        ("v26.12.1", True), ("v26.13.0", True), ("v27.0.0", True),
+        ("v24.18.0", False), ("v24.22.0", False), ("v25.0.0", False),
+        ("v26.1.0", False), ("v26.12.0", False), ("v24.22.1-beta.1", False),
+    ]:
+        result = subprocess.run(
+            [node, "-e", f"Object.defineProperty(process, 'version', {{value: {json.dumps(version)}}});\n" + gate],
+            text=True, capture_output=True, check=False,
+        )
+        if (result.returncode == 0) != supported:
+            raise AssertionError(f"Rendered Node gate {version}: exit={result.returncode} {result.stderr}")
 
     # Runtime account, npm-capable PATH, and Docker access are all established
     # before OpenClaw is installed or configured. The Unix account home is
@@ -227,7 +251,7 @@ def main() -> int:
     )
     for expected in (
         'OPENCLAW_RUNTIME_MODE="self-managed"',
-        'OPENCLAW_VERSION="2026.9.5"',
+        'OPENCLAW_VERSION="2026.10.8"',
         'RUNTIME_PATH="$OPENCLAW_RUNTIME_PREFIX/bin:/usr/local/bin:/usr/bin:/bin"',
         'NPM_CONFIG_PREFIX="$OPENCLAW_RUNTIME_PREFIX"',
         'OPENCLAW_BIN="$OPENCLAW_RUNTIME_PREFIX/bin/openclaw"',

@@ -25,6 +25,7 @@ import { TaskLedger, TaskConditionError } from "../../runtime/delegation/ddb.js"
 import type { DeliveryContext, TaskRecord } from "../../runtime/delegation/types.js";
 import type { DelegationFleetConfig } from "../../config/schema.js";
 import { publishTaskEvent, type TaskEvent } from "../../transport/nats.js";
+import { assertTaskEventCapability, publishConfiguredTaskEvent, type TaskEventFactory } from "../../runtime/delegation/task-events.js";
 import { log } from "../../utils/log.js";
 import { slackDeliveryContextFromPermalink } from "../../runtime/delegation/delivery.js";
 import type { Fleet } from "../../config/loader.js";
@@ -39,7 +40,8 @@ async function maybePublishNats(
   delegation: DelegationFleetConfig | undefined,
   event: TaskEvent
 ): Promise<void> {
-  if (!delegation?.nats) {
+  if (delegation?.taskEventTransport || !delegation?.enabled) return;
+  if (!delegation.nats) {
     log.warn(`[nats] skipped ${event.event}/${event.task_id}: delegation.nats not configured in fleet.yaml`);
     return;
   }
@@ -55,6 +57,26 @@ async function maybePublishNats(
   } catch (err) {
     log.warn(`[nats] publish failed for ${event.event}/${event.task_id}: ${err}`);
   }
+}
+
+/** Initial delegation notification uses the stored record, never caller-supplied routes. */
+export async function publishCreatedTask(record: TaskRecord, delegation: DelegationFleetConfig | undefined, factory?: TaskEventFactory): Promise<void> {
+  await publishConfiguredTaskEvent(delegation, {
+    v: "1.0",
+    event: "delegation",
+    task_id: record.task_id,
+    project: record.project,
+    worker: record.worker,
+    delegated_by: record.delegated_by,
+    at: record.delegated_at,
+    definition_of_done: record.definition_of_done,
+    tracker_link: record.tracker_link ?? undefined,
+    description: record.description,
+    requestor: record.requestor,
+    delegation_thread: record.delegation_thread,
+    delegation_envelope_ts: record.delegation_envelope_ts,
+    delivery_context: record.delivery_context,
+  }, factory);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -98,8 +120,8 @@ export interface TaskLedgerLike {
   }): Promise<TaskRecord>;
   getTask(taskId: string): Promise<TaskRecord | undefined>;
   ackTask(taskId: string, worker: string, project?: string): Promise<void>;
-  shipTask(taskId: string, worker: string, project?: string): Promise<void>;
-  blockTask(taskId: string, worker: string, project?: string): Promise<void>;
+  shipTask(taskId: string, worker: string, project?: string): Promise<unknown>;
+  blockTask(taskId: string, worker: string, project?: string): Promise<unknown>;
   unblockTask(taskId: string, worker: string, reason?: string, project?: string): Promise<void>;
   signoffTask(taskId: string, project?: string): Promise<void>;
   abandonTask(taskId: string, project?: string): Promise<void>;
@@ -317,7 +339,7 @@ export async function shipTask(
   opts: WorkerTaskOptions,
   ledger: TaskLedgerLike
 ): Promise<void> {
-  return ledger.shipTask(opts.taskId, opts.worker, opts.project);
+  await ledger.shipTask(opts.taskId, opts.worker, opts.project);
 }
 
 /** Mark a task blocked (delegated|accepted → blocked). */
@@ -325,7 +347,7 @@ export async function blockTask(
   opts: WorkerTaskOptions,
   ledger: TaskLedgerLike
 ): Promise<void> {
-  return ledger.blockTask(opts.taskId, opts.worker, opts.project);
+  await ledger.blockTask(opts.taskId, opts.worker, opts.project);
 }
 
 /** Unblock a task (blocked → accepted). */
@@ -412,7 +434,7 @@ export async function updateTask(
 
 // ── Register ──────────────────────────────────────────────────────────────────
 
-export function registerTask(program: Command): void {
+export function registerTask(program: Command, taskEventFactory?: TaskEventFactory): void {
   const task = program
     .command("task")
     .description("Manage task ledger lifecycle (create, ack, ship, block, unblock, signoff, abandon, merge, get, update, set-nag)")
@@ -474,6 +496,9 @@ Examples:
 `)
     .action(async (opts: CreateTaskOptions) => {
       const fleet = resolveAndLoadFleet(opts.fleet);
+      // Unsupported SQS packages must not consume a task ID or report success.
+      // Capability checks have no transport side effects; publish stays post-write.
+      assertTaskEventCapability(fleet.delegation, taskEventFactory);
       const ledger = makeLedger(fleet);
       try {
         const deliveryContext = opts.deliveryContext ?? deliveryContextForTaskCreate(fleet, opts.thread);
@@ -484,23 +509,7 @@ Examples:
             : `Created task ${record.task_id} for project ${record.project} (status: delegated)`,
           opts.json ?? false
         );
-        // Publish delegation event to NATS if transport is nats or both.
-        await maybePublishNats(fleet.delegation, {
-          v: "1.0",
-          event: "delegation",
-          task_id: record.task_id,
-          project: record.project,
-          worker: record.worker,
-          delegated_by: record.delegated_by,
-          at: record.delegated_at,
-          definition_of_done: record.definition_of_done,
-          tracker_link: record.tracker_link ?? undefined,
-          description: record.description,
-          requestor: record.requestor,
-          delegation_thread: record.delegation_thread,
-          delegation_envelope_ts: record.delegation_envelope_ts,
-          delivery_context: record.delivery_context,
-        });
+        await publishCreatedTask(record, fleet.delegation, taskEventFactory);
       } catch (err) {
         if (err instanceof TaskConditionError) {
           log.error(err.message);

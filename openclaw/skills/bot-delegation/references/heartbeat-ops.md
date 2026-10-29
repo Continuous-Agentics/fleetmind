@@ -1,8 +1,10 @@
-# Heartbeat operations — stale escalation, unblock, signoff watchdog, reconciliation
+# Optional checks — stale escalation, unblock, signoff follow-up, reconciliation
+
+Run only on an actual configured check or explicit review of enabled independent fleet work. This reference creates no scheduler, watchdog or restart guarantee. Missing reconciliation ownership is an explicit health gap.
 
 ## § 6 — Stale task escalation (heartbeat)
 
-Every heartbeat: query DDB directly for live active-delegation state. `active-delegations.md` is the audit log, not the source of truth.
+When a configured check actually runs, query DDB directly for live active-delegation state. `active-delegations.md` is the audit log, not the source of truth.
 
 ```bash
 # Tasks past their deadline
@@ -13,11 +15,11 @@ fleetmind query stale \
   --json
 ```
 
-Every item returned is already past its deadline - escalate each one.
+For each returned item, reread the authoritative row and confirm owner/current state before escalation.
 
 For each stale task: post in the planning thread, update audit log to `escalated`.
 
-**DDB write retry on heartbeat**: if `ledger_write_failed` is set in the audit log for a task, retry `fleetmind task create` on this heartbeat.
+**Ledger write retry:** if `ledger_write_failed` is set, reread the task first. Preserve the task ID and verify ownership before any authorized retry; task creation may publish another legacy assignment. Never retry ambiguous dispatch blindly.
 
 Quiet otherwise. No "everything's fine" pings.
 
@@ -32,11 +34,11 @@ Quiet otherwise. No "everything's fine" pings.
 
 If you unblock, leave a note in the planning thread audit log explaining what changed, so the trail remains for human review.
 
-## Signoff Watchdog (heartbeat-driven)
+## Signoff follow-up (when a configured check runs)
 
-Tasks with `lifecycle: requires-human-signoff` sit at DDB `status: shipped` until a human approves. Without an explicit watchdog, they stall silently for hours - the bot ships, the work is done, but the planning thread never gets the final close because no human noticed. The watchdog surfaces them after a 4h grace period, with a per-task cooldown to avoid spam.
+Tasks with `lifecycle: requires-human-signoff` sit at DDB `status: shipped` until a human approves. Without a configured follow-up owner, review can stall after the worker ships. A configured check may surface them after a 4h grace period, with a per-task cooldown to avoid spam. Approval does not complete PR work; keep it active until verified merge.
 
-On each heartbeat, query for overdue in-review tasks:
+On an actual configured check, query for overdue in-review tasks:
 
 ```bash
 fleetmind query shipped \
@@ -67,13 +69,13 @@ _Hard rules:_
 
 ## Reconciliation (boot + heartbeat)
 
-DDB drifts from the audit log when sessions die mid-write, when wake signals land twice, when a re-ship slips past idempotency, or when a parallel session edits the audit log. Reconciliation is a self-healing pass that runs _on session boot AND on every heartbeat_.
+DDB drifts from the audit log when sessions die mid-write, when wake signals land twice, when a re-ship slips past idempotency, or when a parallel session edits the audit log. Reconciliation is an explicit pass when the configured owner runs; instructions alone cannot guarantee it runs.
 
 ### 1. Query DDB for all live and recently-terminal tasks
 
 ```bash
 fleetmind query all \
-  --status delegated,accepted,shipped,blocked \
+  --status delegated,accepted,shipped,blocked,signed_off \
   --json
 ```
 
@@ -85,7 +87,7 @@ Three drift cases - handle each idempotently:
 
 - **Audit-log block whose DDB row is `merged` or `abandoned`.** Move the block to `## Closed` with `Status: done` (merged) or `Status: abandoned`. Set `Closed at:` to the DDB `merged_at` / `abandoned_at`. Set `last-handled-terminal-at:` to the same value.
 
-- **Closed audit-log block whose DDB `shipped_at` or `blocked_at` is newer than `last-handled-terminal-at`.** Reopen-on-reship case. Run the [ddb-terminal-wake.md](ddb-terminal-wake.md) step 4 reopen procedure inline: move back to `## Active`, clear `Closeloop subagent:` / `Closeloop spawned at:`, then spawn a fresh close-the-loop sub-agent (per [close-the-loop.md](close-the-loop.md) § 7a discipline).
+- **Closed audit-log block whose DDB `shipped_at` or `blocked_at` is newer than `last-handled-terminal-at`.** Reopen-on-reship case. Run the [ddb-terminal-wake.md](ddb-terminal-wake.md) step 4 reopen procedure inline: move back to `## Active`, clear `Closeloop subagent:` / `Closeloop spawned at:`, then have the parent review and deliver closeout per [close-the-loop.md](close-the-loop.md). Any optional native child reports privately.
 
 ### 3. Post one summary line if drift was found
 

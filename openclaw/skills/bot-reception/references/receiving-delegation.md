@@ -20,9 +20,14 @@ The subscriber emits one JSON line per delegation event:
 
 ## Steps
 
-The first two steps below are **bookkeeping**. **Step 3 (post in Slack) is the first thing the human sees.** Do steps 1–2 in any order, but **step 3 MUST land before you start any task work** — before reading files in the target repo, running `gh`, calling external APIs, or doing any LLM-visible reasoning about the work itself. The Slack post is how the human knows you're alive and on the task; without it, all subsequent activity is invisible until you ship, which feels like the bot died. If you find yourself about to call a tool whose purpose is to do the work (not to post in Slack, not to read DDB), and you haven't posted in step 3 yet, **stop and post first**.
+## Legacy NATS/Slack receipt procedure
 
-1. **DDB auto-acks** via the subscriber. Confirm `status === "accepted"` in the `ack_result` JSON line.
+These examples apply only to enabled independent fleet routes provisioned with
+NATS and Slack. Other routes require supported trusted delivery context; do not
+fabricate Slack IDs, infer native admission or post a child result publicly.
+Native children report privately; the parent owns final user-facing closeout.
+
+1. Verify the recipient and current DDB task. Legacy auto-ack may show `accepted`, but it is not proof of native admission or actual execution.
 
 2. **Read the task record from DynamoDB** to get `project` and `task_s3_key`:
 

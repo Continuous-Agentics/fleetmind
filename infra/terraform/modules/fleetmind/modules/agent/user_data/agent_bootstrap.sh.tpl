@@ -86,6 +86,18 @@ NODE_BIN="/usr/bin"
 echo "[bootstrap] Node $(node --version) installed at $NODE_BIN"
 echo "[bootstrap] npm $(npm --version) available on $RUNTIME_PATH"
 
+# Selected OpenClaw 2026.10.8 engine: >=24.22.1 <25 || >=26.12.1.
+# NodeSource selects a major, so verify the exact installed patch before npm.
+node - <<'NODE_ENGINE_EOF'
+const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(process.version);
+const [major, minor, patch] = match ? match.slice(1).map(BigInt) : [];
+if (!match || !(major === 24n && (minor > 22n || minor === 22n && patch >= 1n) ||
+    major > 26n || major === 26n && (minor > 12n || minor === 12n && patch >= 1n))) {
+  console.error('[bootstrap] OpenClaw requires Node >=24.22.1 <25 or >=26.12.1');
+  process.exit(1);
+}
+NODE_ENGINE_EOF
+
 # ── OpenClaw runtime account ─────────────────────────────────────────────────
 # Root owns machine bootstrap. Gateway and subscriber are user units under this
 # account; opt-in self-managed mode also gives it one dedicated OpenClaw prefix,

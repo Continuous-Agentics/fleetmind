@@ -16,6 +16,7 @@ import {
   findMissingRequiredSkills,
   findSourceMismatches,
   computeFleetSkillGaps,
+  computeConfiguredFleetSkillGaps,
   type SkillManifest,
 } from "../runtime/skills-manifest.js";
 import { addSkillsToFleetYaml } from "../cli/commands/skill.js";
@@ -83,6 +84,19 @@ required:
     );
     const result = loadManifestForRole("pm", tmpRoot);
     assert.equal(result?.required[0].source, "fleetmind");
+  });
+
+  it("accepts only the typed delegation-enabled condition", () => {
+    writeManifest(
+      "pm-bot",
+      `role: pm\nrequired:\n  - name: bot-delegation\n    when: delegation-enabled\n`,
+    );
+    assert.equal(loadManifestForRole("pm", tmpRoot)?.required[0].when, "delegation-enabled");
+    writeManifest(
+      "pm-bot",
+      `role: pm\nrequired:\n  - name: bot-delegation\n    when: mystery-policy\n`,
+    );
+    assert.throws(() => loadManifestForRole("pm", tmpRoot), /Invalid enum value/);
   });
 
   it("ignores commented-out entries", () => {
@@ -164,11 +178,11 @@ describe("computeFleetSkillGaps", () => {
   beforeEach(() => {
     writeManifest(
       "pm-bot",
-      `role: pm\nrequired:\n  - name: bot-delegation\n    source: fleetmind\n`,
+      `role: pm\nrequired:\n  - name: bot-delegation\n    source: fleetmind\n    when: delegation-enabled\n`,
     );
     writeManifest(
       "backend-worker-bot",
-      `role: backend-worker\nrequired:\n  - name: bot-reception\n    source: fleetmind\n  - name: structured-pr-review\n    source: clawhub\n    author: ggettert\n`,
+      `role: backend-worker\nrequired:\n  - name: bot-reception\n    source: fleetmind\n    when: delegation-enabled\n  - name: structured-pr-review\n    source: clawhub\n    author: ggettert\n`,
     );
   });
 
@@ -205,6 +219,38 @@ describe("computeFleetSkillGaps", () => {
     const gaps = computeFleetSkillGaps(agents, tmpRoot);
     assert.equal(gaps[0].role, "worker");
     assert.equal(gaps[0].missing.length, 1);
+  });
+
+  it("uses only active requirements for missing skills and source mismatches", () => {
+    writeManifest(
+      "backend-worker-bot",
+      `role: backend-worker
+required:
+  - name: bot-reception
+    source: fleetmind
+    when: delegation-enabled
+  - name: structured-pr-review
+    source: clawhub
+    author: ggettert
+`,
+    );
+    const fleet = {
+      delegation: { enabled: false },
+      agents: { list: [{
+        id: "backend",
+        role: "backend-worker" as const,
+        skills: [{ name: "bot-reception", source: "client" }],
+      }] },
+    };
+    const disabled = computeConfiguredFleetSkillGaps(fleet, tmpRoot)[0];
+    assert.deepEqual(disabled.activeRequired.map((s) => s.name), ["structured-pr-review"]);
+    assert.deepEqual(disabled.missing.map((s) => s.name), ["structured-pr-review"]);
+    assert.equal(disabled.sourceMismatches.length, 0, "inactive delegation source must not warn");
+
+    fleet.delegation.enabled = true;
+    const enabled = computeConfiguredFleetSkillGaps(fleet, tmpRoot)[0];
+    assert.deepEqual(enabled.missing.map((s) => s.name), ["structured-pr-review"]);
+    assert.equal(enabled.sourceMismatches[0]?.skillName, "bot-reception");
   });
 });
 
@@ -247,11 +293,11 @@ describe("render-style end-to-end injection", () => {
   beforeEach(() => {
     writeManifest(
       "pm-bot",
-      `role: pm\nrequired:\n  - name: bot-delegation\n    source: fleetmind\n  - name: fleet-context\n    source: fleetmind\n`,
+      `role: pm\nrequired:\n  - name: bot-delegation\n    source: fleetmind\n    when: delegation-enabled\n  - name: fleet-context\n    source: fleetmind\n`,
     );
     writeManifest(
       "backend-worker-bot",
-      `role: backend-worker\nrequired:\n  - name: bot-reception\n    source: fleetmind\n  - name: structured-pr-review\n    source: clawhub\n    author: ggettert\n`,
+      `role: backend-worker\nrequired:\n  - name: bot-reception\n    source: fleetmind\n    when: delegation-enabled\n  - name: structured-pr-review\n    source: clawhub\n    author: ggettert\n`,
     );
 
     fleetPath = path.join(tmpRoot, "fleet.yaml");
@@ -333,17 +379,49 @@ delegation: { enabled: true, table_name: x-tasks, s3_bucket: x-ledger, aws_regio
     const gaps2 = computeFleetSkillGaps(augmentedAgents, tmpRoot);
     assert.equal(gaps2[0].missing.length, 0, "second pass should find nothing missing");
   });
+
+  it("does not inject inactive delegation skills but still injects unrelated requirements", () => {
+    writeManifest(
+      "backend-worker-bot",
+      `role: backend-worker
+required:
+  - name: bot-reception
+    source: fleetmind
+    when: delegation-enabled
+  - name: worker-self-start
+    source: fleetmind
+    when: delegation-enabled
+  - name: structured-pr-review
+    source: clawhub
+    author: ggettert
+`,
+    );
+    const agents = [{ id: "backend", role: "backend-worker" as const, skills: [] }];
+    const gaps = computeFleetSkillGaps(agents, tmpRoot, { delegationEnabled: false });
+    assert.deepEqual(gaps[0].missing.map((s) => s.name), ["structured-pr-review"]);
+    const additions = gaps.flatMap((g) => g.missing.map((skill) => ({ agentId: g.agentId, skill })));
+    addSkillsToFleetYaml(fleetPath, additions);
+    const after = fs.readFileSync(fleetPath, "utf8");
+    assert.match(after, /structured-pr-review/);
+    assert.doesNotMatch(after, /worker-self-start/);
+  });
 });
 
 describe("bundled worker role manifests", () => {
-  it("requires worker-self-start for every worker role that accepts human direct work", () => {
+  it("conditions delegation protocol skills while leaving review competence unconditional", () => {
     for (const role of ["worker", "backend-worker", "frontend-worker"] as const) {
       const manifest = loadManifestForRole(role, process.cwd());
       assert.ok(manifest, `${role} must have a bundled skills.yaml`);
       assert.ok(
-        manifest.required.some((skill) => skill.name === "worker-self-start" && skill.source === "fleetmind"),
-        `${role} must require fleetmind worker-self-start`
+        manifest.required.some((skill) => skill.name === "worker-self-start" && skill.source === "fleetmind" && skill.when === "delegation-enabled"),
+        `${role} must condition fleetmind worker-self-start on delegation`
       );
+      assert.ok(manifest.required.some((skill) => skill.name === "bot-reception" && skill.when === "delegation-enabled"));
+      if (role !== "worker") {
+        assert.ok(manifest.required.some((skill) => skill.name === "structured-pr-review" && skill.when === undefined));
+      }
     }
+    const pm = loadManifestForRole("pm", process.cwd());
+    assert.ok(pm?.required.every((skill) => skill.when === "delegation-enabled"));
   });
 });

@@ -87,15 +87,15 @@ import {
 
 describe("authoritative runtime validation", () => {
   it("uses a minimum plus capability policy instead of rejecting post-seed releases", () => {
-    assert.equal(isSupportedOpenClawVersion("OpenClaw 2026.9.5"), true);
-    assert.equal(isSupportedOpenClawVersion("2026.10.1"), true);
+    assert.equal(isSupportedOpenClawVersion("OpenClaw 2026.10.8"), true);
+    assert.equal(isSupportedOpenClawVersion("2026.10.9"), true);
     assert.equal(isSupportedOpenClawVersion("2027.1.0-beta.1"), true);
-    assert.equal(isSupportedOpenClawVersion("2026.9.4"), false);
+    assert.equal(isSupportedOpenClawVersion("2026.10.7"), false);
     assert.equal(isSupportedOpenClawVersion("garbage"), false);
-    for (const invalid of ["2026.9.5-beta.1", "2026.9.5-0", "2026.09.005", "2026.10.1-beta.01", "2026.9.5-", "2026.9.5+", "2026.9.5 2027.1.0"]) {
+    for (const invalid of ["2026.10.8-beta.1", "2026.10.8-0", "2026.010.008", "2026.10.8-beta.01", "2026.10.8-", "2026.10.8+", "2026.10.8 2027.1.0"]) {
       assert.equal(isSupportedOpenClawVersion(invalid), false, invalid);
     }
-    assert.equal(isSupportedOpenClawVersion("2026.9.5+build.001"), true);
+    assert.equal(isSupportedOpenClawVersion("2026.10.8+build.001"), true);
   });
 
   it("selects the persistent user launcher in sanitized SSM environments and fails closed", () => {
@@ -107,7 +107,7 @@ describe("authoritative runtime validation", () => {
       // This test exercises launcher/version/capability behavior, not the host
       // running the FleetMind CI matrix. Production still reads the immutable
       // real process.version; only this fixture observation is replaced.
-      Object.defineProperty(process, "version", { ...versionDescriptor, value: "v24.16.0" });
+      Object.defineProperty(process, "version", { ...versionDescriptor, value: "v24.22.1" });
       process.env.HOME = home;
       delete process.env.FLEETMIND_OPENCLAW_BIN;
       const directory = path.join(home, ".config/fleetmind");
@@ -119,13 +119,18 @@ describe("authoritative runtime validation", () => {
       fs.writeFileSync(path.join(directory, "openclaw-runtime.json"), JSON.stringify({ binary: selected }));
       const installFixture = (version: string, validateExit: number) => fs.writeFileSync(selected,
         `#!/bin/sh\necho "$*" >> '${trace}'\nif [ "$1" = '--version' ]; then echo '${version}'; exit 0; fi\n[ "$OPENCLAW_CONFIG_READONLY" = 1 ] || exit 50\n[ "$1 $2 $3" = 'config validate --json' ] || exit 51\nexit ${validateExit}\n`, { mode: 0o755 });
-      installFixture("2026.10.2", 0);
+      installFixture("2026.10.8", 0);
       assert.equal(resolveOpenClawBinary(), selected);
       validateOpenClawCandidate(candidate);
       assert.match(fs.readFileSync(trace, "utf8"), /config validate --json/);
-      installFixture("2026.10.2", 1);
+      fs.writeFileSync(trace, "");
+      Object.defineProperty(process, "version", { ...versionDescriptor, value: "v24.22.0" });
+      assert.throws(() => validateOpenClawCandidate(candidate), /Node >=24\.22\.1/);
+      assert.equal(fs.readFileSync(trace, "utf8"), "", "unsupported Node must fail before invoking the CLI");
+      Object.defineProperty(process, "version", { ...versionDescriptor, value: "v24.22.1" });
+      installFixture("2026.10.8", 1);
       assert.throws(() => validateOpenClawCandidate(candidate), /validation failed/);
-      for (const version of ["2026.9.4", "2026.9.5-beta.1", "2026.9.5-0", "2026.09.005"]) {
+      for (const version of ["2026.10.7", "2026.10.8-beta.1", "2026.10.8-0", "2026.010.008"]) {
         installFixture(version, 0);
         fs.writeFileSync(trace, "");
         assert.throws(() => validateOpenClawCandidate(candidate), /validation failed/);

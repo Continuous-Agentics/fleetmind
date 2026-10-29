@@ -1,5 +1,14 @@
 # OpenClaw Integration
 
+> **Legacy independent EC2/Slack deployment reference.** The diagram and request
+> flow below describe historical channel-specific wiring, not a general
+> requirement for direct work or same-Gateway native children. Refer to the
+> generated Execution and Reporting Policy and canonical skills for current
+> ownership: native children return privately and the parent owns user-facing
+> closeout. NATS/Slack/EventBridge examples do not guarantee admission, a resumed
+> coordinator, scheduler or recovery on the selected release. This slice adds
+> no transport, channel provider or native admission implementation.
+
 How fleetmind composes a fleet of OpenClaw gateways — *one per agent, each
 on its own EC2 instance* — from a single `fleet.yaml`.
 

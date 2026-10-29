@@ -1296,3 +1296,15 @@ describe("fleet roster — buildFleetRoster", () => {
     assert.ok(roster.includes("C0DEVCHANNEL, C0SECONDCHAN"), "channels must be comma-separated");
   });
 });
+
+
+test("channel-less peers use agent identity without fabricated Slack routing", () => {
+  const pm = makeConductorAgent();
+  const worker = { ...makeForgeAgent(), channels: [] };
+  const fleet = makeFleet();
+  fleet.agents.list = [pm, worker];
+  const roster = buildFleetRoster(fleet, pm);
+  assert.ok(roster.includes(worker.id));
+  assert.ok(!roster.includes("Slack user:"));
+  assert.ok(!roster.includes("<@TODO"));
+});

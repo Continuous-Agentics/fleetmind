@@ -1,4 +1,6 @@
-# § 5a — DDB Terminal Wake (fallback path), full detail
+# § 5a — Delivered legacy DDB Terminal Wake, full detail
+
+Only process a signal actually delivered for an enabled independent fleet task. This is a read/review procedure, not a guarantee of a scheduler or resumed native coordinator. The parent owns user-facing delivery; optional native children return privately.
 
 _Idempotency contract: DDB is authoritative._ The audit log is a cache of DDB state; when they disagree, DDB wins. The previous pattern - "check audit log first; short-circuit if the task is in `## Closed`" - silently dropped legitimate re-ships (a re-ship after close, a blocked→shipped retry, or a scope-amendment cycle arrives after the task was already closed). The correct order is: read DDB first, derive the decision from DDB timestamps, use the audit log only for presentation and to find the matching block.
 
@@ -22,7 +24,7 @@ When `DDB_TERMINAL_WAKE: TASK#<task_id>` arrives:
      | grep -v '^$' | sort | tail -1)
    ```
 
-   If `fleetmind task get` fails (not found or network error): fall back to audit-log idempotency WITH A WARNING - log the degradation, surface for human investigation, do not guess.
+   If `fleetmind task get` fails (not found or network error): stop state-changing actions, log the degradation and surface it for investigation; the audit log cannot replace authoritative state.
 
 3. **Compare `last-handled-terminal-at` from the audit log block against the DDB terminal timestamp:**
 
@@ -48,8 +50,8 @@ When `DDB_TERMINAL_WAKE: TASK#<task_id>` arrives:
    - Set `Status:` back to `acked` (or `in-review` if `LIFECYCLE=requires-human-signoff` and DDB `status=shipped`).
    - Clear `Closeloop subagent:` and `Closeloop spawned at:` fields.
    - Remove `Closed at:` and `Outcome:` fields.
-   - Leave `last-handled-terminal-at:` in place - the close-the-loop sub-agent overwrites it on completion.
-   - **Do NOT post anything to the coordination channel about the reopen.** This is silent self-healing. The close-the-loop sub-agent posts normally when done.
+   - Leave `last-handled-terminal-at:` in place - the parent closeout handler overwrites it on completion.
+   - **Do NOT post anything to the coordination channel about the reopen.** This is silent self-healing. The parent closeout handler posts normally when done.
 
 5. **Hard short-circuit on already-final DDB status.** If DDB itself says `merged` or `abandoned` AND the audit log shows the block in `## Closed`, it's a confirmed noop:
 
@@ -72,4 +74,4 @@ When `DDB_TERMINAL_WAKE: TASK#<task_id>` arrives:
    fi
    ```
 
-7. **Close the loop** (§ 7 of `SKILL.md`), grounding the summary in the `## What I did` and `## Learned` sections from the narrative already fetched in step 6. Use the canonical brief template from [../assets/sub-agent-task-templates.md](../assets/sub-agent-task-templates.md) - copy the matching variant verbatim into the `task` field of `sessions_spawn`. Do not compose ad-hoc.
+7. **Close the loop** (§ 7 of `SKILL.md`), grounding the summary in the `## What I did` and `## Learned` sections from the narrative already fetched in step 6. The parent can review inline or use a private child brief from [../assets/sub-agent-task-templates.md](../assets/sub-agent-task-templates.md); only the parent delivers user-facing closeout.

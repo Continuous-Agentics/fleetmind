@@ -37,6 +37,10 @@ function getNatsConfig(fleet: ReturnType<typeof resolveAndLoadFleet>) {
     log.info("[nats] delegation not enabled in fleet.yaml — exiting cleanly.");
     process.exit(0);
   }
+  if (d.taskEventTransport?.provider === "sqs") {
+    log.info("[nats] SQS selected; legacy subscriber is disabled.");
+    process.exit(0);
+  }
   if (!d.nats) {
     // Exit 0 so systemd path-activated units don't retry-loop when NATS
     // isn't configured. The unit is always written; the service self-quiesces.
